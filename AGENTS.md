@@ -16,7 +16,7 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
 | `audio-analysis-dedupe` | Audio analysis + duplicate detection | published; not yet user-tested |
 | `set-planner` | Set timing + next-track suggestions | published; not yet user-tested |
 | `shadow-music-generator` | Queue for local AI music generation pipelines | published; not yet user-tested |
-| `producer-tools` | the app that collects these tools into one product | web UI + MCP bridge + persisted sessions, all four plugin panels wired; Codex core next |
+| `producer-tools` | the app that collects these tools into one product | web UI, MCP bridge, agent bridge (real Codex turns) and persisted sessions; all four plugin panels wired; approvals UI and desktop packaging next |
 | `shadow-producers` (planned) | the AI agent | not started |
 
 ## House rules
@@ -75,6 +75,15 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   calls `expanduser()` on every path argument — MCP clients send plain strings, so no shell is
   there to expand a tilde (found by using the panel: `~/Library/...` failed with
   FileNotFoundError).
+
+- **2026-09-14 — the agent core is the Codex harness, driven by `tools/agent-bridge.mjs`.**
+  `pnpm serve:agent` spawns `codex app-server`, speaks its stdio JSON-RPC (initialize →
+  thread/start → turn/start) and streams the turn to the UI as SSE; one UI session maps to one
+  Codex thread. The four plugins are injected per thread with
+  `default_tools_approval_mode: "approve"` — without it every MCP call is refused under
+  `approvalPolicy: never`. Threads run `workspace-write` in `~/Documents/ShadowRoom`, which is
+  narrower than the user's global `danger-full-access`; an approvals UI is the next step.
+  Notes: `docs/internals.md`.
 
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,

@@ -13,20 +13,23 @@ producers.
 中间是会话与输入框、右侧是当前插件的面板），全部基于我们自己的 `--sr-*` token —— 默认暗色，
 需要时才切浅色。品牌文件直接取自 [shadowroom.cn](https://shadowroom.cn)（见 `assets/logo/README.md`）。
 
-还没做的：把输入框里的需求变成一次真实会话的 Codex 内核（现在提交只会把需求记进会话，并加一条
-"内核未接入"的状态行），以及 `stage_serato_cues` 的界面。UI／前端参考写在
-[docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek Harness）。
+没跑 `pnpm serve:agent` 的时候，提交仍然只把需求记进会话，并加一条"内核未启动"的状态行。还没做的：
+审批界面（内核现在以 `approvalPolicy: never` 运行）、`stage_serato_cues` 的界面，以及把应用打包成
+`apps/desktop`。UI／前端参考写在 [docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek
+Harness）。
 
 ## 跑起来
 
 ```sh
 pnpm install
-pnpm serve   # MCP bridge：拉起四个 ShadowRoom MCP 服务器，在 127.0.0.1:8787 提供 /api
-pnpm dev     # Web UI，http://localhost:5173（/api 代理到 bridge）
+pnpm serve        # MCP bridge：拉起四个 ShadowRoom MCP 服务器，/api 在 127.0.0.1:8787
+pnpm serve:agent  # agent bridge：驱动 `codex app-server`，/api/agent 在 127.0.0.1:8788
+pnpm dev          # Web UI，http://localhost:5173（/api 与 /api/agent 都代理到 bridge）
 ```
 
-bridge 起着的时候，侧栏里的插件显示为已连接，三个面板跑的都是真实任务，每次调用同时记进 **轨迹**
-标签页：
+两个 bridge 都起着的时候，输入框跑的是真实的 agent 轮次：消息交给 Codex 内核，回答流式写进会话，
+智能体调用的每个工具都在发生的位置出现一行（与 **轨迹** 里是同一批）。四个插件会注入到每个线程，
+所以智能体用的就是面板手动调用的那批工具。面板本身也照旧能单独跑任务：
 
 | 面板 | 做什么 |
 | --- | --- |

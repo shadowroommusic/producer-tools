@@ -61,6 +61,37 @@ type ChatMessage =
   the hero is still empty. When the Codex `app-server` core lands it writes the same two arrays; no
   layout code has to move.
 
+## The agent bridge (`tools/agent-bridge.mjs`)
+
+`pnpm serve:agent` spawns the `codex` binary in `app-server` mode and speaks its JSON-RPC over
+stdio (one JSON object per line). The browser gets three endpoints:
+
+| Endpoint | Body | Returns |
+| --- | --- | --- |
+| `GET /api/agent/health` | — | `ok`, `model`, `userAgent`, `cwd`, `sandbox`, `approval`, injected `plugins` |
+| `POST /api/agent/send` | `{ sessionId, text }` | an SSE stream of the turn: `turn`, `item`, `delta`, `reasoning`, `done`, `error` |
+| `POST /api/agent/interrupt` | `{ sessionId }` | `{ ok: true }` after `turn/interrupt` |
+
+What was measured and matters:
+
+- **Handshake.** `initialize` → `thread/start` → `turn/start`. One UI session maps to one Codex
+  thread (kept in memory, created on the first message). A turn runs asynchronously, so the SSE
+  stream stays open until `turn/completed` arrives; a `SHADOWROOM_AGENT_TURN_TIMEOUT_MS` guard
+  (default 15 min) closes it regardless.
+- **Events.** The UI needs three of them: `item/agentMessage/delta` (append to the answer),
+  `item/started|completed|updated` (tool rows: `mcpToolCall` items carry `server`, `tool`, `status`,
+  `arguments`, `result`, `error`, `durationMs`; `commandExecution` items carry the shell command),
+  and `turn/completed`. Reasoning deltas are forwarded but not rendered yet.
+- **Plugins.** Every thread is started with the four ShadowRoom MCP servers injected through the
+  `config` override, each with `default_tools_approval_mode: "approve"`. Without that flag an MCP
+  call fails under `approvalPolicy: "never"` with *"MCP tool call requires approval, but approval
+  policy is never"* — measured, then fixed by the flag rather than by loosening the sandbox.
+- **Permissions.** Threads start with `sandbox: workspace-write` and `approvalPolicy: never` in
+  `SHADOWROOM_AGENT_CWD` (default `~/Documents/ShadowRoom`), which is narrower than the user's own
+  global config. An approvals UI is the next step; until then the header chips show the mode.
+- **Binary.** `SHADOWROOM_CODEX` points at the codex binary; the default is the one shipped inside
+  the Codex desktop app (`/Applications/ChatGPT.app/Contents/Resources/codex`).
+
 ## Browser storage keys
 
 | Key | Owner | Contents |

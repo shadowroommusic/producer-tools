@@ -15,21 +15,24 @@ conversation with its composer, and a right dock for the selected plugin), built
 tokens — dark by default, light on request. The brand files come straight from
 [shadowroom.cn](https://shadowroom.cn) (see `assets/logo/README.md`).
 
-Still missing: the Codex core that turns a composer message into a running session (today a submit
-records the request and adds a 内核未接入 notice), and a UI for `stage_serato_cues`. The UI/frontend
-reference lives in [docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek
-Harness).
+Without `pnpm serve:agent` a submit only records the request and adds a 内核未启动 notice. Still
+missing: an approvals surface (the core runs with `approvalPolicy: never` for now), a UI for
+`stage_serato_cues`, and packaging the app as `apps/desktop`. The UI/frontend reference lives in
+[docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek Harness).
 
 ## Run it
 
 ```sh
 pnpm install
-pnpm serve   # MCP bridge: spawns the four ShadowRoom MCP servers and serves /api on 127.0.0.1:8787
-pnpm dev     # the web UI on http://localhost:5173 (proxies /api to the bridge)
+pnpm serve        # MCP bridge: spawns the four ShadowRoom MCP servers, /api on 127.0.0.1:8787
+pnpm serve:agent  # agent bridge: drives `codex app-server`, /api/agent on 127.0.0.1:8788
+pnpm dev          # the web UI on http://localhost:5173 (proxies /api and /api/agent)
 ```
 
-With the bridge running, the plugins in the sidebar show as connected and three panels run real
-jobs — every call is recorded under the **轨迹** tab:
+With both bridges running the composer runs a real agent turn: the message goes to the Codex core,
+the answer streams into the transcript, and every tool the agent calls appears as a row right where
+it happened (the same rows listed under **轨迹**). The four plugins are injected into each thread, so
+the agent drives the tools the panels also call by hand. Each panel still runs jobs on its own:
 
 | Panel | What it does |
 | --- | --- |

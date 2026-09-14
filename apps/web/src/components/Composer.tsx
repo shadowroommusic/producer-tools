@@ -4,7 +4,7 @@
  * modes and the plugin chip are ours.
  */
 import { useRef } from "react";
-import { IconArrowUp, IconChevronDown, IconPlus } from "./icons";
+import { IconArrowUp, IconChevronDown, IconPlus, IconStop } from "./icons";
 
 const MODES = ["标准", "极简", "Code Mode"] as const;
 
@@ -13,6 +13,7 @@ export function Composer({
   value,
   onChange,
   onSubmit,
+  onStop,
   busy,
   mode,
   onModeChange,
@@ -25,6 +26,7 @@ export function Composer({
   value: string;
   onChange: (next: string) => void;
   onSubmit: () => void;
+  onStop?: () => void;
   busy: boolean;
   mode: string;
   onModeChange: (mode: string) => void;
@@ -95,13 +97,13 @@ export function Composer({
             )}
             <button
               type="button"
-              className="sr-send"
+              className={busy ? "sr-send sr-send--stop" : "sr-send"}
               aria-label={busy ? "停止" : "发送"}
-              title={busy ? "停止" : "发送"}
-              disabled={!canSend}
-              onClick={onSubmit}
+              title={busy ? "停止这一轮" : "发送"}
+              disabled={busy ? onStop === undefined : !canSend}
+              onClick={busy ? onStop : onSubmit}
             >
-              <IconArrowUp size={16} />
+              {busy ? <IconStop size={14} /> : <IconArrowUp size={16} />}
             </button>
           </div>
         </div>

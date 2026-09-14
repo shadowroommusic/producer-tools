@@ -120,6 +120,7 @@ export function Conversation({
   onViewChange,
   messages,
   calls,
+  running,
   composer,
   suggestions,
   onSuggestion,
@@ -133,6 +134,7 @@ export function Conversation({
   onViewChange: (view: "chat" | "trajectory") => void;
   messages: ChatMessage[];
   calls: ToolCall[];
+  running: boolean;
   composer: ReactNode;
   suggestions: string[];
   onSuggestion: (text: string) => void;
@@ -297,9 +299,13 @@ export function Conversation({
                   );
                 }
                 if (message.role === "assistant") {
+                  if (message.text === "" && message.streaming === true) {
+                    return <p key={message.id} className="sr-turn-status">正在运行</p>;
+                  }
                   return (
                     <div key={message.id} className="sr-msg-assistant">
                       {message.text}
+                      {message.streaming === true && <span className="sr-caret" aria-hidden="true" />}
                     </div>
                   );
                 }
@@ -310,6 +316,7 @@ export function Conversation({
                 return call === undefined ? null : <ToolCallRow key={message.id} call={call} />;
               })
             )}
+            {running && <p className="sr-turn-status">正在运行</p>}
           </div>
         </div>
         {!heroChat && <div className="sr-composer-seat">{composer}</div>}

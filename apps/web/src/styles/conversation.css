@@ -306,6 +306,55 @@
   line-height: var(--sr-line-13);
 }
 
+/* Running turn: the one-line status DSH shows while a turn is in flight. */
+.sr-turn-status {
+  align-self: flex-start;
+  margin: 0;
+  font-size: var(--sr-text-14);
+  line-height: 22px;
+  font-weight: 600;
+  background: linear-gradient(
+    90deg,
+    var(--sr-label-tertiary) 0%,
+    var(--sr-label-tertiary) 40%,
+    var(--sr-label-primary) 50%,
+    var(--sr-label-tertiary) 60%,
+    var(--sr-label-tertiary) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: sr-turn-shimmer 1.8s linear infinite;
+}
+
+@keyframes sr-turn-shimmer {
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* Streaming caret: a soft 2px bar that pulses while text arrives. */
+.sr-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--sr-accent);
+  animation: sr-caret-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes sr-caret-pulse {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* System notice: dot + copy, the geometry DSH uses for turn-status rows. */
 .sr-notice {
   display: grid;
@@ -619,4 +668,15 @@
 
 .sr-send:disabled {
   opacity: 0.4;
+}
+
+/* While a turn runs the send circle becomes the stop control. */
+.sr-send--stop {
+  background: var(--sr-surface-2);
+  color: var(--sr-label-primary);
+  box-shadow: 0 0 0 0.5px var(--sr-border-l2);
+}
+
+.sr-send--stop:hover:not(:disabled) {
+  background: var(--sr-hover-solid);
 }
