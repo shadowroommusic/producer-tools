@@ -137,6 +137,24 @@ What was measured and matters:
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
   pattern for "the agent does the work, the workbench just shows it": tools write, the UI absorbs.
+
+## UI audit (2026-09-14)
+
+Checked every page in a real browser at 1600 / 1440 / 1280 / 1100 / 900 / 760, at 1× and 2×, clicking
+the controls rather than eyeballing a screenshot. What it turned up and what changed:
+
+- The dock's first-open width was 45% of the frame, which left Studio only 600px at 1600 — it read as
+  the panel covering the work surface. The dock now opens at `clamp(28%, 360, 520)`, and the centre
+  keeps the room; below ~756px frame width the panel floats over the centre and is styled as a drawer
+  (`data-floating` → panel shadow).
+- The dock's second tab was labelled with the plugin's name, so "对话" looked like it contained
+  "Set 编排". The tabs are now **对话** and **面板**; the plugin's name sits inside the panel body.
+- `.sr-input--key` / `.sr-studio-import-track` were declared *before* `.sr-input { width: 100% }`, so
+  the tempo/key/bar fields took the full width, the transport wrapped and 导入音频 was clipped at
+  1440. Modifiers now follow the base rule; zoom moved to a floating pill on the timeline.
+- Sidebar rows for pages that do not exist yet (曲目库 / DJ / 设置) were clickable and *looked* like
+  navigation. They are `disabled` now.
+- Mode chips do something: 极简 hides the 思考 rows (`Transcript quiet`).
 - **Studio** (`StudioPage`) — the DAW-shaped page: transport, a header column per track and a
   bar-ruled lane area. `BAR_PX` (56) is the bar width in both the TSX and the CSS grid, so keep the
   two in step. The playhead runs on `requestAnimationFrame` at the project tempo and loops at the

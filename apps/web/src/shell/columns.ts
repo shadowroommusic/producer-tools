@@ -31,6 +31,10 @@ export const RIGHTBAR_MIN = 300;
 export const RIGHTBAR_MAX_RATIO = 0.7;
 /** First-open dock width as a fraction of the frame. */
 export const RIGHTBAR_DEFAULT_RATIO = 0.45;
+/** The dock is a side panel (chat / one plugin), not a second workspace: keep it narrow. */
+export const RIGHTBAR_DEFAULT_MIN = 360;
+/** …and never wider than this on a first open. */
+export const RIGHTBAR_DEFAULT_MAX = 520;
 
 /**
  * Clamp a column width into its contract range.
@@ -58,4 +62,14 @@ export function computeColumns(viewport: number, sidebar: number, rightbar: numb
       ? 0
       : Math.min(available, clampWidth(rightbar, RIGHTBAR_MIN, viewport * RIGHTBAR_MAX_RATIO));
   return { sidebar: s, center: Math.max(0, viewport - s - r), rightbar: r };
+}
+
+/**
+ * Dock width before any drag: a comfortable side panel, not 45% of the screen. The centre column
+ * keeps the work surface — measured feedback after the first version squeezed Studio to 600px.
+ * @param viewport - frame width in px.
+ * @returns the default dock width in px.
+ */
+export function defaultDockWidth(viewport: number): number {
+  return clampWidth(viewport * 0.28, RIGHTBAR_DEFAULT_MIN, RIGHTBAR_DEFAULT_MAX);
 }

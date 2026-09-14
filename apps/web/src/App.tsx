@@ -37,6 +37,8 @@ import {
   defaultProject,
   lastOpenProject,
   loadProjects,
+  newClip,
+  newTrack,
   rememberOpenProject,
   saveProjects,
   type StudioProject,
@@ -101,6 +103,8 @@ export function App() {
   const voiceSession = useRef<VoiceSession | null>(null);
   const capture = useRef<VoiceCapture | null>(null);
   const level = useRef(0);
+  /** Absorption goes through a ref: `submit` is created before the absorber exists. */
+  const absorbRef = useRef<(call: ToolCall) => void>(() => undefined);
   const voiceModeRef = useRef(false);
   const voiceStateRef = useRef<"listening" | "thinking" | "speaking">("listening");
   voiceModeRef.current = voiceMode;
@@ -348,7 +352,7 @@ export function App() {
           }
           const call = toolCallFromItem(event.item, event.phase);
           if (call === null) return;
-          if (event.phase === "completed") absorbMelody(call);
+          if (event.phase === "completed") absorbRef.current(call);
           setStore((current) =>
             patchSession(current, sessionId, (session) => {
               const known_ = session.calls.some((entry) => entry.id === call.id);
@@ -686,6 +690,88 @@ export function App() {
     </>
   );
 
+
+  /**
+   * What the agent produces lands on the timeline by itself: a `hum_to_midi` result becomes a clip
+   * with its notes, and a `render_song` / `render_part` result becomes one track per part pointing at
+   * the rendered stem. No button, no second step — the song grows out of the same sentence.
+   */
+  const absorbToolResult = useCallback(
+    (call: ToolCall) => {
+      if (call.status !== "ok" || openProjectId === undefined) return;
+      if (!["hum_to_midi", "render_song", "render_part"].includes(call.name)) return;
+      try {
+        const wrapper = JSON.parse(call.detail ?? "{}") as {
+          result?: { content?: Array<{ text?: string }> };
+        };
+        const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
+          part?: string;
+          path?: string;
+          bpm?: number;
+          bars?: number;
+          parts?: Array<{ part?: string; path?: string; duration_ms?: number }>;
+          midi_path?: string;
+          notes?: Array<{ start_ms: number; end_ms: number; midi: number; name?: string }>;
+        };
+        setProjects((current) =>
+          current.map((project) => {
+            if (project.id !== openProjectId) return project;
+            const bpm = typeof parsed.bpm === "number" ? parsed.bpm : project.bpm;
+            const tracks = (() => {
+              if (call.name === "hum_to_midi") {
+                const notes = parsed.notes ?? [];
+                if (notes.length === 0) return project.tracks;
+                return project.tracks.map((track, index) =>
+                  index === 0
+                    ? { ...track, clips: [...track.clips, clipFromNotes(notes, project.bars, 0, parsed.midi_path ?? "")] }
+                    : track,
+                );
+              }
+              const parts =
+                call.name === "render_song"
+                  ? (parsed.parts ?? [])
+                  : [{ part: parsed.part, path: parsed.path, duration_ms: undefined }];
+              let next = [...project.tracks];
+              for (const entry of parts) {
+                if (entry.path === undefined) continue;
+                const label = PART_LABEL[entry.part ?? ""] ?? entry.part ?? "声部";
+                const bars =
+                  typeof parsed.bars === "number"
+                    ? parsed.bars
+                    : typeof entry.duration_ms === "number"
+                      ? Math.max(1, Math.ceil((entry.duration_ms / 1000) * (bpm / 4 / 60)))
+                      : 4;
+                let index = next.findIndex((track) => track.name === label);
+                if (index === -1) {
+                  next = [...next, newTrack(label)];
+                  index = next.length - 1;
+                }
+                const clip = newClip(label, 0, Math.max(1, Math.round(bars)), entry.path);
+                next = next.map((track, position) =>
+                  position === index
+                    ? {
+                        ...track,
+                        clips: [
+                          ...track.clips.filter((existing) => existing.source !== entry.path),
+                          clip,
+                        ],
+                      }
+                    : track,
+                );
+              }
+              return next;
+            })();
+            return { ...project, bpm, tracks, updatedAt: Date.now() };
+          }),
+        );
+      } catch {
+        /* a tool result we cannot read simply stays in the transcript */
+      }
+    },
+    [openProjectId],
+  );
+  absorbRef.current = absorbToolResult;
+
   const openProject = projects.find((project) => project.id === openProjectId);
   /** With the dock's 对话 tab open the composer moves there, so there is only ever one input. */
   const chatInDock = dockOpen && dockTab === "chat";
@@ -814,6 +900,7 @@ export function App() {
             messages={session?.messages ?? []}
             calls={session?.calls ?? []}
             running={running}
+            quiet={mode === "极简"}
             suggestions={SUGGESTIONS}
             onSuggestion={setDraft}
             composer={chatInDock ? null : composerNode}
@@ -844,7 +931,12 @@ export function App() {
             chat={
               <>
                 <div className="sr-transcript sr-scroll">
-                  <Transcript messages={session?.messages ?? []} calls={session?.calls ?? []} running={running} />
+                  <Transcript
+                    messages={session?.messages ?? []}
+                    calls={session?.calls ?? []}
+                    running={running}
+                    quiet={mode === "极简"}
+                  />
                 </div>
                 <div className="sr-dock-composer">{composerNode}</div>
               </>
@@ -865,3 +957,12 @@ const SUGGESTIONS = [
   "把 Rekordbox 的 cue 和颜色转到 Serato",
   "找出资料库里重复的曲目",
 ];
+
+/** Part names the synth uses, in the workbench's language. */
+const PART_LABEL: Record<string, string> = {
+  drums: "鼓",
+  bass: "贝斯",
+  chords: "和弦",
+  lead: "主音",
+  pad: "铺底",
+};

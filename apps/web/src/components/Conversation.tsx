@@ -115,6 +115,7 @@ export function Conversation({
   messages,
   calls,
   running,
+  quiet = false,
   composer,
   suggestions,
   onSuggestion,
@@ -122,6 +123,7 @@ export function Conversation({
   messages: ChatMessage[];
   calls: ToolCall[];
   running: boolean;
+  quiet?: boolean;
   composer: ReactNode;
   suggestions: string[];
   onSuggestion: (text: string) => void;
@@ -220,7 +222,7 @@ export function Conversation({
                 {composer}
               </>
             ) : (
-              <Transcript messages={messages} calls={calls} running={running} />
+              <Transcript messages={messages} calls={calls} running={running} quiet={quiet} />
             )}
           </div>
         </div>

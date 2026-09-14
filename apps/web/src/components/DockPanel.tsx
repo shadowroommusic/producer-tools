@@ -62,7 +62,7 @@ export function DockPanel({
             data-on={tab === "plugin" || undefined}
             onClick={() => onTabChange("plugin")}
           >
-            {plugin.label}
+            面板
           </button>
         </div>
         <div className="sr-dock-actions">
@@ -91,7 +91,14 @@ export function DockPanel({
       <div className="sr-dock-body sr-scroll">
         {tab === "chat" ? (
           <div className="sr-dock-chat">{chat}</div>
-        ) : plugin.repo === "rekordbox-serato-bridge" ? (
+        ) : (
+          <>
+            {/* Which panel this is belongs here, not on the tab: the tab is just 面板. */}
+            <div className="sr-dock-panelhead">
+              <span className="sr-dock-label">{plugin.label}</span>
+              <span className="sr-dock-repo sr-mono">{plugin.repo}</span>
+            </div>
+            {plugin.repo === "rekordbox-serato-bridge" ? (
           <ConverterPanel
             connected={plugin.connected}
             tools={plugin.tools}
@@ -132,6 +139,8 @@ export function DockPanel({
               面板会在逐个接通后补上；插件本身已经作为独立 MCP 服务器发布。
             </p>
           </div>
+            )}
+          </>
         )}
       </div>
     </section>

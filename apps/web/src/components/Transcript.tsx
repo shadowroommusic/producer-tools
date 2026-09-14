@@ -14,10 +14,13 @@ export function Transcript({
   messages,
   calls,
   running,
+  quiet = false,
 }: {
   messages: ChatMessage[];
   calls: ToolCall[];
   running: boolean;
+  /** 极简 mode: the model's thinking stays out of the way. */
+  quiet?: boolean;
 }) {
   return (
     <>
@@ -48,6 +51,7 @@ export function Transcript({
           return <NoticeRow key={message.id} title={message.title} text={message.text} />;
         }
         if (message.role === "reasoning") {
+          if (quiet) return null;
           return <ReasoningRow key={message.id} text={message.text} running={message.streaming === true} />;
         }
         if (message.role === "usage") {

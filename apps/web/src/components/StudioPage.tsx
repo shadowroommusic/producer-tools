@@ -306,15 +306,6 @@ export function StudioPage({
             />
           </label>
         </div>
-        <div className="sr-transport-zoom">
-          <button type="button" className="sr-icon-btn" aria-label="缩小" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
-            −
-          </button>
-          <span className="sr-mono">{Math.round(zoom * 100)}%</span>
-          <button type="button" className="sr-icon-btn" aria-label="放大" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
-            +
-          </button>
-        </div>
         <button
           type="button"
           className="sr-btn sr-studio-addtrack"
@@ -495,6 +486,16 @@ export function StudioPage({
             ))}
             <div className="sr-playhead" style={{ left: playhead * barPx }} aria-hidden="true" />
           </div>
+        </div>
+        {/* Zoom rides the timeline's bottom-right corner, the way DAWs park it. */}
+        <div className="sr-transport-zoom">
+          <button type="button" className="sr-icon-btn" aria-label="缩小" title="缩小" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
+            −
+          </button>
+          <span className="sr-mono">{Math.round(zoom * 100)}%</span>
+          <button type="button" className="sr-icon-btn" aria-label="放大" title="放大" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
+            +
+          </button>
         </div>
       </div>
 

@@ -39,6 +39,10 @@
   min-width: 0;
 }
 
+.sr-frame-dock[data-floating] .sr-dock {
+  box-shadow: var(--sr-shadow-panel);
+}
+
 /* The main column wrapper exists so the dock toggle can float in its top-right corner. */
 .sr-main-wrap {
   position: relative;
@@ -402,6 +406,17 @@
   font-weight: 500;
 }
 
+/* Rows for pages that do not exist yet are visibly inert. */
+.sr-panel-row:disabled {
+  color: var(--sr-label-caption);
+  cursor: default;
+}
+
+.sr-panel-row:disabled:hover {
+  background: transparent;
+  color: var(--sr-label-caption);
+}
+
 .sr-panel-glyph {
   display: inline-flex;
   flex: none;
@@ -646,7 +661,7 @@
 }
 
 .sr-dock-tab {
-  max-width: 190px;
+  max-width: 140px;
   padding: 6px 10px;
   border: none;
   border-radius: var(--sr-radius-sm);
@@ -657,6 +672,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Which plugin the 面板 tab is showing. */
+.sr-dock-panelhead {
+  display: grid;
+  gap: 1px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: var(--sr-shell-border);
 }
 
 .sr-dock-tab:hover {
@@ -757,21 +781,39 @@
 .sr-studio-transport {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
-  height: 56px;
-  padding: 0 16px;
+  gap: 8px 10px;
+  min-height: 56px;
+  padding: 8px 16px;
   border-bottom: var(--sr-shell-border);
 }
 
 .sr-transport-buttons {
   display: flex;
+  flex: none;
   gap: 6px;
+}
+
+.sr-transport-position,
+.sr-transport-fields,
+.sr-transport-field,
+.sr-transport-zoom,
+.sr-studio-back,
+.sr-studio-addtrack,
+.sr-studio-import {
+  flex: none;
 }
 
 .sr-transport-play[aria-pressed="true"] {
   background: var(--sr-accent);
   color: var(--sr-on-accent);
+}
+
+/* The transport never squeezes its own controls: it wraps instead. */
+.sr-transport-field .sr-input,
+.sr-transport-zoom {
+  flex: none;
 }
 
 .sr-transport-position {
@@ -793,11 +835,6 @@
   gap: 2px;
 }
 
-.sr-input--key {
-  width: 64px;
-  text-align: center;
-}
-
 .sr-studio-addtrack {
   margin-left: auto;
   white-space: nowrap;
@@ -815,10 +852,19 @@
 }
 
 .sr-transport-zoom {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 4px;
-  color: var(--sr-label-tertiary);
+  padding: 3px 6px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-floating-fill);
+  color: var(--sr-label-secondary);
+  box-shadow: var(--sr-shadow-soft);
 }
 
 .sr-transport-zoom .sr-icon-btn {
@@ -836,11 +882,6 @@
   background: var(--sr-surface);
 }
 
-.sr-studio-import-track {
-  width: 160px;
-  font-family: var(--sr-font-sans);
-}
-
 .sr-studio-hint {
   margin: 0;
   padding: 4px 16px 6px;
@@ -849,6 +890,7 @@
 }
 
 .sr-studio-body {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -1537,6 +1579,16 @@
 .sr-input--num {
   width: 84px;
   text-align: right;
+}
+
+.sr-input--key {
+  width: 64px;
+  text-align: center;
+}
+
+.sr-studio-import-track {
+  width: 160px;
+  font-family: var(--sr-font-sans);
 }
 
 .sr-textarea {

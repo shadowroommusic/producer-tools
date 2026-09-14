@@ -148,8 +148,11 @@ export function Sidebar({
               data-active={active || undefined}
               aria-current={active ? "page" : undefined}
               aria-disabled={entry.ready ? undefined : true}
+              disabled={!entry.ready}
               title={collapsed ? entry.label : entry.ready ? undefined : "即将开放"}
-              onClick={() => onSelectWorkspace(entry.id)}
+              onClick={() => {
+                if (entry.ready) onSelectWorkspace(entry.id);
+              }}
             >
               <span className="sr-panel-glyph">
                 <Icon size={collapsed ? 18 : 16} />

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ReactNode } from "react";
 import {
   computeColumns,
-  RIGHTBAR_DEFAULT_RATIO,
+  defaultDockWidth,
   SIDEBAR_AUTO_COLLAPSE,
   SIDEBAR_DEFAULT,
 } from "./columns";
@@ -135,7 +135,7 @@ export function AppFrame({
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;
   const collapsed = narrow ? !narrowExpanded : sidebarPref === 0;
   const sidebarPreference = collapsed ? 0 : sidebarPref === 0 ? SIDEBAR_DEFAULT : sidebarPref;
-  const dockPreference = dockWidth ?? viewport * RIGHTBAR_DEFAULT_RATIO;
+  const dockPreference = dockWidth ?? defaultDockWidth(viewport);
   const columns = computeColumns(viewport, sidebarPreference, dockCollapsed ? 0 : dockPreference);
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
@@ -170,7 +170,11 @@ export function AppFrame({
     >
       <div className="sr-frame-sidebar">{sidebarNode}</div>
       <div className="sr-frame-main">{main}</div>
-      <div className="sr-frame-dock">{dock}</div>
+      {/* With no room for a track the panel floats over the centre — mark it so it reads as a
+          drawer (shadow, its own edge) instead of looking like it ate the work surface. */}
+      <div className="sr-frame-dock" data-floating={!dockCollapsed && columns.rightbar === 0 ? true : undefined}>
+        {dock}
+      </div>
 
       {!collapsed && (
         <DragHandle
