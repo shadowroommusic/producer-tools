@@ -502,8 +502,16 @@
   color: var(--sr-label-primary);
 }
 
-.sr-composer-trailing .sr-chip {
-  cursor: default;
+.sr-chip--button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-chip--button:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
 }
 
 /* Primary send: 34px circle on the accent fill, white-on-acid glyph. */

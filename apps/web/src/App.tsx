@@ -167,6 +167,7 @@ export function App() {
               mode={mode}
               onModeChange={setMode}
               plugin={active}
+              onPluginClick={() => setDockOpen(true)}
             />
           }
         />

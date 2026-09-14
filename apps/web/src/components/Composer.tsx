@@ -17,6 +17,7 @@ export function Composer({
   mode,
   onModeChange,
   plugin,
+  onPluginClick,
   notice,
   placeholder = "描述你想做的音乐或任务，例如：排一套 60 分钟的 tech house set",
 }: {
@@ -28,6 +29,7 @@ export function Composer({
   mode: string;
   onModeChange: (mode: string) => void;
   plugin?: { label: string; repo: string };
+  onPluginClick?: () => void;
   notice?: string;
   placeholder?: string;
 }) {
@@ -81,10 +83,15 @@ export function Composer({
           </div>
           <div className="sr-composer-trailing">
             {plugin && (
-              <span className="sr-chip" title={plugin.repo}>
+              <button
+                type="button"
+                className="sr-chip sr-chip--button"
+                title={`打开 ${plugin.repo} 面板`}
+                onClick={onPluginClick}
+              >
                 <span className="sr-chip-label">{plugin.label}</span>
                 <IconChevronDown size={12} />
-              </span>
+              </button>
             )}
             <button
               type="button"
