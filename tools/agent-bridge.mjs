@@ -22,7 +22,7 @@
  *   SHADOWROOM_AGENT_PORT      default 8788
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -41,6 +41,21 @@ const CODEX =
 const INIT_TIMEOUT_MS = Number(process.env.SHADOWROOM_AGENT_INIT_TIMEOUT_MS ?? 60_000);
 /** Where audio the browser records (voice turns, hummed melodies) is written. */
 const RECORDINGS_DIR = process.env.SHADOWROOM_RECORDINGS_DIR ?? join(WORKSPACES, "recordings");
+
+/** Extensions the studio may stream into the browser (audio + MIDI, nothing executable). */
+const STREAMABLE = new Map([
+  [".wav", "audio/wav"],
+  [".mp3", "audio/mpeg"],
+  [".m4a", "audio/mp4"],
+  [".aac", "audio/aac"],
+  [".aif", "audio/aiff"],
+  [".aiff", "audio/aiff"],
+  [".flac", "audio/flac"],
+  [".ogg", "audio/ogg"],
+  [".opus", "audio/ogg"],
+  [".mid", "audio/midi"],
+  [".midi", "audio/midi"],
+]);
 
 /** The plugins, injected into every thread so the agent has the same tools as the sidebar. */
 const PLUGIN_REPOS = [
@@ -489,6 +504,54 @@ const http = createServer(async (request, response) => {
       writeFileSync(target, Buffer.from(data, "base64"));
       console.log(`[agent] audio saved: ${target}`);
       json(response, 200, { path: target, bytes: Buffer.byteLength(data, "base64") });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent/file") {
+      const target = url.searchParams.get("path");
+      if (target === null || target === "") {
+        json(response, 400, { error: "missing path" });
+        return;
+      }
+      const resolved = resolve(target.replace(/^~(?=\/|$)/, HOME));
+      const extension = resolved.slice(resolved.lastIndexOf(".")).toLowerCase();
+      const contentType = STREAMABLE.get(extension);
+      if (contentType === undefined) {
+        json(response, 415, { error: `cannot stream ${extension || "this file"}` });
+        return;
+      }
+      if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+        json(response, 404, { error: `no such file: ${resolved}` });
+        return;
+      }
+      const size = statSync(resolved).size;
+      // Range support: an audio element seeks constantly in a DAW, and 200-with-everything makes
+      // scrubbing wait for the whole file.
+      const range = request.headers.range;
+      const match = typeof range === "string" ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+      const start = match?.[1] ? Number(match[1]) : 0;
+      const end = match?.[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+      if (match !== null) {
+        response.writeHead(206, {
+          "content-type": contentType,
+          "content-length": end - start + 1,
+          "content-range": `bytes ${start}-${end}/${size}`,
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "*",
+        });
+      } else {
+        response.writeHead(200, {
+          "content-type": contentType,
+          "content-length": size,
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "*",
+        });
+      }
+      if (request.method === "HEAD") {
+        response.end();
+        return;
+      }
+      createReadStream(resolved, { start, end }).pipe(response);
       return;
     }
 

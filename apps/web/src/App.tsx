@@ -689,9 +689,12 @@ export function App() {
   const openProject = projects.find((project) => project.id === openProjectId);
   /** With the dock's 对话 tab open the composer moves there, so there is only ever one input. */
   const chatInDock = dockOpen && dockTab === "chat";
-  const updateProject = (next: StudioProject) =>
+  /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
+  const updateProject = (patch: (project: StudioProject) => StudioProject) =>
     setProjects((current) =>
-      current.map((project) => (project.id === next.id ? { ...next, updatedAt: Date.now() } : project)),
+      current.map((project) =>
+        project.id === openProjectId ? { ...patch(project), updatedAt: Date.now() } : project,
+      ),
     );
 
   /**

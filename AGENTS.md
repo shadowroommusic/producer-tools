@@ -122,6 +122,13 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   this shape: groove/drum recognition (polyphonic — basic-pitch, Apache-2.0), audio trim/edit tools, and
   splitting melody detection out into its own plugin repository.
 
+- **2026-09-14 — Studio is the first page we call done, and it is done by playing.** The plan agreed
+  with the user: build the UI surface by surface, but each surface has to *work* against the real
+  tool layer before moving on. Studio therefore got audio playback (`GET /api/agent/file` with Range
+  support, one `<audio>` per clip, fader/mute/solo driving volume), import-from-disk with the real
+  file duration, clip move/resize/delete, ruler seek and zoom. Lesson recorded in the code: Studio
+  edits are functional updates — a captured snapshot silently reverted an import once.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

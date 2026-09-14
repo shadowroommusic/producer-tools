@@ -141,6 +141,12 @@ What was measured and matters:
   bar-ruled lane area. `BAR_PX` (56) is the bar width in both the TSX and the CSS grid, so keep the
   two in step. The playhead runs on `requestAnimationFrame` at the project tempo and loops at the
   bar count.
+- **Studio playback** — one `<audio>` per playable clip (kept in a ref map, parked in a hidden host so
+  devtools can see them). `GET /api/agent/file?path=…` streams local audio with Range support; the rAF
+  loop advances the playhead and starts/stops clips as it crosses their edges, with volume from the
+  track's fader / mute / solo. **Every Studio edit goes through an updater** (`onChange(patch)`), never
+  a captured snapshot — the first version wrote a stale project back and silently dropped a freshly
+  imported clip.
 - **Voice** (`lib/voice.ts`) — a *call*: `startCapture()` opens the microphone through Web Audio and
   keeps the PCM (encoded to WAV in the browser, so the Python side needs no ffmpeg), while
   `webkitSpeechRecognition` transcribes. Each finished phrase takes the WAV since the previous phrase,

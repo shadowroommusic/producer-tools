@@ -21,6 +21,22 @@ export type StudioClip = {
 
 export type StudioNote = { start_ms: number; end_ms: number; midi: number; name?: string };
 
+/** Bars per second at 4/4 — the bridge between wall-clock audio and the bar grid. */
+export function barsPerSecond(bpm: number): number {
+  return bpm / 4 / 60;
+}
+
+/** URL the browser can stream a local file from (the agent bridge serves it). */
+export function fileUrl(path: string): string {
+  return `/api/agent/file?path=${encodeURIComponent(path)}`;
+}
+
+/** Audio clips are the ones the transport can actually play. */
+export function isPlayable(path: string | undefined): boolean {
+  if (path === undefined || path === "") return false;
+  return /\.(wav|mp3|m4a|aac|aif|aiff|flac|ogg|opus)$/i.test(path);
+}
+
 export type StudioTrack = {
   id: string;
   name: string;

@@ -47,6 +47,11 @@ then goes into the multi-track workbench: a transport with BPM / key / bar count
 headers (name, mute, solo, fader, meter) and a bar-ruled lane area where clips can be added by
 double-clicking a lane, dragged to move and deleted with Delete.
 
+It **plays**: 导入音频 drops a file from disk onto a track (its length comes from the file's real
+duration), the transport streams it through the local bridge, clips start and stop as the playhead
+crosses them, and mute / solo / the fader move the volume. Clips can be moved, resized from their right
+edge, and removed; the ruler seeks; zoom changes the bar width.
+
 **Voice** — the microphone button in any page's composer starts a **call**, not a dictation: the
 composer turns into a live waveform, the call stays open, every finished phrase is sent with its own
 WAV recording attached (so humming a melody reaches the agent as audio, not just as text), the answer
