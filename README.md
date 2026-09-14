@@ -51,7 +51,9 @@ tracks, no clips — so what is on the timeline is always something you or the a
 It **plays**: 导入音频 drops a file from disk onto a track (its length comes from the file's real
 duration — mp3, m4a, flac and aiff included, not just WAV), the transport streams it through the local bridge, clips start and stop as the playhead
 crosses them, and mute / solo / the fader move the volume. Clips can be moved, resized from their right
-edge, and removed; the ruler seeks; zoom changes the bar width.
+edge, and removed; the ruler seeks; zoom changes the bar width. A clip that carries **notes** (a hum
+the melody tool notated, a MIDI clip) plays them through a small built-in synth as well, drawn as a
+mini piano roll — nothing on the timeline is silent decoration.
 
 **导出音频** offers three things, and all three are real files: **整首** (the arrangement mixed down),
 **分轨** (one file per track) and **MIDI** (a Type-1 file, one track per part, notes taken from MIDI

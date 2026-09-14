@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
+import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
   barsPerSecond,
   fileUrl,
@@ -23,6 +24,7 @@ import {
   type StudioProject,
   type StudioTrack,
 } from "../lib/studio";
+import { createNotePlayer } from "../lib/synth";
 import { peaksFor } from "../lib/waveform";
 
 /** Pixels per bar at zoom 1. */
@@ -88,6 +90,9 @@ export function StudioPage({
   const [converting, setConverting] = useState(false);
   /** One audio element per playable clip. */
   const players = useRef<Map<string, HTMLAudioElement>>(new Map());
+  /** Notes of a notated clip, played through the little Web Audio synth. */
+  const notated = useRef<Map<string, NoteVoice>>(new Map());
+  const notePlayer = useRef<NotePlayer>(createNotePlayer());
   /** Detached audio elements still need a home so devtools (and tests) can see them. */
   const audioHost = useRef<HTMLDivElement>(null);
   /** Authoritative playhead in bars; the state copy is only for rendering. */
@@ -145,6 +150,22 @@ export function StudioPage({
   const syncPlayers = (bar: number, play: boolean) => {
     for (const track of project.tracks) {
       for (const clip of track.clips) {
+        if (clip.notes !== undefined && clip.notes.length > 0) {
+          const level = audible(track) ? Math.min(1, track.volume / 100) : 0;
+          const inside = bar >= clip.start && bar < clip.start + clip.length;
+          const voice = notated.current.get(clip.id);
+          if (!inside || !play || level <= 0) {
+            voice?.stop();
+            notated.current.delete(clip.id);
+          } else if (voice === undefined) {
+            const handle = notePlayer.current.play(clip.notes, {
+              leadSeconds: -(bar - clip.start) * secondsPerBar,
+              gain: level,
+            });
+            if (handle !== null) notated.current.set(clip.id, handle);
+          }
+        }
+        // Audio behind the clip is played by its own element; a clip with only notes has none.
         if (!isPlayable(clip.source)) continue;
         const element = players.current.get(clip.id);
         if (element === undefined) continue;
@@ -195,6 +216,9 @@ export function StudioPage({
     () => () => {
       for (const element of players.current.values()) element.pause();
       players.current.clear();
+      for (const voice of notated.current.values()) voice.stop();
+      notated.current.clear();
+      notePlayer.current.quiet();
     },
     [],
   );

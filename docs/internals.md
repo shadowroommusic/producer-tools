@@ -147,6 +147,18 @@ What was measured and matters:
   and bar count follow the render, `sections` become the ruler's section strip, and a `midi_path`
   lands on its own **MIDI** track (a clip pointing at the `.mid`, which `export_midi` reads).
 
+## Notated clips are played, not just drawn
+
+`lib/synth.ts` is a ~90-line Web Audio voice: one shared `AudioContext` (created on the first
+play — browsers want a gesture), one triangle oscillator per note with a short attack/release
+envelope, everything scheduled ahead of time so it lands on the grid instead of following the
+animation frame. `StudioPage.syncPlayers` treats a clip with `notes` like a clip with audio: entering
+it starts a voice (with `leadSeconds` telling the synth how far into the clip the playhead already
+is, so a seek does not replay what has passed), leaving it or pausing stops the voice. Mix level is
+the track's fader, muted/soloed as usual, and kept under the rendered audio on purpose.
+`apps/web/tests/synth.test.mjs` drives it against a stub `AudioContext` (measured in the browser too:
+four notes in a clip → four oscillators started, context running).
+
 ## A song, from one sentence (measured 2026-09-15)
 
 `render_song` now takes `sections` + per-part `segments` (see the generator's `docs/internals.md`), so

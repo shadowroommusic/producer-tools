@@ -202,3 +202,10 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   `warnings`, and can write **M4A (AAC)** — so the export dialog offers WAV / AIFF / M4A and disables
   位深 for AAC (it has none). Measured: an m4a clip mixed in at level, a 48 kHz m4a mix + stems
   decoding back at peak 0.945 through the UI.
+
+- **2026-09-15 — a clip you can see has to be a clip you can hear.** Notated clips (a hum the melody
+  tool transcribed, a MIDI clip) were drawn as a piano roll and played nothing. `lib/synth.ts` now
+  plays them through Web Audio: notes scheduled ahead of time on the grid, level from the track's
+  fader, stopped when the playhead leaves the clip or the transport pauses. Measured in the browser
+  (four notes → four oscillators, context running) and in `apps/web/tests/synth.test.mjs` against a
+  stub context. `pnpm test` now covers the call's detectors and this synth (8 tests).
