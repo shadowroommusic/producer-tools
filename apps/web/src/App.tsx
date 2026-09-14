@@ -108,6 +108,11 @@ export function App() {
   );
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
+  /** Undo/redo for the open Studio project (drag gestures push one snapshot, not one per frame). */
+  const [history, setHistory] = useState<{ past: StudioProject[]; future: StudioProject[] }>({
+    past: [],
+    future: [],
+  });
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking">("listening");
   const voiceSession = useRef<VoiceSession | null>(null);
@@ -881,12 +886,83 @@ export function App() {
   }, []);
 
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
-  const updateProject = (patch: (project: StudioProject) => StudioProject) =>
-    setProjects((current) =>
-      current.map((project) =>
-        project.id === openProjectId ? { ...patch(project), updatedAt: Date.now() } : project,
-      ),
-    );
+  /** Remember the project as it is right now — the point a drag or an edit can return to. */
+  const beginEdit = useCallback(() => {
+    setProjects((current) => {
+      const project = current.find((entry) => entry.id === openProjectId);
+      if (project !== undefined) {
+        setHistory((previous) => ({ past: [...previous.past.slice(-49), project], future: [] }));
+      }
+      return current;
+    });
+  }, [openProjectId]);
+
+  const updateProject = useCallback(
+    (patch: (project: StudioProject) => StudioProject, options?: { transient?: boolean }) => {
+      if (options?.transient !== true) beginEdit();
+      setProjects((current) =>
+        current.map((project) =>
+          project.id === openProjectId ? { ...patch(project), updatedAt: Date.now() } : project,
+        ),
+      );
+    },
+    [beginEdit, openProjectId],
+  );
+
+  const undo = useCallback(() => {
+    setHistory((previous) => {
+      const previousProject = previous.past.at(-1);
+      if (previousProject === undefined) return previous;
+      setProjects((current) =>
+        current.map((project) =>
+          project.id === previousProject.id
+            ? { ...previousProject, updatedAt: Date.now() }
+            : project,
+        ),
+      );
+      const currentProject = projects.find((project) => project.id === previousProject.id);
+      return {
+        past: previous.past.slice(0, -1),
+        future: currentProject === undefined ? previous.future : [currentProject, ...previous.future].slice(0, 50),
+      };
+    });
+  }, [projects]);
+
+  const redo = useCallback(() => {
+    setHistory((previous) => {
+      const nextProject = previous.future[0];
+      if (nextProject === undefined) return previous;
+      setProjects((current) =>
+        current.map((project) => (project.id === nextProject.id ? { ...nextProject, updatedAt: Date.now() } : project)),
+      );
+      const currentProject = projects.find((project) => project.id === nextProject.id);
+      return {
+        past: currentProject === undefined ? previous.past : [...previous.past.slice(-49), currentProject],
+        future: previous.future.slice(1),
+      };
+    });
+  }, [projects]);
+
+  // Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (or Ctrl+Y) while a Studio project is open.
+  useEffect(() => {
+    if (mainView !== "studio" || openProjectId === undefined) return;
+    const onKey = (event: KeyboardEvent): void => {
+      const meta = event.metaKey || event.ctrlKey;
+      if (!meta) return;
+      const target = event.target as HTMLElement | null;
+      if (target !== null && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      } else if ((key === "z" && event.shiftKey) || key === "y") {
+        event.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mainView, openProjectId, redo, undo]);
 
   /**
    * The agent's melody tool lands on the timeline by itself: when `hum_to_midi` completes in a
@@ -1004,6 +1080,11 @@ export function App() {
             <StudioPage
               project={openProject}
               onChange={updateProject}
+              onBeginEdit={beginEdit}
+              onUndo={undo}
+              onRedo={redo}
+              canUndo={history.past.length > 0}
+              canRedo={history.future.length > 0}
               onExport={exportArrangement}
               onConvertToMidi={notateClip}
               composer={chatInDock ? null : composerNode}

@@ -189,3 +189,17 @@ export const IconMic = (props: IconProps) => (
     <path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" />
   </Glyph>
 );
+
+export const IconUndo = (props: IconProps) => (
+  <Glyph {...props}>
+    <path d="M3.5 8.5h6a3 3 0 0 1 0 6H6" />
+    <path d="M6 5.5 3 8.5l3 3" />
+  </Glyph>
+);
+
+export const IconRedo = (props: IconProps) => (
+  <Glyph {...props}>
+    <path d="M12.5 8.5h-6a3 3 0 0 0 0 6H10" />
+    <path d="m10 5.5 3 3-3 3" />
+  </Glyph>
+);

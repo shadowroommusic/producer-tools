@@ -11,7 +11,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { IconPause, IconPlay, IconPlus, IconStop } from "./icons";
+import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import {
   barsPerSecond,
   fileUrl,
@@ -39,6 +39,11 @@ function defaultExportPath(projectName: string, kind: "mix" | "stems" | "midi", 
 export function StudioPage({
   project,
   onChange,
+  onBeginEdit,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
   composer,
   onClose,
   onExport,
@@ -46,7 +51,13 @@ export function StudioPage({
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
-  onChange: (patch: (project: StudioProject) => StudioProject) => void;
+  onChange: (patch: (project: StudioProject) => StudioProject, options?: { transient?: boolean }) => void;
+  /** Called once when a gesture starts, so undo returns to the state before it. */
+  onBeginEdit?: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   composer: ReactNode;
   onClose: () => void;
   /** Bounce the arrangement through the generator plugin; resolves with the written path. */
@@ -248,11 +259,47 @@ export function StudioPage({
     setSelected({ trackId, clipId: clip.id });
   };
 
-  const changeClip = (trackId: string, clipId: string, patch: (clip: StudioClip) => StudioClip) => {
-    updateTrack(trackId, (track) => ({
-      ...track,
-      clips: track.clips.map((clip) => (clip.id === clipId ? patch(clip) : clip)),
-    }));
+  const changeClip = (
+    trackId: string,
+    clipId: string,
+    patch: (clip: StudioClip) => StudioClip,
+    options?: { transient?: boolean },
+  ) => {
+    onChange(
+      (current) => ({
+        ...current,
+        tracks: current.tracks.map((track) =>
+          track.id === trackId
+            ? { ...track, clips: track.clips.map((clip) => (clip.id === clipId ? patch(clip) : clip)) }
+            : track,
+        ),
+      }),
+      options,
+    );
+  };
+
+  /** Which track lane sits under a point (used while dragging a clip up or down). */
+  const trackAt = (x: number, y: number): string | undefined => {
+    const element = document.elementFromPoint(x, y) as HTMLElement | null;
+    return element?.closest<HTMLElement>("[data-track-id]")?.dataset.trackId;
+  };
+
+  const moveClipToTrack = (fromId: string, toId: string, clipId: string, start: number) => {
+    onChange((current) => {
+      const from = current.tracks.find((track) => track.id === fromId);
+      const clip = from?.clips.find((entry) => entry.id === clipId);
+      if (clip === undefined) return current;
+      return {
+        ...current,
+        tracks: current.tracks.map((track) => {
+          if (track.id === fromId) return { ...track, clips: track.clips.filter((entry) => entry.id !== clipId) };
+          if (track.id === toId) {
+            return { ...track, clips: [...track.clips, { ...clip, start: Math.max(0, Math.round(start)) }] };
+          }
+          return track;
+        }),
+      };
+    }, { transient: true });
   };
 
   const removeClip = (trackId: string, clipId: string) => {
@@ -314,6 +361,26 @@ export function StudioPage({
           </button>
           <button type="button" className="sr-icon-btn" aria-label="停止" title="停止" onClick={stop}>
             <IconStop size={14} />
+          </button>
+          <button
+            type="button"
+            className="sr-icon-btn"
+            aria-label="撤销"
+            title="撤销 (⌘Z)"
+            disabled={!canUndo}
+            onClick={onUndo}
+          >
+            <IconUndo size={16} />
+          </button>
+          <button
+            type="button"
+            className="sr-icon-btn"
+            aria-label="重做"
+            title="重做 (⇧⌘Z)"
+            disabled={!canRedo}
+            onClick={onRedo}
+          >
+            <IconRedo size={16} />
           </button>
         </div>
         <div className="sr-transport-position sr-mono">{positionLabel}</div>
@@ -626,6 +693,7 @@ export function StudioPage({
               <div
                 key={track.id}
                 className="sr-studio-lane"
+                data-track-id={track.id}
                 data-muted={!(audible(track)) || undefined}
                 onDoubleClick={(event) => {
                   const box = event.currentTarget.getBoundingClientRect();
@@ -643,8 +711,18 @@ export function StudioPage({
                       setSelected({ trackId: track.id, clipId: clip.id });
                     }}
                     onSeekToStart={() => seek(clip.start)}
-                    onMove={(start) => changeClip(track.id, clip.id, (current) => ({ ...current, start }))}
-                    onResize={(length) => changeClip(track.id, clip.id, (current) => ({ ...current, length }))}
+                    onMoveTo={(start, clientX, clientY) => {
+                      const target = trackAt(clientX, clientY) ?? track.id;
+                      if (target === track.id) {
+                        changeClip(track.id, clip.id, (current) => ({ ...current, start }), { transient: true });
+                      } else {
+                        moveClipToTrack(track.id, target, clip.id, start);
+                      }
+                    }}
+                    onResize={(length) =>
+                      changeClip(track.id, clip.id, (current) => ({ ...current, length }), { transient: true })
+                    }
+                    onBeginEdit={() => onBeginEdit?.()}
                     onDelete={() => removeClip(track.id, clip.id)}
                     onMenu={(x, y) => setMenu({ trackId: track.id, clipId: clip.id, x, y })}
                   />
@@ -813,10 +891,11 @@ function Clip({
   selected,
   onSelect,
   onSeekToStart,
-  onMove,
+  onMoveTo,
   onResize,
   onDelete,
   onMenu,
+  onBeginEdit,
 }: {
   clip: StudioClip;
   barPx: number;
@@ -824,10 +903,11 @@ function Clip({
   selected: boolean;
   onSelect: () => void;
   onSeekToStart: () => void;
-  onMove: (start: number) => void;
+  onMoveTo: (start: number, clientX: number, clientY: number) => void;
   onResize: (length: number) => void;
   onDelete: () => void;
   onMenu: (x: number, y: number) => void;
+  onBeginEdit: () => void;
 }) {
   const drag = useRef<{
     originX: number;
@@ -863,7 +943,7 @@ function Clip({
     if (active === null) return false;
     const delta = (event.clientX - active.originX) / barPx;
     if (active.mode === "move") {
-      if (Math.abs(delta) >= 0.5) onMove(Math.max(0, active.start + Math.round(delta)));
+      if (Math.abs(delta) >= 0.5) onMoveTo(Math.max(0, active.start + Math.round(delta)), event.clientX, event.clientY);
     } else if (Math.abs(delta) >= 0.4) {
       onResize(Math.max(1, active.length + Math.round(delta)));
     }
@@ -902,8 +982,8 @@ function Clip({
       }}
       onKeyDown={(event) => {
         if (event.key === "Delete" || event.key === "Backspace") onDelete();
-        if (event.key === "ArrowRight") onMove(clip.start + 1);
-        if (event.key === "ArrowLeft") onMove(Math.max(0, clip.start - 1));
+        if (event.key === "ArrowRight") onMoveTo(clip.start + 1, 0, 0);
+        if (event.key === "ArrowLeft") onMoveTo(Math.max(0, clip.start - 1), 0, 0);
       }}
     >
       <span className="sr-clip-name">{clip.name}</span>
