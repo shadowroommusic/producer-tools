@@ -1036,3 +1036,70 @@
     box-shadow: 0 0 0 6px color-mix(in srgb, var(--sr-danger) 0%, transparent);
   }
 }
+
+/* ---------- voice call: the card becomes a waveform ---------- */
+
+.sr-voicebar {
+  gap: 10px;
+  padding: 14px 18px 12px;
+}
+
+.sr-voicebar-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 56px;
+  padding: 0 2px;
+}
+
+.sr-voicebar-bar {
+  flex: 1;
+  min-width: 2px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-label-tertiary);
+  transition: height 60ms linear;
+}
+
+.sr-voicebar-bar[data-tail] {
+  background: var(--sr-accent);
+}
+
+.sr-voicebar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sr-voicebar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+}
+
+.sr-voicebar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-live);
+}
+
+.sr-voicebar-dot[data-state="listening"] {
+  background: var(--sr-danger);
+  animation: sr-voice-pulse 1.1s ease-in-out infinite alternate;
+}
+
+.sr-voicebar-dot[data-state="thinking"] {
+  background: var(--sr-warn);
+  animation: sr-voice-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.sr-voicebar-dot[data-state="speaking"] {
+  background: var(--sr-accent);
+}
+
+.sr-voicebar-end {
+  border-radius: var(--sr-radius-pill);
+}

@@ -28,14 +28,17 @@ export type StudioTrack = {
 };
 
 export type StudioProject = {
+  id: string;
   name: string;
+  updatedAt: number;
   bpm: number;
   key: string;
   bars: number;
   tracks: StudioTrack[];
 };
 
-const STORAGE_KEY = "shadowroom.studio.v1";
+const STORAGE_KEY = "shadowroom.studio.projects.v1";
+const OPEN_KEY = "shadowroom.studio.open";
 
 const newId = (prefix: string): string =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -51,7 +54,9 @@ export function newTrack(name: string): StudioTrack {
 /** A project that already looks like a DAW: three labelled tracks, empty clips, 16 bars. */
 export function defaultProject(): StudioProject {
   return {
+    id: newId("project"),
     name: "新工程",
+    updatedAt: Date.now(),
     bpm: 128,
     key: "8A",
     bars: 16,
@@ -63,23 +68,44 @@ export function defaultProject(): StudioProject {
   };
 }
 
-export function loadProject(): StudioProject {
+export type StudioStore = { projects: StudioProject[] };
+
+export function loadProjects(): StudioProject[] {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return defaultProject();
-    const parsed = JSON.parse(raw) as StudioProject;
-    if (!Array.isArray(parsed.tracks)) return defaultProject();
-    return parsed;
+    if (raw === null) return [];
+    const parsed = JSON.parse(raw) as StudioStore;
+    if (!Array.isArray(parsed.projects)) return [];
+    return parsed.projects.filter((project) => Array.isArray(project.tracks));
   } catch {
-    return defaultProject();
+    return [];
   }
 }
 
-export function saveProject(project: StudioProject): void {
+export function saveProjects(projects: StudioProject[]): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ projects } satisfies StudioStore));
   } catch {
-    /* storage blocked: the in-memory project still works */
+    /* storage blocked: the in-memory projects still work */
+  }
+}
+
+/** Which project was open last (the studio opens it when you come back). */
+export function rememberOpenProject(id: string | null): void {
+  try {
+    if (id === null) window.localStorage.removeItem(OPEN_KEY);
+    else window.localStorage.setItem(OPEN_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function lastOpenProject(projects: StudioProject[]): string | undefined {
+  try {
+    const id = window.localStorage.getItem(OPEN_KEY);
+    return id !== null && projects.some((project) => project.id === id) ? id : undefined;
+  } catch {
+    return undefined;
   }
 }
 

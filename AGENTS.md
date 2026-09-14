@@ -107,6 +107,12 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   the same composer docked underneath with a microphone button (Web Speech in, `speechSynthesis`
   out). Mode chips are 标准 / 极简 only.
 
+- **2026-09-14 — voice is a call, and Studio has projects.** The microphone button starts a live
+  session: the composer becomes a waveform, the mic stays open, each finished phrase is sent with its
+  own WAV (browser-encoded, uploaded to `/api/agent/audio`, saved under `~/Documents/ShadowRoom/recordings`),
+  the answer is spoken, then listening resumes. Studio opens on a project list and only then shows the
+  multi-track workbench; the projects, the open project and the current page are all remembered.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

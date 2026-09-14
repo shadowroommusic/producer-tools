@@ -34,6 +34,10 @@ export function Composer({
   listening = false,
   voiceSupported = false,
   onToggleVoice,
+  voiceMode = false,
+  voiceState = "listening",
+  voiceLevel,
+  onEndVoice,
   placeholder = "描述你想做的音乐或任务，例如：排一套 60 分钟的 tech house set",
 }: {
   variant: "hero" | "docked";
@@ -59,6 +63,11 @@ export function Composer({
   listening?: boolean;
   voiceSupported?: boolean;
   onToggleVoice?: () => void;
+  /** Call mode: the card becomes a waveform instead of a text box. */
+  voiceMode?: boolean;
+  voiceState?: "listening" | "thinking" | "speaking";
+  voiceLevel?: () => number;
+  onEndVoice?: () => void;
   placeholder?: string;
 }) {
   const [menu, setMenu] = useState<"none" | "attach" | "model" | "path">("none");
@@ -66,6 +75,7 @@ export function Composer({
   const root = useRef<HTMLDivElement>(null);
   const canSend = value.trim().length > 0 && !busy;
   const current = models.find((model) => model.id === modelId) ?? models.find((model) => model.isDefault) ?? models[0];
+  const bars = useVoiceBars(voiceMode, voiceLevel);
 
   // Any click outside closes whichever popover is open.
   useEffect(() => {
@@ -96,6 +106,29 @@ export function Composer({
           {notice}
         </div>
       )}
+      {voiceMode ? (
+        <div className="sr-composer-card sr-voicebar">
+          <div className="sr-voicebar-wave" aria-hidden="true">
+            {bars.map((value, index) => (
+              <span
+                key={index}
+                className="sr-voicebar-bar"
+                data-tail={index > bars.length - 6 || undefined}
+                style={{ height: `${Math.max(6, Math.round(value * 100))}%` }}
+              />
+            ))}
+          </div>
+          <div className="sr-voicebar-foot">
+            <span className="sr-voicebar-status">
+              <span className="sr-voicebar-dot" data-state={voiceState} />
+              {voiceState === "listening" ? "正在听" : voiceState === "thinking" ? "正在想" : "正在说"}
+            </span>
+            <button type="button" className="sr-btn sr-voicebar-end" onClick={onEndVoice}>
+              结束通话
+            </button>
+          </div>
+        </div>
+      ) : (
       <div className="sr-composer-card">
         {attachments.length > 0 && (
           <div className="sr-composer-accessory">
@@ -285,6 +318,33 @@ export function Composer({
           </div>
         )}
       </div>
+      )}
     </div>
   );
+}
+
+/** Rolling loudness history for the call waveform (25 fps, newest on the right). */
+function useVoiceBars(active: boolean, read: (() => number) | undefined): number[] {
+  const [bars, setBars] = useState<number[]>(() => new Array(48).fill(0.08));
+  useEffect(() => {
+    if (!active || read === undefined) {
+      setBars(new Array(48).fill(0.08));
+      return;
+    }
+    let raf: number | null = null;
+    let last = 0;
+    const tick = (now: number) => {
+      if (now - last > 40) {
+        last = now;
+        const level = Math.max(0.06, Math.min(1, read()));
+        setBars((current) => [...current.slice(1), level]);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      if (raf !== null) cancelAnimationFrame(raf);
+    };
+  }, [active, read]);
+  return bars;
 }

@@ -12,7 +12,6 @@ import { IconPause, IconPlay, IconPlus, IconStop } from "./icons";
 import {
   newClip,
   newTrack,
-  saveProject,
   type StudioClip,
   type StudioProject,
   type StudioTrack,
@@ -25,20 +24,18 @@ export function StudioPage({
   project,
   onChange,
   composer,
+  onClose,
 }: {
   project: StudioProject;
   onChange: (next: StudioProject) => void;
   composer: ReactNode;
+  onClose: () => void;
 }) {
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0); // bars
   const [selected, setSelected] = useState<{ trackId: string; clipId: string } | null>(null);
   const frame = useRef<number | null>(null);
   const last = useRef<number>(0);
-
-  useEffect(() => {
-    saveProject(project);
-  }, [project]);
 
   // Transport: the playhead advances in real time at the project tempo (4/4).
   useEffect(() => {
@@ -91,6 +88,14 @@ export function StudioPage({
   return (
     <div className="sr-studio">
       <header className="sr-studio-transport">
+        <button
+          type="button"
+          className="sr-btn sr-studio-back"
+          onClick={onClose}
+          title="回到工程列表"
+        >
+          ‹ 工程
+        </button>
         <div className="sr-transport-buttons">
           <button
             type="button"

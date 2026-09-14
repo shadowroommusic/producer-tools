@@ -22,7 +22,7 @@
  *   SHADOWROOM_AGENT_PORT      default 8788
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -39,6 +39,8 @@ const PYTHON = process.env.SHADOWROOM_PYTHON ?? "python3";
 const CODEX =
   process.env.SHADOWROOM_CODEX ?? "/Applications/ChatGPT.app/Contents/Resources/codex";
 const INIT_TIMEOUT_MS = Number(process.env.SHADOWROOM_AGENT_INIT_TIMEOUT_MS ?? 60_000);
+/** Where audio the browser records (voice turns, hummed melodies) is written. */
+const RECORDINGS_DIR = process.env.SHADOWROOM_RECORDINGS_DIR ?? join(WORKSPACES, "recordings");
 
 /** The plugins, injected into every thread so the agent has the same tools as the sidebar. */
 const PLUGIN_REPOS = [
@@ -370,6 +372,19 @@ async function readBody(request) {
   return text === "" ? {} : JSON.parse(text);
 }
 
+/** JSON body with a size ceiling; audio uploads are base64 in `data`. */
+async function readJsonBody(request, limitBytes) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > limitBytes) throw new Error("request body too large");
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString("utf-8");
+  return text === "" ? {} : JSON.parse(text);
+}
+
 function json(response, code, payload) {
   const body = JSON.stringify(payload);
   response.writeHead(code, {
@@ -443,6 +458,23 @@ const http = createServer(async (request, response) => {
       }
       const threadId = agent.answer(String(body.approvalId ?? ""), decision);
       json(response, 200, { ok: true, threadId });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent/audio") {
+      const body = await readJsonBody(request, 64 * 1024 * 1024);
+      const data = typeof body.data === "string" ? body.data : "";
+      if (data === "") {
+        json(response, 400, { error: "missing base64 `data`" });
+        return;
+      }
+      const rawName = typeof body.name === "string" && body.name !== "" ? body.name : "recording.wav";
+      const safeName = rawName.replace(/[^A-Za-z0-9._-]/g, "_");
+      mkdirSync(RECORDINGS_DIR, { recursive: true });
+      const target = join(RECORDINGS_DIR, safeName);
+      writeFileSync(target, Buffer.from(data, "base64"));
+      console.log(`[agent] audio saved: ${target}`);
+      json(response, 200, { path: target, bytes: Buffer.byteLength(data, "base64") });
       return;
     }
 

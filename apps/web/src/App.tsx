@@ -15,6 +15,7 @@ import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
+import { StudioProjects, summarize } from "./components/StudioProjects";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import type { ToolCall } from "./components/ToolCallRow";
 import {
@@ -29,8 +30,24 @@ import {
   type Mention,
 } from "./lib/agent";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
-import { clipsFromCalls, loadProject, type StudioProject } from "./lib/studio";
-import { speak, startListening, voiceInputSupported, type VoiceSession } from "./lib/voice";
+import {
+  defaultProject,
+  lastOpenProject,
+  loadProjects,
+  rememberOpenProject,
+  saveProjects,
+  type StudioProject,
+} from "./lib/studio";
+import {
+  saveRecording,
+  speak,
+  startCapture,
+  startListening,
+  stopSpeaking,
+  voiceInputSupported,
+  type VoiceCapture,
+  type VoiceSession,
+} from "./lib/voice";
 import {
   createSession,
   loadSessions,
@@ -58,7 +75,9 @@ export function App() {
   const [home, setHome] = useState("");
   const [workspaces, setWorkspaces] = useState("");
   const [bridge, setBridge] = useState<Bridge>("connecting");
-  const [workspace, setWorkspace] = useState<WorkspaceId>("workbench");
+  const [workspace, setWorkspace] = useState<WorkspaceId>(
+    () => (window.localStorage.getItem("shadowroom.workspace") as WorkspaceId | null) ?? "workbench",
+  );
   const [activePlugin, setActivePlugin] = useState("set-planner");
   const [dockOpen, setDockOpen] = useState(true);
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
@@ -68,11 +87,20 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
-  const [mainView, setMainView] = useState<"conversation" | "plugins" | "studio">("conversation");
-  const [project, setProject] = useState<StudioProject>(() => loadProject());
-  const [listening, setListening] = useState(false);
+  const [mainView, setMainView] = useState<"conversation" | "plugins" | "studio">(
+    () => (window.localStorage.getItem("shadowroom.view") as "conversation" | "plugins" | "studio" | null) ?? "conversation",
+  );
+  const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
+  const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking">("listening");
   const voiceSession = useRef<VoiceSession | null>(null);
-  const speakAnswer = useRef(false);
+  const capture = useRef<VoiceCapture | null>(null);
+  const level = useRef(0);
+  const voiceModeRef = useRef(false);
+  const voiceStateRef = useRef<"listening" | "thinking" | "speaking">("listening");
+  voiceModeRef.current = voiceMode;
+  voiceStateRef.current = voiceState;
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   const [modelId, setModelId] = useState<string | undefined>(
@@ -84,6 +112,23 @@ export function App() {
   useEffect(() => {
     saveSessions(store);
   }, [store]);
+
+  useEffect(() => {
+    saveProjects(projects);
+  }, [projects]);
+
+  // Come back to the same page after a reload.
+  useEffect(() => {
+    window.localStorage.setItem("shadowroom.view", mainView);
+    window.localStorage.setItem("shadowroom.workspace", workspace);
+  }, [mainView, workspace]);
+
+  // Reopen whatever project was open last, so a reload lands where the work was.
+  useEffect(() => {
+    const id = lastOpenProject(projects);
+    if (id !== undefined) setOpenProjectId(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -176,14 +221,14 @@ export function App() {
   }, []);
 
   const submit = useCallback(
-    (override?: string) => {
+    (override?: string, options: { mentions?: Mention[] } = {}) => {
     const text = (override ?? draft).trim();
     if (text === "" || running) return;
     setDraft("");
     const at = Date.now();
     const assistantId = `a-${at}`;
-    const mentions = attachments;
-    setAttachments([]);
+    const mentions = options.mentions ?? attachments;
+    if (options.mentions === undefined) setAttachments([]);
 
     // The session id has to be known synchronously, so a hero submit creates the session first.
     const known = store.sessions.find((entry) => entry.id === store.activeId);
@@ -455,43 +500,102 @@ export function App() {
     (approval) => approval.sessionId === undefined || approval.sessionId === store.activeId,
   );
 
-  /** Voice: the microphone fills the draft, and a finished phrase sends itself — a spoken turn. */
+  /**
+   * Voice call: one tap starts a conversation instead of a dictation. The microphone stays open, each
+   * finished phrase carries its own WAV to the agent, and the answer is spoken before listening
+   * resumes — so the call never really stops.
+   *
+   * The callbacks go through refs: the speech session outlives renders, but it must always reach the
+   * *current* submit (the one that knows which session is active).
+   */
   const voiceSupported = voiceInputSupported();
-  const toggleVoice = useCallback(() => {
-    if (voiceSession.current !== null) {
-      voiceSession.current.stop();
-      voiceSession.current = null;
-      setListening(false);
-      return;
-    }
-    const session = startListening({
-      onPartial: (text) => setDraft(text),
+  const lastAssistant = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant");
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  const listenRef = useRef<() => void>(() => undefined);
+  const phraseRef = useRef<(text: string) => void>(() => undefined);
+
+  const listen = useCallback(() => {
+    if (voiceSession.current !== null) return;
+    voiceSession.current = startListening({
+      onPartial: () => undefined,
       onFinal: (text) => {
-        if (text === "") return;
-        speakAnswer.current = true;
-        setDraft("");
-        submit(text);
+        if (text !== "") phraseRef.current(text);
       },
       onEnd: () => {
         voiceSession.current = null;
-        setListening(false);
+        // Recognition stops on its own after a silence: keep the call up.
+        if (voiceModeRef.current && voiceStateRef.current === "listening") listenRef.current();
       },
     });
-    if (session !== null) {
-      voiceSession.current = session;
-      setListening(true);
-    }
-  }, [submit]);
+  }, []);
+  listenRef.current = listen;
 
-  // Speak the answer when the turn was started by voice.
-  const lastAssistant = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant");
+  const sendSpokenPhrase = useCallback(async (text: string) => {
+    voiceSession.current?.stop();
+    voiceSession.current = null;
+    setVoiceState("thinking");
+    const wav = capture.current?.takeWav() ?? null;
+    const path = wav === null ? null : await saveRecording(wav, "voice");
+    const mentions: Mention[] =
+      path === null ? [] : [{ name: path.split("/").pop() ?? "voice.wav", path, label: "这段语音" }];
+    submitRef.current(text, { mentions });
+  }, []);
+  phraseRef.current = (text: string) => {
+    void sendSpokenPhrase(text);
+  };
+
+  const startCall = useCallback(async () => {
+    const recorder = capture.current ?? (await startCapture());
+    if (recorder === null) return;
+    capture.current = recorder;
+    setVoiceMode(true);
+    setVoiceState("listening");
+    listenRef.current();
+  }, []);
+
+  const hangUp = useCallback(() => {
+    voiceSession.current?.stop();
+    voiceSession.current = null;
+    stopSpeaking();
+    capture.current?.stop();
+    capture.current = null;
+    setVoiceMode(false);
+  }, []);
+
+  // While the call is up, the level meter feeds the waveform.
   useEffect(() => {
-    if (running || speakAnswer.current !== true || lastAssistant === undefined) return;
-    speakAnswer.current = false;
-    if (lastAssistant.role === "assistant") speak(lastAssistant.text);
-  }, [running, lastAssistant]);
+    if (!voiceMode) return;
+    let raf: number | null = null;
+    const tick = () => {
+      level.current = capture.current?.level() ?? 0;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      if (raf !== null) cancelAnimationFrame(raf);
+    };
+  }, [voiceMode]);
 
-  useEffect(() => () => voiceSession.current?.stop(), []);
+  // When the turn is done, speak the answer and go back to listening.
+  useEffect(() => {
+    if (!voiceMode || voiceState !== "thinking" || running) return;
+    const answer = lastAssistant?.role === "assistant" ? lastAssistant.text.trim() : "";
+    if (answer === "") {
+      setVoiceState("listening");
+      listenRef.current();
+      return;
+    }
+    setVoiceState("speaking");
+    speak(answer, () => {
+      if (!voiceModeRef.current) return;
+      capture.current?.takeWav(); // drop the audio captured while the answer played
+      setVoiceState("listening");
+      listenRef.current();
+    });
+  }, [lastAssistant, running, voiceMode, voiceState]);
+
+  useEffect(() => () => hangUp(), [hangUp]);
 
   /** A tool run appears in the transcript and under 轨迹 at the same time. */
   const beginCall = useCallback(
@@ -566,12 +670,22 @@ export function App() {
         onDetach={(name) => setAttachments((current) => current.filter((entry) => entry.name !== name))}
         plugins={plugins}
         pluginRoot={workspaces}
-        listening={listening}
+        listening={voiceMode}
         voiceSupported={voiceSupported}
-        onToggleVoice={toggleVoice}
+        onToggleVoice={() => (voiceMode ? hangUp() : void startCall())}
+        voiceMode={voiceMode}
+        voiceState={voiceState}
+        voiceLevel={() => level.current}
+        onEndVoice={hangUp}
       />
     </>
   );
+
+  const openProject = projects.find((project) => project.id === openProjectId);
+  const updateProject = (next: StudioProject) =>
+    setProjects((current) =>
+      current.map((project) => (project.id === next.id ? { ...next, updatedAt: Date.now() } : project)),
+    );
 
   return (
     <AppFrame
@@ -611,7 +725,38 @@ export function App() {
             }}
           />
         ) : mainView === "studio" ? (
-          <StudioPage project={project} onChange={setProject} composer={composerNode} />
+          openProject === undefined ? (
+            <StudioProjects
+              projects={[...projects].sort((a, b) => b.updatedAt - a.updatedAt).map(summarize)}
+              onCreate={() => {
+                const created = defaultProject();
+                setProjects((current) => [created, ...current]);
+                setOpenProjectId(created.id);
+                rememberOpenProject(created.id);
+              }}
+              onOpen={(id) => {
+                setOpenProjectId(id);
+                rememberOpenProject(id);
+              }}
+              onDelete={(id) => {
+                setProjects((current) => current.filter((project) => project.id !== id));
+                if (id === openProjectId) {
+                  setOpenProjectId(undefined);
+                  rememberOpenProject(null);
+                }
+              }}
+            />
+          ) : (
+            <StudioPage
+              project={openProject}
+              onChange={updateProject}
+              composer={composerNode}
+              onClose={() => {
+                setOpenProjectId(undefined);
+                rememberOpenProject(null);
+              }}
+            />
+          )
         ) : (
           <Conversation
             messages={session?.messages ?? []}

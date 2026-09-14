@@ -116,6 +116,9 @@ What was measured and matters:
 | `shadowroom.converter.paths` | `components/ConverterPanel.tsx` | Rekordbox database/dir and Serato database paths |
 | `shadowroom.model` | `App.tsx` | the model picked in the composer |
 | `shadowroom.studio.v1` | `lib/studio.ts` | the Studio project: tracks, clips, tempo, key, bars |
+| `shadowroom.studio.projects.v1` | `lib/studio.ts` | every Studio project |
+| `shadowroom.studio.open` | `lib/studio.ts` | which project was open last |
+| `shadowroom.view`, `shadowroom.workspace` | `App.tsx` | the page and workspace a reload should land on |
 
 ## Where things live in the UI
 
@@ -132,9 +135,14 @@ What was measured and matters:
   bar-ruled lane area. `BAR_PX` (56) is the bar width in both the TSX and the CSS grid, so keep the
   two in step. The playhead runs on `requestAnimationFrame` at the project tempo and loops at the
   bar count.
-- **Voice** (`lib/voice.ts`) — input uses `webkitSpeechRecognition` when it exists, output uses
-  `speechSynthesis`. A finished phrase is sent straight away and the answer is spoken back; where the
-  browser has neither, the microphone button is disabled and nothing else changes.
+- **Voice** (`lib/voice.ts`) — a *call*: `startCapture()` opens the microphone through Web Audio and
+  keeps the PCM (encoded to WAV in the browser, so the Python side needs no ffmpeg), while
+  `webkitSpeechRecognition` transcribes. Each finished phrase takes the WAV since the previous phrase,
+  uploads it to `POST /api/agent/audio` (the bridge writes it under `SHADOWROOM_RECORDINGS_DIR`,
+  default `~/Documents/ShadowRoom/recordings`) and sends the turn with that file attached as a
+  mention — that is how a hummed melody reaches the agent as audio. The answer is spoken with
+  `speechSynthesis`, and listening resumes when it ends. The analyser level drives the waveform the
+  composer turns into (`Composer` + `useVoiceBars`).
 
 There is deliberately **no conversation header**: no breadcrumbs, no status chips, no view tabs. The
 header row the conversation used to carry was removed on request; the dock states its own plugin and

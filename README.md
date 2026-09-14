@@ -42,11 +42,16 @@ plugin — it becomes a chip above the draft), pick the model on the right, pres
 chosen in the composer; they live on the **插件** page in the sidebar, and picking one opens its panel
 in the right dock. Each panel still runs jobs on its own:
 
-**Studio** (sidebar → Studio) is the multi-track page: a transport with BPM / key / bar count, a
-column of track headers (name, mute, solo, fader, meter) and a bar-ruled lane area where clips can be
-added by double-clicking a lane, dragged to move and deleted with Delete. The same composer sits
-underneath — with a **microphone** button: speak, the phrase sends itself, and the answer is read back
-(Chrome/Edge; the button is disabled where the browser has no speech recognition).
+**Studio** (sidebar → Studio) opens on a **project list** — 新建工程, or reopen the last one — and only
+then goes into the multi-track workbench: a transport with BPM / key / bar count, a column of track
+headers (name, mute, solo, fader, meter) and a bar-ruled lane area where clips can be added by
+double-clicking a lane, dragged to move and deleted with Delete.
+
+**Voice** — the microphone button in any page's composer starts a **call**, not a dictation: the
+composer turns into a live waveform, the call stays open, every finished phrase is sent with its own
+WAV recording attached (so humming a melody reaches the agent as audio, not just as text), the answer
+is spoken back, and listening resumes. Chrome/Edge only; the button is disabled where the browser has
+no speech recognition.
 
 | Panel | What it does |
 | --- | --- |
