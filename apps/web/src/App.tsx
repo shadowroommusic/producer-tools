@@ -809,25 +809,35 @@ export function App() {
   /** Bounce the arrangement through the generator plugin and record the call in the transcript. */
   const exportArrangement = useCallback(
     async (spec: Record<string, unknown>) => {
-      const id = `mix_arrangement-${Date.now()}`;
+      const { kind, ...payload } = spec as { kind?: "mix" | "stems" | "midi" };
+      const tool = kind === "stems" ? "export_stems" : kind === "midi" ? "export_midi" : "mix_arrangement";
+      const id = `${tool}-${Date.now()}`;
       beginCallRef.current({
         id,
         server: "shadow-music-generator",
-        name: "mix_arrangement",
+        name: tool,
         status: "running",
-        summary: `${spec.sample_rate as number} Hz · ${spec.bit_depth as number}-bit · ${spec.container as string}`,
-        detail: JSON.stringify(spec, null, 2),
+        summary:
+          kind === "midi"
+            ? "MIDI"
+            : kind === "stems"
+              ? `分轨 · ${spec.sample_rate as number} Hz`
+              : `${spec.container as string} · ${spec.sample_rate as number} Hz`,
+        detail: JSON.stringify(payload, null, 2),
       });
       try {
-        const raw = await callTool<string>("generator", "mix_arrangement", spec);
+        const raw = await callTool<string>("generator", tool, payload);
         const text = String(raw);
-        const parsed = JSON.parse(text) as { path?: string };
+        const parsed = JSON.parse(text) as { path?: string; out_dir?: string; stem_count?: number };
         endCallRef.current(id, {
           status: "ok",
-          summary: `${spec.container as string} · ${spec.sample_rate as number} Hz`,
+          summary:
+            kind === "stems"
+              ? `${parsed.stem_count ?? 0} 条分轨`
+              : (parsed.path ?? tool).split("/").pop() ?? tool,
           detail: text.slice(0, 4000),
         });
-        return parsed.path ?? null;
+        return parsed.path ?? parsed.out_dir ?? null;
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         endCallRef.current(id, { status: "error", summary: message, detail: message });

@@ -27,6 +27,14 @@ import {
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
 
+/** Where an export lands before the user edits the field. */
+function defaultExportPath(projectName: string, kind: "mix" | "stems" | "midi", container: string): string {
+  const base = projectName.trim().replace(/\s+/g, "-") || "song";
+  if (kind === "stems") return `~/Documents/ShadowRoom/exports/${base}-stems`;
+  if (kind === "midi") return `~/Documents/ShadowRoom/exports/${base}.mid`;
+  return `~/Documents/ShadowRoom/exports/${base}.${container === "aiff" ? "aiff" : "wav"}`;
+}
+
 export function StudioPage({
   project,
   onChange,
@@ -50,6 +58,7 @@ export function StudioPage({
   const [importPath, setImportPath] = useState("");
   const [importTo, setImportTo] = useState<string | undefined>(undefined);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportKind, setExportKind] = useState<"mix" | "stems" | "midi">("mix");
   const [sampleRate, setSampleRate] = useState(44100);
   const [bitDepth, setBitDepth] = useState(16);
   const [container, setContainer] = useState<"wav" | "aiff">("wav");
@@ -340,13 +349,7 @@ export function StudioPage({
           type="button"
           className="sr-btn sr-studio-export"
           onClick={() => {
-            setOutPath(
-              (current) =>
-                current ||
-                `~/Documents/ShadowRoom/exports/${project.name.replace(/\s+/g, "-")}.${
-                  container === "aiff" ? "aiff" : "wav"
-                }`,
-            );
+            setOutPath((current) => current || defaultExportPath(project.name, exportKind, container));
             setExportOpen((open) => !open);
           }}
         >
@@ -356,11 +359,28 @@ export function StudioPage({
 
       {exportOpen && (
         <div className="sr-studio-import-bar sr-studio-export-bar">
+          <span className="sr-field-label sr-mono">内容</span>
+          <select
+            className="sr-input sr-input--num"
+            value={exportKind}
+            aria-label="导出内容"
+            onChange={(event) => {
+              const next = event.target.value as "mix" | "stems" | "midi";
+              setExportKind(next);
+              setOutPath(defaultExportPath(project.name, next, container));
+              setExported(null);
+            }}
+          >
+            <option value="mix">整首</option>
+            <option value="stems">分轨</option>
+            <option value="midi">MIDI</option>
+          </select>
           <span className="sr-field-label sr-mono">采样率</span>
           <select
             className="sr-input sr-input--num"
             value={sampleRate}
             aria-label="采样率"
+            disabled={exportKind === "midi"}
             onChange={(event) => setSampleRate(Number(event.target.value))}
           >
             <option value={44100}>44.1 kHz</option>
@@ -372,6 +392,7 @@ export function StudioPage({
             className="sr-input sr-input--num"
             value={bitDepth}
             aria-label="位深"
+            disabled={exportKind === "midi"}
             onChange={(event) => setBitDepth(Number(event.target.value))}
           >
             <option value={16}>16-bit</option>
@@ -382,6 +403,7 @@ export function StudioPage({
             className="sr-input sr-input--num"
             value={container}
             aria-label="文件格式"
+            disabled={exportKind === "midi"}
             onChange={(event) => {
               const next = event.target.value as "wav" | "aiff";
               setContainer(next);
@@ -395,7 +417,7 @@ export function StudioPage({
             className="sr-input sr-export-path"
             value={outPath}
             spellCheck={false}
-            aria-label="输出路径"
+            aria-label={exportKind === "stems" ? "输出目录" : "输出路径"}
             placeholder="~/Documents/ShadowRoom/exports/song.wav"
             onChange={(event) => setOutPath(event.target.value)}
           />
@@ -408,18 +430,26 @@ export function StudioPage({
               setExporting(true);
               setExported(null);
               const written = await onExport({
-                out_path: outPath.trim(),
+                kind: exportKind,
+                ...(exportKind === "stems"
+                  ? { out_dir: outPath.trim(), name: project.name.replace(/\s+/g, "-") }
+                  : { out_path: outPath.trim() }),
                 bpm: project.bpm,
                 bars: project.bars,
-                sample_rate: sampleRate,
-                bit_depth: bitDepth,
-                container,
+                ...(exportKind === "midi"
+                  ? {}
+                  : { sample_rate: sampleRate, bit_depth: bitDepth, container }),
                 tracks: project.tracks.map((track) => ({
                   name: track.name,
                   gain: audible(track) ? track.volume / 100 : 0,
                   clips: track.clips
-                    .filter((clip) => isPlayable(clip.source))
-                    .map((clip) => ({ path: clip.source, start: clip.start, bars: clip.length })),
+                    .filter((clip) => exportKind === "midi" || isPlayable(clip.source))
+                    .map((clip) => ({
+                      path: clip.source,
+                      start: clip.start,
+                      bars: clip.length,
+                      ...(clip.notes === undefined ? {} : { notes: clip.notes }),
+                    })),
                 })),
               });
               setExported(written);
