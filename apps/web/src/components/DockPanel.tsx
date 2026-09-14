@@ -4,6 +4,7 @@
  * way DeepSeek Harness's right column hosts a single registered panel.
  */
 import { useState } from "react";
+import { AnalysisPanel } from "./AnalysisPanel";
 import { IconCollapse, IconExpand } from "./icons";
 import { SetPlannerPanel } from "./SetPlannerPanel";
 import type { PluginEntry } from "./Sidebar";
@@ -14,10 +15,6 @@ const PLACEHOLDER: Record<string, { body: string; bullets: string[] }> = {
   "rekordbox-serato-bridge": {
     body: "把 Rekordbox 的播放列表、cue / loop / 颜色转换到 Serato。",
     bullets: ["预览报告（dry-run）", "逐曲目对照", "颜色与 loop 映射"],
-  },
-  "audio-analysis-dedupe": {
-    body: "扫描资料库，分析音频并找出重复曲目。",
-    bullets: ["BPM / 调性 / 响度", "重复分组", "保留 / 复查标记"],
   },
   "shadow-music-generator": {
     body: "生成任务队列：提示词、歌词、参数和许可证备注。",
@@ -72,6 +69,13 @@ export function DockPanel({
       <div className="sr-dock-body sr-scroll">
         {plugin.repo === "set-planner" ? (
           <SetPlannerPanel
+            connected={plugin.connected}
+            tools={plugin.tools}
+            onBegin={onCallBegin}
+            onEnd={onCallEnd}
+          />
+        ) : plugin.repo === "audio-analysis-dedupe" ? (
+          <AnalysisPanel
             connected={plugin.connected}
             tools={plugin.tools}
             onBegin={onCallBegin}

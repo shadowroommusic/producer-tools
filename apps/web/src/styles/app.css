@@ -188,6 +188,11 @@
   color: var(--sr-warn);
 }
 
+/* Plugin notes (how the tool behaves) are information, not warnings. */
+.sr-alert[data-level="note"] {
+  color: var(--sr-label-secondary);
+}
+
 /* ---------- sidebar ---------- */
 
 .sr-sidebar {
@@ -688,6 +693,191 @@
   color: var(--sr-label-caption);
   font-size: 11px;
   letter-spacing: 0.02em;
+}
+
+/* Tool switcher inside a panel: segmented, hairline-separated (DSH's PermissionSelect chrome). */
+.sr-plugin-tabs {
+  display: inline-flex;
+  align-self: start;
+  overflow: hidden;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-md);
+}
+
+.sr-plugin-tab {
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-right: 0.5px solid var(--sr-border-l3);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  font-weight: 500;
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-plugin-tab:last-child {
+  border-right: none;
+}
+
+.sr-plugin-tab:hover {
+  color: var(--sr-label-primary);
+}
+
+.sr-plugin-tab[data-on] {
+  background: var(--sr-active);
+  color: var(--sr-label-primary);
+}
+
+.sr-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sr-field--inline {
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.sr-field-label {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sr-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-primary);
+  font-family: var(--sr-font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-input::placeholder {
+  color: var(--sr-label-caption);
+}
+
+.sr-input:focus {
+  border-color: var(--sr-accent);
+}
+
+.sr-input--num {
+  width: 84px;
+  text-align: right;
+}
+
+.sr-plugin-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.sr-toggle {
+  height: 30px;
+  padding: 0 12px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-toggle:hover {
+  color: var(--sr-label-primary);
+}
+
+.sr-toggle[data-on] {
+  border-color: transparent;
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
+  font-weight: 600;
+}
+
+.sr-plugin-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.sr-stat {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sr-stat-label {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sr-stat-value {
+  overflow: hidden;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-13);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-plugin-hash {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sr-candidate {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-md);
+}
+
+.sr-candidate-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sr-candidate-score {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-selector-fill);
+  color: var(--sr-label-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-candidate-title {
+  overflow: hidden;
+  font-size: var(--sr-text-13);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-candidate-paths {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
 }
 
 .sr-plugin-raw {
