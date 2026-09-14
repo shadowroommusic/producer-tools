@@ -13,15 +13,19 @@ import { Composer } from "./components/Composer";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
+import { PluginsPage } from "./components/PluginsPage";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import type { ToolCall } from "./components/ToolCallRow";
 import {
   answerApproval,
   fetchAgentHealth,
+  fetchModels,
   interruptTurn,
   sendTurn,
   toolCallFromItem,
+  type AgentModel,
   type AgentHealth,
+  type Mention,
 } from "./lib/agent";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import {
@@ -49,6 +53,7 @@ type Bridge = "connecting" | "online" | "offline";
 export function App() {
   const [servers, setServers] = useState<ServerInfo[]>([]);
   const [home, setHome] = useState("");
+  const [workspaces, setWorkspaces] = useState("");
   const [bridge, setBridge] = useState<Bridge>("connecting");
   const [workspace, setWorkspace] = useState<WorkspaceId>("workbench");
   const [activePlugin, setActivePlugin] = useState("set-planner");
@@ -61,6 +66,12 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [mainView, setMainView] = useState<"conversation" | "plugins">("conversation");
+  const [attachments, setAttachments] = useState<Mention[]>([]);
+  const [models, setModels] = useState<AgentModel[]>([]);
+  const [modelId, setModelId] = useState<string | undefined>(
+    () => window.localStorage.getItem("shadowroom.model") ?? undefined,
+  );
 
   const session = store.sessions.find((entry) => entry.id === store.activeId);
 
@@ -76,6 +87,7 @@ export function App() {
           if (cancelled) return;
           setServers(info.servers);
           setHome(info.home);
+          setWorkspaces(info.workspaces);
           setBridge("online");
         })
         .catch(() => {
@@ -88,6 +100,25 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
+  }, []);
+
+  // The model picker mirrors the core's own list; the choice sticks per browser.
+  useEffect(() => {
+    if (agent?.ok !== true) return;
+    let cancelled = false;
+    fetchModels()
+      .then((list) => {
+        if (!cancelled) setModels(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [agent?.ok]);
+
+  const chooseModel = useCallback((id: string) => {
+    setModelId(id);
+    window.localStorage.setItem("shadowroom.model", id);
   }, []);
 
   // The agent core is optional: without it the composer records requests instead of running them.
@@ -145,6 +176,8 @@ export function App() {
     setDraft("");
     const at = Date.now();
     const assistantId = `a-${at}`;
+    const mentions = attachments;
+    setAttachments([]);
 
     // The session id has to be known synchronously, so a hero submit creates the session first.
     const known = store.sessions.find((entry) => entry.id === store.activeId);
@@ -185,6 +218,9 @@ export function App() {
     const abort = new AbortController();
     setController(abort);
     setRunning(true);
+    const startedAt = Date.now();
+    /** Latest token usage seen for this turn, reported when it finishes. */
+    let usage: { totalTokens?: number } | undefined;
     /** The answer is created lazily: its position in the flow must follow the tool rows. */
     const appendDelta = (delta: string) => {
       setStore((current) =>
@@ -221,6 +257,40 @@ export function App() {
           return;
         }
         if (event.type === "item") {
+          if (event.item.type === "reasoning") {
+            const id = `r-${event.item.id}`;
+            const settled = event.phase === "completed";
+            const seeded = [event.item.summary?.join("\n"), event.item.content?.join("\n")]
+              .filter((part) => typeof part === "string" && part !== "")
+              .join("\n");
+            setStore((current) =>
+              patchSession(current, sessionId, (session) => {
+                const existing = session.messages.find((message) => message.id === id);
+                if (existing === undefined) {
+                  return {
+                    ...session,
+                    messages: [
+                      ...session.messages,
+                      { id, role: "reasoning", text: seeded, at: Date.now(), streaming: !settled },
+                    ],
+                  };
+                }
+                return {
+                  ...session,
+                  messages: session.messages.map((message) =>
+                    message.id === id && message.role === "reasoning"
+                      ? {
+                          ...message,
+                          text: message.text === "" && seeded !== "" ? seeded : message.text,
+                          streaming: !settled,
+                        }
+                      : message,
+                  ),
+                };
+              }),
+            );
+            return;
+          }
           const call = toolCallFromItem(event.item, event.phase);
           if (call === null) return;
           setStore((current) =>
@@ -237,6 +307,33 @@ export function App() {
               };
             }),
           );
+          return;
+        }
+        if (event.type === "reasoning") {
+          const id = `r-${event.itemId ?? "current"}`;
+          setStore((current) =>
+            patchSession(current, sessionId, (session) => {
+              const existing = session.messages.find((message) => message.id === id);
+              if (existing === undefined) {
+                return {
+                  ...session,
+                  messages: [...session.messages, { id, role: "reasoning", text: event.text, at: Date.now(), streaming: true }],
+                };
+              }
+              return {
+                ...session,
+                messages: session.messages.map((message) =>
+                  message.id === id && message.role === "reasoning"
+                    ? { ...message, text: message.text + event.text }
+                    : message,
+                ),
+              };
+            }),
+          );
+          return;
+        }
+        if (event.type === "usage") {
+          usage = event.usage?.last ?? event.usage?.total ?? usage;
           return;
         }
         if (event.type === "error") {
@@ -265,6 +362,10 @@ export function App() {
         }
       },
       abort.signal,
+      {
+        model: modelId,
+        mentions,
+      },
     )
       .catch((error: unknown) => {
         if (abort.signal.aborted) return;
@@ -279,8 +380,29 @@ export function App() {
           })),
         );
       })
-      .finally(finishAssistant);
-  }, [agent, draft, patchSession, running, store.activeId, store.sessions]);
+      .finally(() => {
+        finishAssistant();
+        const elapsedMs = Date.now() - startedAt;
+        const tokens = usage?.totalTokens;
+        if (tokens !== undefined) {
+          const at_ = Date.now();
+          setStore((current) =>
+            patchSession(current, sessionId, (session) => ({
+              ...session,
+              messages: [
+                ...session.messages,
+                {
+                  id: `u-${at_}`,
+                  role: "usage",
+                  text: `${tokens.toLocaleString("en-US")} tokens · ${Math.round(elapsedMs / 1000)}s`,
+                  at: at_,
+                },
+              ],
+            })),
+          );
+        }
+      });
+  }, [agent, attachments, draft, modelId, patchSession, running, store.activeId, store.sessions]);
 
   const stop = useCallback(() => {
     if (store.activeId === undefined) return;
@@ -377,23 +499,37 @@ export function App() {
           toggleSidebar={toggleSidebar}
           plugins={plugins}
           activeWorkspace={workspace}
-          activePlugin={active?.repo}
-          onSelectWorkspace={setWorkspace}
-          onSelectPlugin={(repo) => {
-            setActivePlugin(repo);
-            setDockOpen(true);
+          showPlugins={mainView === "plugins"}
+          onSelectWorkspace={(next) => {
+            setWorkspace(next);
+            setMainView("conversation");
           }}
+          onShowPlugins={() => setMainView("plugins")}
           sessions={summaries}
           activeSessionId={store.activeId}
           onSelectSession={(id) => {
             setStore((current) => ({ ...current, activeId: id }));
             setView("chat");
+            setMainView("conversation");
           }}
-          onNewSession={startSession}
+          onNewSession={() => {
+            startSession();
+            setMainView("conversation");
+          }}
         />
       )}
       main={
-        <Conversation
+        mainView === "plugins" ? (
+          <PluginsPage
+            plugins={plugins}
+            activePlugin={active?.repo}
+            onOpenPlugin={(repo) => {
+              setActivePlugin(repo);
+              setDockOpen(true);
+            }}
+          />
+        ) : (
+          <Conversation
           crumb={workspaceLabel(workspace)}
           title={session === undefined || session.messages.length === 0 ? "新会话" : session.title}
           view={view}
@@ -446,12 +582,23 @@ export function App() {
                 busy={running}
                 mode={mode}
                 onModeChange={setMode}
-                plugin={active}
-                onPluginClick={() => setDockOpen(true)}
+                models={models}
+                modelId={modelId}
+                onModelSelect={chooseModel}
+                attachments={attachments}
+                onAttach={(mention) =>
+                  setAttachments((current) =>
+                    current.some((entry) => entry.name === mention.name) ? current : [...current, mention],
+                  )
+                }
+                onDetach={(name) => setAttachments((current) => current.filter((entry) => entry.name !== name))}
+                plugins={plugins}
+                pluginRoot={workspaces}
               />
             </>
           }
-        />
+          />
+        )
       }
       dock={
         selected === undefined ? null : (

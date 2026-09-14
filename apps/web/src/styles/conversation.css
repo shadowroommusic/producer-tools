@@ -471,6 +471,132 @@
 
 /* ---------- tool calls ---------- */
 
+/* Think row: 24px collapsed, one-line summary, sweep while it is still streaming. */
+.sr-think {
+  display: flex;
+  flex-direction: column;
+}
+
+.sr-think:not([data-expanded]) {
+  height: 24px;
+}
+
+.sr-think-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  width: 100%;
+  min-height: 24px;
+  padding: 0 2px;
+  border: none;
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  text-align: left;
+}
+
+.sr-think-row:hover {
+  background: var(--sr-hover);
+}
+
+.sr-think[data-state="running"] .sr-think-row::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 300px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--sr-bg-base) 60%, transparent) 55%,
+    transparent 100%
+  );
+  animation: sr-think-sweep 2.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes sr-think-sweep {
+  0% {
+    left: -300px;
+  }
+  90%,
+  100% {
+    left: 100%;
+  }
+}
+
+.sr-think-chevron,
+.sr-think-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--sr-label-tertiary);
+}
+
+.sr-think-title {
+  flex: none;
+  color: var(--sr-label-primary);
+}
+
+.sr-think-sep {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+  border-radius: 1px;
+  background: var(--sr-label-caption);
+}
+
+.sr-think-summary {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sr-label-tertiary);
+  font-size: var(--sr-text-13);
+  white-space: nowrap;
+}
+
+.sr-think-summary[data-follow-end] {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sr-think-summary-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sr-think-summary[data-follow-end] .sr-think-summary-text {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: 100%;
+  overflow: visible;
+  text-align: start;
+  text-overflow: clip;
+}
+
+.sr-think-body {
+  padding: 4px 0 4px 22px;
+  color: var(--sr-label-tertiary);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-13);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Turn accounting: one dim mono line at the end of a finished turn. */
+.sr-usage {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .sr-call {
   border-radius: var(--sr-radius-sm);
 }
@@ -548,6 +674,114 @@
 }
 
 /* ---------- composer ---------- */
+
+/* Attached context: chips above the draft, under the card's top pad. */
+.sr-composer-accessory {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+
+.sr-ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-primary);
+  font-size: 12.5px;
+}
+
+.sr-ctx-chip svg {
+  color: var(--sr-label-tertiary);
+}
+
+.sr-ctx-name {
+  font-size: 11.5px;
+}
+
+.sr-ctx-remove {
+  padding: 0 2px;
+  border: none;
+  border-radius: var(--sr-radius-xs);
+  background: none;
+  color: var(--sr-label-caption);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sr-ctx-remove:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+/* Popover menus (attach / model): anchored above the card, DSH's floating surface. */
+.sr-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 8px;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  width: min(320px, 100% - 16px);
+  padding: 8px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-floating-fill);
+  box-shadow: var(--sr-shadow-panel);
+}
+
+.sr-menu--right {
+  right: 8px;
+  left: auto;
+}
+
+.sr-menu-title {
+  margin: 4px 6px 2px;
+  color: var(--sr-label-caption);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sr-menu-item {
+  display: grid;
+  gap: 1px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: var(--sr-label-primary);
+  text-align: left;
+}
+
+.sr-menu-item:hover {
+  background: var(--sr-hover);
+}
+
+.sr-menu-item[data-on] {
+  background: var(--sr-active);
+}
+
+.sr-menu-label {
+  font-size: var(--sr-text-13);
+}
+
+.sr-menu-hint {
+  overflow: hidden;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+}
+
+.sr-menu-input {
+  margin-bottom: 4px;
+}
 
 .sr-composer-seat {
   position: sticky;

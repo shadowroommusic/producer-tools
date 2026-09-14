@@ -153,3 +153,11 @@ export const IconSpinner = (props: IconProps) => (
     <path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5" />
   </Glyph>
 );
+
+/** Reasoning glyph: a small "spark" the Think row leads with. */
+export const IconThink = (props: IconProps) => (
+  <Glyph {...props}>
+    <path d="M8 2.8 9.4 6l3.3 1.4-3.3 1.4L8 12l-1.4-3.2L3.3 7.4 6.6 6 8 2.8Z" />
+    <path d="M12.4 11.2 13 12.7l1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" />
+  </Glyph>
+);

@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { BrandMark } from "./BrandMark";
 import { IconDock } from "./icons";
 import { NoticeRow } from "./NoticeRow";
+import { ReasoningRow } from "./ReasoningRow";
 import { ToolCallRow, type ToolCall } from "./ToolCallRow";
 import type { ChatMessage } from "../lib/sessions";
 
@@ -311,6 +312,18 @@ export function Conversation({
                 }
                 if (message.role === "notice") {
                   return <NoticeRow key={message.id} title={message.title} text={message.text} />;
+                }
+                if (message.role === "reasoning") {
+                  return (
+                    <ReasoningRow key={message.id} text={message.text} running={message.streaming === true} />
+                  );
+                }
+                if (message.role === "usage") {
+                  return (
+                    <p key={message.id} className="sr-usage sr-mono">
+                      {message.text}
+                    </p>
+                  );
                 }
                 const call = calls.find((entry) => entry.id === message.callId);
                 return call === undefined ? null : <ToolCallRow key={message.id} call={call} />;

@@ -16,15 +16,35 @@ export type AgentHealth = {
   error?: string;
 };
 
+/** One entry of the core's model picker. */
+export type AgentModel = {
+  id: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts: Array<{ effort: string; description: string }>;
+};
+
+/** A plugin (or skill) reference attached to the next message. */
+export type Mention = { name: string; path: string; label: string };
+
 /** One streamed event from a running turn. */
 export type AgentEvent =
   | { type: "turn"; threadId: string; turnId: string }
   | { type: "delta"; text: string }
-  | { type: "reasoning"; text: string }
+  | { type: "reasoning"; itemId?: string; text: string }
   | { type: "item"; phase: string; item: AgentItem }
+  | { type: "usage"; turnId?: string; usage: TokenUsage }
   | { type: "approval"; approvalId: string; sessionId?: string; kind: string; title: string; detail?: string }
   | { type: "done"; turn?: unknown }
   | { type: "error"; message: string };
+
+/** Token accounting for one turn (`thread/tokenUsage/updated`). */
+export type TokenUsage = {
+  total?: { totalTokens?: number; inputTokens?: number; outputTokens?: number };
+  last?: { totalTokens?: number; inputTokens?: number; outputTokens?: number };
+};
 
 /** A decision the core is waiting for. */
 export type ApprovalDecision = "allow" | "allow_session" | "deny";
@@ -43,12 +63,22 @@ export type AgentItem = {
   command?: string | string[];
   aggregatedOutput?: string | null;
   text?: string;
+  /** reasoning items carry both the model's summary and its full content */
+  summary?: string[];
+  content?: string[];
 };
 
 export async function fetchAgentHealth(): Promise<AgentHealth> {
   const response = await fetch("/api/agent/health");
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return (await response.json()) as AgentHealth;
+}
+
+export async function fetchModels(): Promise<AgentModel[]> {
+  const response = await fetch("/api/agent/models");
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  const data = (await response.json()) as { models: AgentModel[] };
+  return data.models;
 }
 
 /** Ask the running turn to stop. */
@@ -80,11 +110,20 @@ export async function sendTurn(
   text: string,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
+  options: { model?: string; effort?: string; mentions?: Mention[] } = {},
 ): Promise<void> {
   const response = await fetch("/api/agent/send", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId, text }),
+    body: JSON.stringify({
+      sessionId,
+      text,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.effort === undefined ? {} : { effort: options.effort }),
+      ...(options.mentions === undefined || options.mentions.length === 0
+        ? {}
+        : { mentions: options.mentions.map(({ name, path }) => ({ name, path })) }),
+    }),
     signal,
   });
   if (!response.ok || response.body === null) {

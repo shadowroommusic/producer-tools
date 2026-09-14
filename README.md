@@ -33,8 +33,14 @@ pnpm dev          # the web UI on http://localhost:5173 (proxies /api and /api/a
 
 With both bridges running the composer runs a real agent turn: the message goes to the Codex core,
 the answer streams into the transcript, and every tool the agent calls appears as a row right where
-it happened (the same rows listed under **轨迹**). The four plugins are injected into each thread, so
-the agent drives the tools the panels also call by hand. Each panel still runs jobs on its own:
+it happened (the same rows listed under **轨迹**), next to the model's folded 思考 rows and a
+per-turn token/time line. The four plugins are injected into each thread, so the agent drives the
+tools the panels also call by hand.
+
+The composer is the generic agent shape: attach context from **+** (a file or folder path, or a
+plugin — it becomes a chip above the draft), pick the model on the right, press Enter. Plugins are not
+chosen in the composer; they live on the **插件** page in the sidebar, and picking one opens its panel
+in the right dock. Each panel still runs jobs on its own:
 
 | Panel | What it does |
 | --- | --- |

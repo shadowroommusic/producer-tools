@@ -8,6 +8,8 @@ import type { ToolCall } from "../components/ToolCallRow";
 export type ChatMessage =
   | { id: string; role: "user"; text: string; at: number }
   | { id: string; role: "assistant"; text: string; at: number; streaming?: boolean }
+  | { id: string; role: "reasoning"; text: string; at: number; streaming?: boolean }
+  | { id: string; role: "usage"; text: string; at: number }
   | { id: string; role: "notice"; title: string; text: string; at: number }
   | { id: string; role: "tool"; callId: string; at: number };
 

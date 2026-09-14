@@ -647,6 +647,152 @@
 
 /* ---------- plugin panes ---------- */
 
+/* ---------- pages (centre column occupants other than the conversation) ---------- */
+
+.sr-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--sr-bg-base);
+}
+
+.sr-page-header {
+  display: grid;
+  gap: 10px;
+  padding: 28px 32px 18px;
+  border-bottom: var(--sr-shell-border);
+}
+
+.sr-page-title {
+  margin: 0;
+  font-size: var(--sr-text-26);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sr-page-sub {
+  margin: 0;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-14);
+}
+
+.sr-page-search {
+  max-width: 560px;
+  height: 40px;
+  font-family: var(--sr-font-sans);
+  font-size: var(--sr-text-14);
+}
+
+.sr-page-body {
+  display: grid;
+  flex: 1;
+  gap: 28px;
+  align-content: start;
+  min-height: 0;
+  padding: 22px 32px 32px;
+}
+
+.sr-page-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sr-page-section-title {
+  margin: 0;
+  font-size: var(--sr-text-18);
+  font-weight: 600;
+}
+
+.sr-page-section-meta {
+  color: var(--sr-label-caption);
+  font-size: 11px;
+}
+
+.sr-page-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+}
+
+.sr-plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.sr-plugin-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-lg);
+  background: var(--sr-surface);
+  color: var(--sr-label-primary);
+  text-align: left;
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), border-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-plugin-card:hover {
+  border-color: var(--sr-border-strong);
+  background: var(--sr-surface-2);
+}
+
+.sr-plugin-card[data-active] {
+  border-color: color-mix(in srgb, var(--sr-accent) 55%, transparent);
+}
+
+.sr-plugin-card-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-selector-fill);
+  color: var(--sr-label-primary);
+}
+
+.sr-plugin-card-body {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-plugin-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--sr-text-14);
+  font-weight: 600;
+}
+
+.sr-plugin-card-repo {
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+}
+
+.sr-plugin-card-tools {
+  color: var(--sr-label-caption);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.sr-plugin-card-action {
+  align-self: center;
+  color: var(--sr-label-tertiary);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 .sr-plugin-pane {
   display: grid;
   gap: var(--sr-space-3);

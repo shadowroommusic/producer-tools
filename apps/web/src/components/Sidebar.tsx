@@ -72,9 +72,9 @@ export function Sidebar({
   toggleSidebar,
   plugins,
   activeWorkspace,
-  activePlugin,
+  showPlugins,
   onSelectWorkspace,
-  onSelectPlugin,
+  onShowPlugins,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -84,9 +84,9 @@ export function Sidebar({
   toggleSidebar: () => void;
   plugins: PluginEntry[];
   activeWorkspace: WorkspaceId;
-  activePlugin?: string;
+  showPlugins: boolean;
   onSelectWorkspace: (workspace: WorkspaceId) => void;
-  onSelectPlugin: (plugin: string) => void;
+  onShowPlugins: () => void;
   sessions: SessionSummary[];
   activeSessionId?: string;
   onSelectSession: (id: string) => void;
@@ -165,39 +165,32 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="sr-plugin-list">
-        {!collapsed && <p className="sr-region-title sr-mono">插件</p>}
-        {plugins.map((plugin) => {
-          const active = plugin.id === activePlugin;
-          return (
-            <button
-              key={plugin.id}
-              type="button"
-              className="sr-plugin-row"
-              data-active={active || undefined}
-              aria-current={active ? "page" : undefined}
-              title={collapsed ? plugin.label : plugin.repo}
-              onClick={() => onSelectPlugin(plugin.repo)}
-            >
-              <span className="sr-panel-glyph">
-                <IconPlugin size={collapsed ? 18 : 16} />
+      {/* Plugins are a page, not a permanent list: one entry, the way Codex's sidebar has it. */}
+      <nav className="sr-panel-list" aria-label="插件">
+        <button
+          type="button"
+          className="sr-panel-row"
+          data-active={showPlugins || undefined}
+          aria-current={showPlugins ? "page" : undefined}
+          title={collapsed ? "插件" : undefined}
+          onClick={onShowPlugins}
+        >
+          <span className="sr-panel-glyph">
+            <IconPlugin size={collapsed ? 18 : 16} />
+          </span>
+          {!collapsed && (
+            <>
+              <span className="sr-panel-title">插件</span>
+              <span className="sr-panel-soon sr-mono">
+                {plugins.filter((plugin) => plugin.connected).length}/{plugins.length}
               </span>
-              {!collapsed && (
-                <>
-                  <span className="sr-plugin-body">
-                    <span className="sr-plugin-label">{plugin.label}</span>
-                    <span className="sr-plugin-repo sr-mono">{plugin.repo}</span>
-                  </span>
-                  <span className="sr-dot" data-state={plugin.connected ? "live" : "idle"} />
-                </>
-              )}
-            </button>
-          );
-        })}
-      </div>
+            </>
+          )}
+        </button>
+      </nav>
 
       <div className="sr-sidebar-region">
-        {!collapsed && <p className="sr-region-title sr-mono">会话</p>}
+        {!collapsed && <p className="sr-region-title sr-mono">对话</p>}
         <div className="sr-region-scroll sr-scroll">
           {sessions.map((session) => (
             <button

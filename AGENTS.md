@@ -93,6 +93,13 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   and a home-directory write raises the prompt. The MCP plugins keep
   `default_tools_approval_mode: "approve"`.
 
+- **2026-09-14 — the new-session screen is a generic agent, not a plugin picker.** Codex and DSH
+  both put the model in the composer and keep plugins on a page: our sidebar is workspaces + a
+  插件 entry + **对话** (the sessions), the composer's **+** attaches a file/folder path or a
+  plugin (as a context chip and a `mention` input item), the chip on the right is the **model
+  picker**, and the plugins page lists the installed cards. Reasoning is folded into 思考 rows and
+  every turn ends with a `tokens · seconds` line.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

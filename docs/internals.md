@@ -101,6 +101,11 @@ What was measured and matters:
   unattended (both are writable), while writing to the home directory raises the approval.
 - **Binary.** `SHADOWROOM_CODEX` points at the codex binary; the default is the one shipped inside
   the Codex desktop app (`/Applications/ChatGPT.app/Contents/Resources/codex`).
+- **Lazy boot.** The child is spawned on first use, so `GET /api/agent/health` *is* the boot: it awaits
+  the handshake and only then reports `ok`. (Before that it answered `ok: false` for a healthy bridge
+  and the UI took the no-core path — measured, then fixed.)
+- **Models.** `GET /api/agent/models` proxies `model/list` (cached) so the composer's picker is the
+  core's own list; the chosen model and reasoning effort travel with `turn/start`.
 
 ## Browser storage keys
 
@@ -109,6 +114,19 @@ What was measured and matters:
 | `shadowroom.sessions.v1` | `lib/sessions.ts` | every session: title, messages, tool calls, active id |
 | `shadowroom.chat.width` | `components/Conversation.tsx` | dragged transcript width in px (absent = adaptive clamp) |
 | `shadowroom.converter.paths` | `components/ConverterPanel.tsx` | Rekordbox database/dir and Serato database paths |
+| `shadowroom.model` | `App.tsx` | the model picked in the composer |
+
+## Where things live in the UI
+
+- **Sidebar** — workspaces (工作台 / 曲目库 / Studio / DJ / 设置), one **插件** entry that opens the
+  plugins page, then **对话**: the sessions. Plugins are deliberately not a permanent sidebar list.
+- **Composer** — the generic agent shape: an attach menu (**+**) for a file/folder path or a plugin
+  (which becomes a context chip and a `mention` input item), mode chips, a **model picker** on the
+  right, and the send/stop circle. No plugin picker here.
+- **Transcript** — user bubbles, streamed answers, folded 思考 rows (`ReasoningRow`, DSH's geometry),
+  tool rows in the order they happened, notice rows, and a per-turn `tokens · seconds` line.
+- **Pages** — the plugins page (`PluginsPage`) is the centre column's other occupant; picking a card
+  selects that plugin and opens its panel in the dock.
 
 ## Transcript width handles
 

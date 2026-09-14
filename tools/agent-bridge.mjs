@@ -78,6 +78,7 @@ class Agent {
     this.info = { model: undefined, userAgent: undefined };
     this.approvals = new Map(); // bridge approval id → the app-server request waiting for a decision
     this.nextApprovalId = 1;
+    this.models = null; // cached `model/list`
   }
 
   get connected() {
@@ -280,7 +281,7 @@ class Agent {
    * Start a turn and stream its events to `onEvent` until the turn ends.
    * @returns the Codex turn id.
    */
-  async send(sessionId, text, onEvent) {
+  async send(sessionId, text, onEvent, options = {}) {
     const threadId = await this.threadFor(sessionId);
     const listener = (message) => {
       const { method, params } = message;
@@ -289,7 +290,7 @@ class Agent {
         return;
       }
       if (method === "item/reasoning/textDelta" || method === "item/reasoning/summaryTextDelta") {
-        onEvent({ type: "reasoning", text: params.delta });
+        onEvent({ type: "reasoning", itemId: params.itemId, text: params.delta });
         return;
       }
       if (method === "item/started" || method === "item/completed" || method === "item/updated") {
@@ -298,6 +299,10 @@ class Agent {
       }
       if (method === "turn/completed") {
         onEvent({ type: "done", turn: params.turn });
+        return;
+      }
+      if (method === "thread/tokenUsage/updated") {
+        onEvent({ type: "usage", turnId: params.turnId, usage: params.tokenUsage });
         return;
       }
       if (method === "error") {
@@ -320,7 +325,9 @@ class Agent {
     try {
       const started = await this.request("turn/start", {
         threadId,
-        input: [{ type: "text", text, text_elements: [] }],
+        input: [{ type: "text", text, text_elements: [] }, ...(options.input ?? [])],
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.effort === undefined ? {} : { effort: options.effort }),
       });
       const turnId = started?.turn?.id;
       // The turn runs asynchronously; the SSE stream stays open until turn/completed arrives.
@@ -377,8 +384,16 @@ const http = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? HOST}`);
   try {
     if (request.method === "GET" && url.pathname === "/api/agent/health") {
+      // Booting is lazy, so the health check is what actually starts the core the first time: the UI
+      // asks "can you run a turn?" and the answer has to be yes even before any thread exists.
+      let bootError;
+      try {
+        await agent.start();
+      } catch (error) {
+        bootError = error instanceof Error ? error.message : String(error);
+      }
       json(response, 200, {
-        ok: agent.connected,
+        ok: agent.connected && bootError === undefined,
         threads: agent.threads.size,
         model: agent.info.model,
         userAgent: agent.info.userAgent,
@@ -387,8 +402,28 @@ const http = createServer(async (request, response) => {
         approval: APPROVAL,
         pendingApprovals: agent.approvals.size,
         plugins: Object.keys(mcpServers()),
-        error: agent.connected ? undefined : agent.stderr.join("").slice(-400) || undefined,
+        error: bootError ?? (agent.connected ? undefined : agent.stderr.join("").slice(-400) || undefined),
       });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent/models") {
+      await agent.start();
+      if (agent.models === null) {
+        const listed = await agent.request("model/list", {});
+        agent.models = (listed?.data ?? []).map((model) => ({
+          id: model.model ?? model.id,
+          displayName: model.displayName ?? model.model ?? model.id,
+          description: model.description ?? "",
+          isDefault: model.isDefault === true,
+          defaultReasoningEffort: model.defaultReasoningEffort,
+          supportedReasoningEfforts: (model.supportedReasoningEfforts ?? []).map((option) => ({
+            effort: option.reasoningEffort,
+            description: option.description,
+          })),
+        }));
+      }
+      json(response, 200, { models: agent.models });
       return;
     }
 
@@ -435,10 +470,23 @@ const http = createServer(async (request, response) => {
       }, Number(process.env.SHADOWROOM_AGENT_TURN_TIMEOUT_MS ?? 900_000));
 
       try {
-        handle = await agent.send(sessionId, text, (event) => {
-          emit(event);
-          if (event.type === "done" || event.type === "error") finish();
-        });
+        handle = await agent.send(
+          sessionId,
+          text,
+          (event) => {
+            emit(event);
+            if (event.type === "done" || event.type === "error") finish();
+          },
+          {
+            model: typeof body.model === "string" && body.model !== "" ? body.model : undefined,
+            effort: typeof body.effort === "string" && body.effort !== "" ? body.effort : undefined,
+            input: Array.isArray(body.mentions)
+              ? body.mentions
+                  .filter((mention) => typeof mention?.name === "string" && typeof mention?.path === "string")
+                  .map((mention) => ({ type: "mention", name: mention.name, path: mention.path }))
+              : [],
+          },
+        );
       } catch (error) {
         emit({ type: "error", message: error instanceof Error ? error.message : String(error) });
         finish();
