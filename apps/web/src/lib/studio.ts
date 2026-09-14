@@ -21,6 +21,14 @@ export type StudioClip = {
 
 export type StudioNote = { start_ms: number; end_ms: number; midi: number; name?: string };
 
+/**
+ * One named stretch of the song (`intro` / `drop` / …), as the arrangement tool reported it.
+ *
+ * It is what turns the ruler from "N bars" into "a song": the studio draws the boundaries and the
+ * names, so a render the agent arranged from a sentence looks arranged.
+ */
+export type StudioSection = { name: string; bars: number; start: number };
+
 /** Bars per second at 4/4 — the bridge between wall-clock audio and the bar grid. */
 export function barsPerSecond(bpm: number): number {
   return bpm / 4 / 60;
@@ -55,6 +63,8 @@ export type StudioProject = {
   key: string;
   bars: number;
   tracks: StudioTrack[];
+  /** Set when the last arrangement render said what the song's shape is. */
+  sections?: StudioSection[];
 };
 
 const STORAGE_KEY = "shadowroom.studio.projects.v1";
@@ -95,11 +105,12 @@ export function defaultProject(): StudioProject {
     bpm: 128,
     key: "8A",
     bars: 16,
-    tracks: [
-      { ...newTrack("鼓"), clips: [newClip("鼓组", 0, 8)] },
-      { ...newTrack("贝斯"), clips: [newClip("Bassline", 4, 8)] },
-      newTrack("合成器"),
-    ],
+    /**
+     * Named tracks, no clips. The project used to open with two demo clips that had no audio behind
+     * them — a timeline that looked like a song and played nothing. A project now starts empty: the
+     * song arrives from a render (one sentence) or from an import.
+     */
+    tracks: [newTrack("鼓"), newTrack("贝斯"), newTrack("合成器")],
   };
 }
 

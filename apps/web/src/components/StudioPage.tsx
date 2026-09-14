@@ -679,7 +679,32 @@ export function StudioPage({
         </div>
 
         <div className="sr-studio-timeline sr-scroll">
-          <div className="sr-studio-grid" style={{ width: project.bars * barPx }}>
+          <div
+            className="sr-studio-grid"
+            data-sections={project.sections !== undefined && project.sections.length > 0 ? true : undefined}
+            style={{ width: project.bars * barPx }}
+          >
+            {/* The song's shape, when the last render named it: intro / drop / break / drop 2 … */}
+            {project.sections !== undefined && project.sections.length > 0 && (
+              <div className="sr-studio-sections">
+                {project.sections.map((section, index) => (
+                  <button
+                    key={`${section.name}-${index}`}
+                    type="button"
+                    className="sr-studio-section"
+                    style={{
+                      left: section.start * barPx,
+                      width: Math.max(barPx, section.bars * barPx) - 1,
+                    }}
+                    title={`${section.name} · ${section.bars} 小节 · 点一下跳到段落开头`}
+                    onClick={() => seek(section.start)}
+                  >
+                    <span className="sr-studio-section-name">{section.name}</span>
+                    <span className="sr-studio-section-bars sr-mono">{section.bars}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div
               className="sr-studio-ruler"
               onPointerDown={(event) => {
@@ -693,6 +718,14 @@ export function StudioPage({
                 </span>
               ))}
             </div>
+            {project.sections?.slice(1).map((section, index) => (
+              <div
+                key={`line-${section.name}-${index}`}
+                className="sr-studio-section-line"
+                style={{ left: section.start * barPx }}
+                aria-hidden="true"
+              />
+            ))}
             {project.tracks.map((track) => (
               <div
                 key={track.id}

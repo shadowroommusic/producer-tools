@@ -1084,6 +1084,55 @@
   border-bottom: var(--sr-shell-border);
 }
 
+/* The song's shape: one block per section, sitting on top of the bar ruler. */
+.sr-studio-sections {
+  position: relative;
+  height: 26px;
+  border-bottom: var(--sr-shell-border);
+}
+
+.sr-studio-section {
+  position: absolute;
+  top: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 20px;
+  padding: 0 8px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface);
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sr-studio-section:hover {
+  border-color: var(--sr-border-strong);
+  color: var(--sr-label-primary);
+}
+
+.sr-studio-section-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sr-studio-section-bars {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+.sr-studio-section-line {
+  position: absolute;
+  top: 26px;
+  bottom: 0;
+  width: 1px;
+  background: var(--sr-border-l2);
+  pointer-events: none;
+}
+
 .sr-studio-bar {
   display: flex;
   flex: none;
@@ -1231,6 +1280,11 @@
   width: 2px;
   background: var(--sr-accent);
   pointer-events: none;
+}
+
+/* With the section strip on top, the ruler — and so the playhead — starts lower. */
+.sr-studio-grid[data-sections] .sr-playhead {
+  top: 54px;
 }
 
 .sr-studio-composer {

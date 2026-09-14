@@ -841,6 +841,7 @@ export function App() {
           bpm?: number;
           bars?: number;
           parts?: Array<{ part?: string; path?: string; duration_ms?: number }>;
+          sections?: Array<{ name?: string; bars?: number; start_bar?: number }>;
           midi_path?: string;
           notes?: Array<{ start_ms: number; end_ms: number; midi: number; name?: string }>;
         };
@@ -887,12 +888,60 @@ export function App() {
                           clip,
                         ],
                       }
+                      : track,
+                );
+              }
+              /**
+               * A render can hand back the same arrangement as MIDI (the plan that was played). It
+               * lands on its own track so it can be seen and exported through the export dialog —
+               * the studio's MIDI export reads clips that point at a `.mid`, notes or not.
+               */
+              if (typeof parsed.midi_path === "string" && parsed.midi_path !== "") {
+                const songBars = Math.max(1, Math.round(typeof parsed.bars === "number" ? parsed.bars : 4));
+                const name = "MIDI";
+                let index = next.findIndex((track) => track.name === name);
+                if (index === -1) {
+                  next = [...next, newTrack(name)];
+                  index = next.length - 1;
+                }
+                const clip = newClip(
+                  (parsed.midi_path.split("/").pop() ?? "song.mid").replace(/\.mid$/i, ""),
+                  0,
+                  songBars,
+                  parsed.midi_path,
+                );
+                next = next.map((track, position) =>
+                  position === index
+                    ? { ...track, clips: [...track.clips.filter((existing) => existing.source !== parsed.midi_path), clip] }
                     : track,
                 );
               }
               return next;
             })();
-            return { ...project, bpm, tracks, updatedAt: Date.now() };
+            /**
+             * An arrangement render says what the song's shape is; keep it so the ruler shows the
+             * sections the agent wrote instead of a bare row of bars. A plain loop render carries no
+             * sections, and leaves whatever was there alone.
+             */
+            const sections = (parsed.sections ?? [])
+              .filter((entry) => typeof entry.bars === "number" && entry.bars > 0)
+              .map((entry, index) => ({
+                name: entry.name ?? `section ${index + 1}`,
+                bars: Number(entry.bars),
+                start: Number(entry.start_bar ?? 0),
+              }));
+            return {
+              ...project,
+              bpm,
+              tracks,
+              // A song longer than the project's grid widens the grid: the clips are the truth.
+              bars:
+                typeof parsed.bars === "number" && parsed.bars > 0
+                  ? Math.max(project.bars, Math.ceil(parsed.bars))
+                  : project.bars,
+              ...(sections.length > 0 ? { sections } : {}),
+              updatedAt: Date.now(),
+            };
           }),
         );
       } catch {

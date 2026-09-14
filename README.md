@@ -45,7 +45,8 @@ as a page in the middle column, next to the conversation. Each panel still runs 
 **Studio** (sidebar → Studio) opens on a **project list** — 新建工程, or reopen the last one — and only
 then goes into the multi-track workbench: a transport with BPM / key / bar count, a column of track
 headers (name, mute, solo, fader, meter) and a bar-ruled lane area where clips can be added by
-double-clicking a lane, dragged to move and deleted with Delete.
+double-clicking a lane, dragged to move and deleted with Delete. A new project starts empty — named
+tracks, no clips — so what is on the timeline is always something you or the agent actually made.
 
 It **plays**: 导入音频 drops a file from disk onto a track (its length comes from the file's real
 duration), the transport streams it through the local bridge, clips start and stop as the playhead
@@ -60,6 +61,13 @@ because MP3/AAC need an encoder this project does not depend on.
 
 All of it is reachable from a sentence as well as from the buttons — ask for a song, a stem export and
 a MIDI file in one message and the agent calls `render_song`, `export_stems` and `export_midi` itself.
+
+**Songs, not loops.** *"A 32-bar tech house: intro 8, drop 16, outro 8"* arrives as an arrangement:
+the synth renders each part per section (`segments`), the studio draws the song's shape as named
+sections above the ruler with boundaries through the lanes, and the clips land one per part for the
+whole song. Ask for the MIDI in the same sentence and the render hands back the arrangement as notes
+(drums on MIDI's drum channel) — it appears as a **MIDI** track next to the stems, so both exports
+come from the same plan.
 
 **Voice** — the microphone button in any page's composer starts a **call**, not a dictation: the
 composer turns into a live waveform, the call stays open, and the turns behave like a phone call —

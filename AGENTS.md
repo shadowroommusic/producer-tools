@@ -179,3 +179,18 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   "shadowroom-automation (Codex)"). 2FA is enabled on the account.
 - The Codex plugin marketplace named `shadowroom` currently points at an older monorepo checkout;
   the repositories above are the source of truth.
+
+- **2026-09-15 — a song is an arrangement, and the studio shows it.** `shadow-music-generator` gained
+  `sections` + per-part `segments` (and `midi_path`), so "32 小节：intro 8 / drop 16 / outro 8" is one
+  sentence away; the workbench absorbs that into the project (clips per stem, the ruler's section
+  strip, a **MIDI** track) and the export dialog reads the same plan. `defaultProject()` no longer
+  seeds two demo clips that had no audio behind them: a project starts with named tracks and nothing
+  else. Measured: intro 0.098 / drop 0.252 / outro 0.105 RMS per section in a dialog-exported mix,
+  plus a 148-note MIDI at the song's tempo.
+
+- **2026-09-15 — a bug the workbench had been rendering into every beat.** `_render_drums` in the
+  generator placed its step row once, so a 4-bar drum part was one bar of audio followed by silence
+  (the user's own `night-drive-drums.wav`: bar 1 = 0.108 RMS, bars 2–8 = 0.000). Found by measuring
+  finished renders per bar rather than trusting a duration check, fixed with tests in the generator.
+  Lesson for this repo: "the file exists and is the right length" is not evidence that it contains
+  the music — measure the content.

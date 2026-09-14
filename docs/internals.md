@@ -143,6 +143,26 @@ What was measured and matters:
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
   pattern for "the agent does the work, the workbench just shows it": tools write, the UI absorbs.
+  A `render_song` result does the same for a whole arrangement: one clip per stem, the project's BPM
+  and bar count follow the render, `sections` become the ruler's section strip, and a `midi_path`
+  lands on its own **MIDI** track (a clip pointing at the `.mid`, which `export_midi` reads).
+
+## A song, from one sentence (measured 2026-09-15)
+
+`render_song` now takes `sections` + per-part `segments` (see the generator's `docs/internals.md`), so
+the sentence "做一首 12 小节的 deep house：intro 4 小节只有 hats 和和弦，drop 6 小节进 kick+clap+贝斯，
+outro 2 小节只留和弦，顺便把 MIDI 也写出来" produces:
+
+| Evidence | Value |
+| --- | --- |
+| stems on the timeline | 鼓 12 小节 · 贝斯 12 小节 · 和弦 12 小节 · MIDI 12 小节 |
+| sections drawn on the ruler | intro 4 · drop 6 · outro 2 |
+| exported mix (48 kHz, via the dialog) | intro 0.098 · drop 0.252 · outro 0.105 RMS per section |
+| exported MIDI (via the dialog) | 148 notes, tempo 122, kick/clap/hat + bass + chords |
+
+The before-picture is worth keeping: a drum part used to render one bar of audio followed by silence
+(`night-drive-drums.wav`: bar 1 = 0.108 RMS, bars 2–8 = 0.000), because `_render_drums` placed its
+step row once instead of tiling it. That bug is fixed in the generator, with a test.
 
 ## Exports (measured 2026-09-14)
 
