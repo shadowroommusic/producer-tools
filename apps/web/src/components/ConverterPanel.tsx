@@ -104,6 +104,7 @@ const MATCH_LABEL: Record<string, string> = {
   filename_size: "文件名 + 大小",
   metadata: "元数据",
   unmatched: "未匹配",
+  target_assets_not_referenced: "库里没被引用",
 };
 
 function Stat({ label, value }: { label: string; value: string | number }) {
