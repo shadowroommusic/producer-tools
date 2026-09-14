@@ -29,11 +29,10 @@ bridge 起着的时候，侧栏里的插件显示为已连接，三个面板跑�
 
 | 面板 | 做什么 |
 | --- | --- |
+| `rekordbox-serato-bridge` | 读两个曲库、只读预览、把播放列表转换到输出目录，或写回 Rekordbox（默认 dry-run） |
 | `set-planner` | 给有序 set 计时：cue 段长、衔接、警告、总时长 |
 | `audio-analysis-dedupe` | 单文件分析，或整个文件夹查重（只读，不删文件） |
 | `shadow-music-generator` | 登记生成任务（dry-run，不跑模型），并能读回任务 |
-
-转换面板（`rekordbox-serato-bridge`）是下一步。
 
 bridge 默认到 `~/Documents/ShadowRoom` 找插件；路径不同就设 `SHADOWROOM_HOME`（另外还有
 `SHADOWROOM_PYTHON`、`SHADOWROOM_BRIDGE_PORT`、`SHADOWROOM_CALL_TIMEOUT_MS`）。细节见
@@ -53,8 +52,8 @@ bridge 默认到 `~/Documents/ShadowRoom` 找插件；路径不同就设 `SHADOW
 ## 计划
 
 1. UI 层（按 `docs/ui-reference.md` 的参考）。← *进行中*
-2. 接上 bridge（`pnpm serve`），让各个面板能真的跑任务。← *bridge 已经能跑，四个面板里接好三个，
-   `rekordbox-serato-bridge` 是下一步*
+2. 接上 bridge（`pnpm serve`），让各个面板能真的跑任务。✅ *四个面板都接好了（`stage_serato_cues`
+   还没有界面）*
 3. 接入 Codex harness（内置 `codex` 二进制 + `app-server` 协议），并把四个 MCP 服务器注册进去。
 4. 桌面外壳（`apps/desktop`）。
 

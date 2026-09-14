@@ -9,14 +9,19 @@ export type ServerInfo = {
   error?: string;
 };
 
+export type BridgeInfo = {
+  servers: ServerInfo[];
+  home: string;
+  workspaces: string;
+};
+
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return (await response.json()) as T;
 }
 
-export async function fetchServers(): Promise<ServerInfo[]> {
-  const data = await json<{ servers: ServerInfo[] }>(await fetch("/api/servers"));
-  return data.servers;
+export async function fetchBridge(): Promise<BridgeInfo> {
+  return json<BridgeInfo>(await fetch("/api/servers"));
 }
 
 export async function callTool<T = unknown>(server: string, tool: string, args: unknown): Promise<T> {

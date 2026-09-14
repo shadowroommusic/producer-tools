@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 import { AnalysisPanel } from "./AnalysisPanel";
+import { ConverterPanel } from "./ConverterPanel";
 import { GeneratorPanel } from "./GeneratorPanel";
 import { IconCollapse, IconExpand } from "./icons";
 import { SetPlannerPanel } from "./SetPlannerPanel";
@@ -13,19 +14,17 @@ import type { ToolCall } from "./ToolCallRow";
 
 /** Copy for the plugins that are published but not wired into the UI yet. */
 const PLACEHOLDER: Record<string, { body: string; bullets: string[] }> = {
-  "rekordbox-serato-bridge": {
-    body: "把 Rekordbox 的播放列表、cue / loop / 颜色转换到 Serato。",
-    bullets: ["预览报告（dry-run）", "逐曲目对照", "颜色与 loop 映射"],
-  },
 };
 
 export function DockPanel({
   plugin,
+  home,
   onClose,
   onCallBegin,
   onCallEnd,
 }: {
   plugin: PluginEntry;
+  home: string;
   onClose: () => void;
   onCallBegin: (call: ToolCall) => void;
   onCallEnd: (id: string, patch: Partial<ToolCall>) => void;
@@ -64,7 +63,15 @@ export function DockPanel({
       </header>
 
       <div className="sr-dock-body sr-scroll">
-        {plugin.repo === "set-planner" ? (
+        {plugin.repo === "rekordbox-serato-bridge" ? (
+          <ConverterPanel
+            connected={plugin.connected}
+            tools={plugin.tools}
+            home={home}
+            onBegin={onCallBegin}
+            onEnd={onCallEnd}
+          />
+        ) : plugin.repo === "set-planner" ? (
           <SetPlannerPanel
             connected={plugin.connected}
             tools={plugin.tools}

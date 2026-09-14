@@ -18,7 +18,7 @@ two endpoints:
 
 | Endpoint | Body | Returns |
 | --- | --- | --- |
-| `GET /api/servers` | — | every configured server: `connected`, `status`, `error?`, cached `tools` |
+| `GET /api/servers` | — | every configured server (`connected`, `status`, `error?`, cached `tools`) plus `home` and `workspaces`, so the UI can build absolute path defaults — a browser cannot expand `~` |
 | `POST /api/call` | `{ server, tool, arguments }` | `{ result, isError, ms }` — `result` is the tool's text content |
 
 Details that matter:

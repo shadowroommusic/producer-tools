@@ -12,7 +12,7 @@ import { Conversation, type Message } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import type { ToolCall } from "./components/ToolCallRow";
-import { fetchServers, type ServerInfo } from "./lib/mcp";
+import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import { AppFrame } from "./shell/AppFrame";
 
 /** The four ShadowRoom MCP servers, keyed by the ids the bridge reports. */
@@ -32,6 +32,7 @@ type Bridge = "connecting" | "online" | "offline";
 
 export function App() {
   const [servers, setServers] = useState<ServerInfo[]>([]);
+  const [home, setHome] = useState("");
   const [bridge, setBridge] = useState<Bridge>("connecting");
   const [workspace, setWorkspace] = useState<WorkspaceId>("workbench");
   const [activePlugin, setActivePlugin] = useState("set-planner");
@@ -47,10 +48,11 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     const load = () =>
-      fetchServers()
-        .then((list) => {
+      fetchBridge()
+        .then((info) => {
           if (cancelled) return;
-          setServers(list);
+          setServers(info.servers);
+          setHome(info.home);
           setBridge("online");
         })
         .catch(() => {
@@ -176,6 +178,7 @@ export function App() {
         selected === undefined ? null : (
           <DockPanel
             plugin={selected}
+            home={home}
             onClose={() => setDockOpen(false)}
             onCallBegin={beginCall}
             onCallEnd={endCall}

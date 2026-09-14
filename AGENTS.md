@@ -16,7 +16,7 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
 | `audio-analysis-dedupe` | Audio analysis + duplicate detection | published; not yet user-tested |
 | `set-planner` | Set timing + next-track suggestions | published; not yet user-tested |
 | `shadow-music-generator` | Queue for local AI music generation pipelines | published; not yet user-tested |
-| `producer-tools` | the app that collects these tools into one product | web UI + MCP bridge run today, three of four plugin panels wired; conversion panel and Codex core next |
+| `producer-tools` | the app that collects these tools into one product | web UI + MCP bridge run today with all four plugin panels wired; Codex core next |
 | `shadow-producers` (planned) | the AI agent | not started |
 
 ## House rules
@@ -69,6 +69,12 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   the web app. Node builtins only, lazy start, per-call timeouts, and stderr kept in the snapshot so
   the UI can say why a plugin is dark. Tool calls the UI runs are recorded as rows under the 轨迹
   tab. Notes: `docs/internals.md`.
+
+- **2026-09-14 — paths are absolute, and the plugin expands `~`.** The conversion panel starts
+  from the standard macOS locations under the `home` the bridge reports, and the bridge plugin now
+  calls `expanduser()` on every path argument — MCP clients send plain strings, so no shell is
+  there to expand a tilde (found by using the panel: `~/Library/...` failed with
+  FileNotFoundError).
 
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,

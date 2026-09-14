@@ -310,7 +310,9 @@ const http = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/servers") {
-      send(response, 200, { servers: await connectAll() });
+      // `home` travels with the snapshot so the UI can build absolute path defaults (a browser
+      // cannot expand `~`).
+      send(response, 200, { servers: await connectAll(), home: homedir(), workspaces: WORKSPACES });
       return;
     }
 

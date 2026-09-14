@@ -860,6 +860,28 @@
   gap: 12px;
 }
 
+.sr-plugin-options--stack {
+  display: grid;
+  gap: 10px;
+}
+
+/* Collapsible extra options inside a panel (DSH uses the same disclosure idea for tool arguments). */
+.sr-details {
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  padding: 8px 10px;
+}
+
+.sr-details-summary {
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  cursor: pointer;
+}
+
+.sr-details[open] .sr-details-summary {
+  margin-bottom: 10px;
+}
+
 .sr-toggle {
   height: 30px;
   padding: 0 12px;
