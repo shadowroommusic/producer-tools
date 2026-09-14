@@ -22,8 +22,12 @@ export type AgentEvent =
   | { type: "delta"; text: string }
   | { type: "reasoning"; text: string }
   | { type: "item"; phase: string; item: AgentItem }
+  | { type: "approval"; approvalId: string; sessionId?: string; kind: string; title: string; detail?: string }
   | { type: "done"; turn?: unknown }
   | { type: "error"; message: string };
+
+/** A decision the core is waiting for. */
+export type ApprovalDecision = "allow" | "allow_session" | "deny";
 
 /** The subset of Codex thread items this UI cares about. */
 export type AgentItem = {
@@ -54,6 +58,16 @@ export async function interruptTurn(sessionId: string): Promise<void> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sessionId }),
   });
+}
+
+/** Answer one pending approval request. */
+export async function answerApproval(approvalId: string, decision: ApprovalDecision): Promise<void> {
+  const response = await fetch("/api/agent/approval", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ approvalId, decision }),
+  });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
 }
 
 /**

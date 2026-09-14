@@ -15,10 +15,12 @@ conversation with its composer, and a right dock for the selected plugin), built
 tokens — dark by default, light on request. The brand files come straight from
 [shadowroom.cn](https://shadowroom.cn) (see `assets/logo/README.md`).
 
+The core asks before it leaves its sandbox: command and file-change approvals show up as a card above
+the composer (**拒绝 / 本次会话都允许 / 允许一次**), which is the same surface DeepSeek Harness uses.
 Without `pnpm serve:agent` a submit only records the request and adds a 内核未启动 notice. Still
-missing: an approvals surface (the core runs with `approvalPolicy: never` for now), a UI for
-`stage_serato_cues`, and packaging the app as `apps/desktop`. The UI/frontend reference lives in
-[docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek Harness).
+missing: a UI for `stage_serato_cues` and packaging the app as `apps/desktop`. The UI/frontend
+reference lives in [docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek
+Harness).
 
 ## Run it
 

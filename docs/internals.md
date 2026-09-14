@@ -88,7 +88,17 @@ What was measured and matters:
   policy is never"* — measured, then fixed by the flag rather than by loosening the sandbox.
 - **Permissions.** Threads start with `sandbox: workspace-write` and `approvalPolicy: never` in
   `SHADOWROOM_AGENT_CWD` (default `~/Documents/ShadowRoom`), which is narrower than the user's own
-  global config. An approvals UI is the next step; until then the header chips show the mode.
+  global config.
+- **Approvals.** `SHADOWROOM_AGENT_APPROVAL` defaults to `on-request`: when the core wants to run a
+  command or apply a patch outside the sandbox it sends a *server request* back to us
+  (`execCommandApproval`, `applyPatchApproval`, or the v2 `item/commandExecution/requestApproval` /
+  `item/fileChange/requestApproval`). Those are the only server→client requests we answer; anything
+  else is refused with `-32601` so a turn can never hang waiting on us. The request is forwarded to
+  the UI as an SSE `approval` event and shown as a card above the composer; the answer comes back on
+  `POST /api/agent/approval` and is mapped into the vocabulary the request expects — legacy
+  `approved` / `approved_for_session` / `{denied:{rejection}}`, v2 `accept` / `acceptForSession` /
+  `decline`. Measured: with `workspace-write`, a `touch` inside the workspace or `/tmp` runs
+  unattended (both are writable), while writing to the home directory raises the approval.
 - **Binary.** `SHADOWROOM_CODEX` points at the codex binary; the default is the one shipped inside
   the Codex desktop app (`/Applications/ChatGPT.app/Contents/Resources/codex`).
 

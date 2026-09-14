@@ -85,6 +85,14 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   narrower than the user's global `danger-full-access`; an approvals UI is the next step.
   Notes: `docs/internals.md`.
 
+- **2026-09-14 — approvals are answered by the UI, not waved through.** The agent bridge now
+  defaults to `approvalPolicy: on-request` and answers the core's server requests
+  (`execCommandApproval` / `applyPatchApproval` and their v2 spellings) from a card above the
+  composer; every other server request is refused with `-32601` so a turn can never hang on us.
+  Measured: with `workspace-write`, writes inside the workspace and `/tmp` still run unattended
+  and a home-directory write raises the prompt. The MCP plugins keep
+  `default_tools_approval_mode: "approve"`.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

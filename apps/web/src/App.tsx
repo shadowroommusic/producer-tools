@@ -10,11 +10,13 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Composer } from "./components/Composer";
+import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import type { ToolCall } from "./components/ToolCallRow";
 import {
+  answerApproval,
   fetchAgentHealth,
   interruptTurn,
   sendTurn,
@@ -58,6 +60,7 @@ export function App() {
   const [agent, setAgent] = useState<AgentHealth | null>(null);
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
 
   const session = store.sessions.find((entry) => entry.id === store.activeId);
 
@@ -246,6 +249,19 @@ export function App() {
               ],
             })),
           );
+          return;
+        }
+        if (event.type === "approval") {
+          setApprovals((current) => [
+            ...current.filter((entry) => entry.approvalId !== event.approvalId),
+            {
+              approvalId: event.approvalId,
+              sessionId: event.sessionId,
+              kind: event.kind,
+              title: event.title,
+              detail: event.detail,
+            },
+          ]);
         }
       },
       abort.signal,
@@ -271,6 +287,43 @@ export function App() {
     controller?.abort();
     void interruptTurn(store.activeId);
   }, [controller, store.activeId]);
+
+  /** Answer one approval and record the decision in the transcript. */
+  const decide = useCallback(
+    (approval: PendingApproval, decision: "allow" | "allow_session" | "deny") => {
+      setApprovals((current) =>
+        current.map((entry) => (entry.approvalId === approval.approvalId ? { ...entry, busy: true } : entry)),
+      );
+      const label = decision === "deny" ? "已拒绝" : decision === "allow_session" ? "本次会话都允许" : "已允许一次";
+      void answerApproval(approval.approvalId, decision)
+        .catch(() => undefined)
+        .finally(() => {
+          setApprovals((current) => current.filter((entry) => entry.approvalId !== approval.approvalId));
+          const sessionId = approval.sessionId ?? store.activeId;
+          if (sessionId === undefined) return;
+          setStore((current) =>
+            patchSession(current, sessionId, (session) => ({
+              ...session,
+              messages: [
+                ...session.messages,
+                {
+                  id: `ap-${approval.approvalId}`,
+                  role: "notice",
+                  title: label,
+                  text: approval.title,
+                  at: Date.now(),
+                },
+              ],
+            })),
+          );
+        });
+    },
+    [patchSession, store.activeId],
+  );
+
+  const pendingForSession = approvals.filter(
+    (approval) => approval.sessionId === undefined || approval.sessionId === store.activeId,
+  );
 
   /** A tool run appears in the transcript and under 轨迹 at the same time. */
   const beginCall = useCallback(
@@ -376,18 +429,27 @@ export function App() {
             </>
           }
           composer={
-            <Composer
-              variant={session === undefined || session.messages.length === 0 ? "hero" : "docked"}
-              value={draft}
-              onChange={setDraft}
-              onSubmit={submit}
-              onStop={stop}
-              busy={running}
-              mode={mode}
-              onModeChange={setMode}
-              plugin={active}
-              onPluginClick={() => setDockOpen(true)}
-            />
+            <>
+              {pendingForSession.map((approval) => (
+                <ApprovalCard
+                  key={approval.approvalId}
+                  approval={approval}
+                  onDecide={(decision) => decide(approval, decision)}
+                />
+              ))}
+              <Composer
+                variant={session === undefined || session.messages.length === 0 ? "hero" : "docked"}
+                value={draft}
+                onChange={setDraft}
+                onSubmit={submit}
+                onStop={stop}
+                busy={running}
+                mode={mode}
+                onModeChange={setMode}
+                plugin={active}
+                onPluginClick={() => setDockOpen(true)}
+              />
+            </>
           }
         />
       }

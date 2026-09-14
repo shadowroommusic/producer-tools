@@ -34,7 +34,7 @@ const HOME = homedir();
 const WORKSPACES = process.env.SHADOWROOM_HOME ?? join(HOME, "Documents", "ShadowRoom");
 const AGENT_CWD = process.env.SHADOWROOM_AGENT_CWD ?? WORKSPACES;
 const SANDBOX = process.env.SHADOWROOM_AGENT_SANDBOX ?? "workspace-write";
-const APPROVAL = process.env.SHADOWROOM_AGENT_APPROVAL ?? "never";
+const APPROVAL = process.env.SHADOWROOM_AGENT_APPROVAL ?? "on-request";
 const PYTHON = process.env.SHADOWROOM_PYTHON ?? "python3";
 const CODEX =
   process.env.SHADOWROOM_CODEX ?? "/Applications/ChatGPT.app/Contents/Resources/codex";
@@ -76,6 +76,8 @@ class Agent {
     this.starting = null;
     this.stderr = [];
     this.info = { model: undefined, userAgent: undefined };
+    this.approvals = new Map(); // bridge approval id → the app-server request waiting for a decision
+    this.nextApprovalId = 1;
   }
 
   get connected() {
@@ -126,6 +128,10 @@ class Agent {
         else done(message.result);
         return;
       }
+      if (typeof message.method === "string" && message.id !== undefined) {
+        this.#serverRequest(message);
+        return;
+      }
       if (typeof message.method === "string") this.#notify(message);
     });
 
@@ -172,6 +178,86 @@ class Agent {
     for (const listener of listeners) listener(message);
   }
 
+  /** Send a reply to a request the core made (approvals); nothing else is expected from us. */
+  #respond(id, result, error) {
+    const payload = error === undefined
+      ? { jsonrpc: "2.0", id, result }
+      : { jsonrpc: "2.0", id, error };
+    this.child?.stdin.write(`${JSON.stringify(payload)}\n`);
+  }
+
+  /**
+   * The core asks the client for a decision. Both the legacy (`execCommandApproval`) and the v2
+   * (`item/commandExecution/requestApproval`) shapes are accepted; unknown requests are refused so a
+   * turn can never hang on us.
+   */
+  #serverRequest(message) {
+    const params = message.params ?? {};
+    const method = message.method;
+    const threadId = params.threadId ?? params.conversationId;
+    let request;
+    if (method === "execCommandApproval" || method === "item/commandExecution/requestApproval") {
+      const command = Array.isArray(params.command) ? params.command.join(" ") : params.command;
+      request = {
+        kind: "command",
+        title: params.reason ?? "智能体想运行一条命令",
+        detail: [command, params.cwd === undefined ? undefined : `cwd: ${params.cwd}`]
+          .filter(Boolean)
+          .join("\n"),
+      };
+    } else if (method === "applyPatchApproval" || method === "item/fileChange/requestApproval") {
+      const files = Object.keys(params.fileChanges ?? {});
+      request = {
+        kind: "patch",
+        title: params.reason ?? "智能体想修改文件",
+        detail: files.join("\n") || params.grantRoot || "",
+      };
+    }
+    if (request === undefined || threadId === undefined) {
+      this.#respond(message.id, null, {
+        code: -32601,
+        message: `shadow-producers does not handle ${method}`,
+      });
+      return;
+    }
+    const approvalId = `ap-${this.nextApprovalId++}`;
+    this.approvals.set(approvalId, {
+      rpcId: message.id,
+      method,
+      threadId,
+      createdAt: Date.now(),
+    });
+    const listeners = this.listeners.get(threadId);
+    const sessionId = [...this.threads.entries()].find(([, id]) => id === threadId)?.[0];
+    for (const listener of listeners ?? []) {
+      listener({
+        method: "shadowroom/approval",
+        params: { threadId, sessionId, approvalId, kind: request.kind, title: request.title, detail: request.detail },
+      });
+    }
+  }
+
+  /** Answer a pending approval in the vocabulary the request came in with. */
+  answer(approvalId, decision) {
+    const pending = this.approvals.get(approvalId);
+    if (pending === undefined) throw new Error(`unknown approval: ${approvalId}`);
+    this.approvals.delete(approvalId);
+    const legacy = pending.method === "execCommandApproval" || pending.method === "applyPatchApproval";
+    const mapped = legacy
+      ? decision === "allow"
+        ? "approved"
+        : decision === "allow_session"
+          ? "approved_for_session"
+          : { denied: { rejection: "用户在 Shadow Producers 里拒绝了这次操作" } }
+      : decision === "allow"
+        ? "accept"
+        : decision === "allow_session"
+          ? "acceptForSession"
+          : "decline";
+    this.#respond(pending.rpcId, { decision: mapped });
+    return pending.threadId;
+  }
+
   /** The Codex thread behind a UI session, created on first use. */
   async threadFor(sessionId) {
     const known = this.threads.get(sessionId);
@@ -216,6 +302,16 @@ class Agent {
       }
       if (method === "error") {
         onEvent({ type: "error", message: params?.message ?? JSON.stringify(params) });
+      }
+      if (method === "shadowroom/approval") {
+        onEvent({
+          type: "approval",
+          approvalId: params.approvalId,
+          sessionId: params.sessionId,
+          kind: params.kind,
+          title: params.title,
+          detail: params.detail,
+        });
       }
     };
     const listeners = this.listeners.get(threadId) ?? new Set();
@@ -289,6 +385,7 @@ const http = createServer(async (request, response) => {
         cwd: AGENT_CWD,
         sandbox: SANDBOX,
         approval: APPROVAL,
+        pendingApprovals: agent.approvals.size,
         plugins: Object.keys(mcpServers()),
         error: agent.connected ? undefined : agent.stderr.join("").slice(-400) || undefined,
       });
@@ -299,6 +396,18 @@ const http = createServer(async (request, response) => {
       const body = await readBody(request);
       await agent.interrupt(String(body.sessionId ?? ""));
       json(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent/approval") {
+      const body = await readBody(request);
+      const decision = String(body.decision ?? "");
+      if (!["allow", "allow_session", "deny"].includes(decision)) {
+        json(response, 400, { error: "decision must be allow, allow_session or deny" });
+        return;
+      }
+      const threadId = agent.answer(String(body.approvalId ?? ""), decision);
+      json(response, 200, { ok: true, threadId });
       return;
     }
 

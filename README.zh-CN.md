@@ -13,8 +13,9 @@ producers.
 中间是会话与输入框、右侧是当前插件的面板），全部基于我们自己的 `--sr-*` token —— 默认暗色，
 需要时才切浅色。品牌文件直接取自 [shadowroom.cn](https://shadowroom.cn)（见 `assets/logo/README.md`）。
 
-没跑 `pnpm serve:agent` 的时候，提交仍然只把需求记进会话，并加一条"内核未启动"的状态行。还没做的：
-审批界面（内核现在以 `approvalPolicy: never` 运行）、`stage_serato_cues` 的界面，以及把应用打包成
+内核要离开沙箱时会先问：命令执行和文件修改的审批会以卡片出现在输入框上方（**拒绝 / 本次会话都允许 /
+允许一次**），跟 DeepSeek Harness 用的是同一个位置。没跑 `pnpm serve:agent` 的时候，提交仍然只把需求
+记进会话，并加一条"内核未启动"的状态行。还没做的：`stage_serato_cues` 的界面，以及把应用打包成
 `apps/desktop`。UI／前端参考写在 [docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek
 Harness）。
 

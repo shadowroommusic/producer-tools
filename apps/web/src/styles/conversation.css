@@ -346,6 +346,88 @@
   animation: sr-caret-pulse 1s ease-in-out infinite alternate;
 }
 
+/* ---------- approval takeover (DSH's ApprovalPanel geometry) ---------- */
+
+.sr-approval {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--sr-card-max-width);
+  margin: 0 auto 8px;
+  overflow: hidden;
+  border: 0.5px solid color-mix(in srgb, var(--sr-warn) 45%, transparent);
+  border-radius: 20px;
+  background: var(--sr-input-fill);
+  box-shadow: var(--sr-shadow-soft);
+}
+
+.sr-approval-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--sr-warn) 12%, transparent);
+  color: var(--sr-warn);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-12);
+}
+
+.sr-approval-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-warn);
+}
+
+.sr-approval-kind {
+  margin-left: auto;
+  color: var(--sr-label-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.sr-approval-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+
+.sr-approval-headline {
+  margin: 0;
+  color: var(--sr-label-primary);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.sr-approval-detail {
+  max-height: 141px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-tertiary);
+  font-family: var(--sr-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sr-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.sr-btn--reject:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--sr-danger) 16%, transparent);
+  color: var(--sr-danger);
+}
+
 @keyframes sr-caret-pulse {
   from {
     opacity: 0.25;
@@ -440,6 +522,7 @@
 
 .sr-call-state {
   margin-left: auto;
+  white-space: nowrap;
 }
 
 .sr-call[data-state="error"] .sr-call-state {
