@@ -9,10 +9,11 @@ producers.
 
 ## Status
 
-Work in progress. The web UI shell renders today: workbench layout, composer, session list and the
-first tool panel (`set-planner`), all built on our own `--sr-*` tokens — dark by default, light on
-request. The brand files come straight from [shadowroom.cn](https://shadowroom.cn) (see
-`assets/logo/README.md`).
+Work in progress. The web UI shell renders today, with the layout and interaction patterns of
+DeepSeek Harness: a three-column frame (sidebar with the workspace list and the plugins, the
+conversation with its composer, and a right dock for the selected plugin), built on our own `--sr-*`
+tokens — dark by default, light on request. The brand files come straight from
+[shadowroom.cn](https://shadowroom.cn) (see `assets/logo/README.md`).
 
 Still missing, in order: the bridge that runs the four MCP servers for the UI, and the Codex core
 that turns a composer message into a running session. The UI/frontend reference lives in

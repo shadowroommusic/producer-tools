@@ -1,3 +1,5 @@
+/* Base layer: document defaults and the two shared scrollbar surfaces. */
+
 *,
 *::before,
 *::after {
@@ -12,11 +14,12 @@ body,
 
 body {
   margin: 0;
-  background: var(--sr-bg);
-  color: var(--sr-text);
+  overflow: hidden;
+  background: var(--sr-bg-base);
+  color: var(--sr-label-primary);
   font-family: var(--sr-font-sans);
-  font-size: var(--sr-text-md);
-  line-height: 1.5;
+  font-size: var(--sr-text-14);
+  line-height: var(--sr-line-14);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -33,13 +36,60 @@ select {
   color: inherit;
 }
 
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
 :focus-visible {
   outline: 2px solid var(--sr-focus);
   outline-offset: 2px;
+}
+
+::selection {
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
 }
 
 code,
 pre,
 .sr-mono {
   font-family: var(--sr-font-mono);
+}
+
+/* Scroll regions: thin, drawn only against a surface, and never reflowing the rows inside them.
+   The shell rebinds --sr-scrollbar-thumb to transparent while the pointer is elsewhere (the
+   sidebar does this), so a column nobody is pointing at carries no bar. */
+.sr-scroll {
+  --sr-scrollbar-thumb: var(--sr-border-strong);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.sr-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sr-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--sr-radius-pill);
+  background-clip: content-box;
+  background-color: var(--sr-scrollbar-thumb, var(--sr-border-strong));
+}
+
+.sr-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

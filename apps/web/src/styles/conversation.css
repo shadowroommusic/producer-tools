@@ -1,0 +1,531 @@
+/*
+ * Conversation column: header + view tabs, the transcript scroll, the hero phase and the composer
+ * seat. One shared width axis (--sr-content-width) keeps the transcript, the hero and the input card
+ * on the same centre line — the relation DeepSeek Harness's ConversationRoot establishes.
+ */
+
+.sr-conversation {
+  --sr-content-width: clamp(640px, 62%, 880px);
+  --sr-card-max-width: calc(var(--sr-content-width) + 32px);
+  --sr-side-clearance: 16px;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--sr-bg-base);
+}
+
+/* ---------- header ---------- */
+
+.sr-conversation-header {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  /* 76px, so this rule and the dock's header rule meet at the same height (the DSH alignment). */
+  height: 76px;
+  min-height: 76px;
+  padding: 10px 20px 0;
+  border-bottom: var(--sr-shell-border);
+}
+
+.sr-conversation-titlerow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.sr-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sr-crumb {
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: var(--sr-radius-md);
+  color: var(--sr-label-tertiary);
+  font-size: var(--sr-text-14);
+  line-height: var(--sr-line-13);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sr-crumb--current {
+  color: var(--sr-label-primary);
+  font-weight: 500;
+}
+
+.sr-crumb-sep {
+  color: var(--sr-label-caption);
+  font-size: var(--sr-text-14);
+}
+
+.sr-conversation-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* View tabs: 13/16 medium, 2px bar sitting over the header rule. */
+.sr-tabs {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 32px;
+  margin-top: 8px;
+  padding-left: 8px;
+}
+
+.sr-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 9px;
+  border: none;
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  font-size: var(--sr-text-13);
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.sr-tab:hover {
+  color: var(--sr-label-secondary);
+}
+
+.sr-tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.sr-tab[data-active] {
+  color: var(--sr-accent);
+}
+
+.sr-tab[data-active]::after {
+  background: var(--sr-accent);
+}
+
+.sr-tab-count {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+/* ---------- body + scroll ---------- */
+
+.sr-conversation-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sr-conversation-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px calc(var(--sr-side-clearance) + 16px);
+  margin-right: 2px;
+}
+
+.sr-conversation[data-phase="hero"] .sr-conversation-scroll {
+  justify-content: center;
+}
+
+.sr-conversation-column {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--sr-content-width);
+  margin: 0 auto;
+}
+
+.sr-conversation-column > * + * {
+  margin-top: 16px;
+}
+
+/* ---------- hero ---------- */
+
+.sr-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.sr-hero-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--sr-label-primary);
+  filter: drop-shadow(0 0 14px rgb(242 245 236 / 16%));
+}
+
+[data-theme="light"] .sr-hero-mark {
+  filter: none;
+}
+
+.sr-hero-title {
+  margin: 0;
+  font-size: var(--sr-text-26);
+  line-height: var(--sr-line-26);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--sr-label-primary);
+}
+
+/* Suggestion chips: the same closed chrome as the mode chips, but they read as one quiet row. */
+.sr-hero-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px !important;
+}
+
+.sr-suggestion {
+  height: 30px;
+  padding: 0 12px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-13);
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease),
+    border-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-suggestion:hover {
+  border-color: var(--sr-border-strong);
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+/* ---------- transcript rows ---------- */
+
+.sr-msg-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.sr-bubble {
+  max-width: min(calc(var(--sr-content-width) * 0.7), 82%);
+  padding: 10px 16px;
+  border-radius: var(--sr-radius-card);
+  background: var(--sr-bubble-fill);
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14);
+  line-height: var(--sr-line-14);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sr-msg-assistant {
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14);
+  line-height: 24px;
+  white-space: pre-wrap;
+}
+
+.sr-view-hint {
+  margin: 0;
+  color: var(--sr-label-tertiary);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-13);
+}
+
+/* ---------- tool calls ---------- */
+
+.sr-call {
+  border-radius: var(--sr-radius-sm);
+}
+
+.sr-call-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  text-align: left;
+}
+
+.sr-call-head:hover {
+  background: var(--sr-hover);
+}
+
+.sr-call-chevron,
+.sr-call-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--sr-label-tertiary);
+}
+
+.sr-call-name {
+  color: var(--sr-label-primary);
+  font-weight: 500;
+}
+
+.sr-call-server,
+.sr-call-state {
+  color: var(--sr-label-caption);
+  font-size: 11px;
+}
+
+.sr-call-summary {
+  overflow: hidden;
+  color: var(--sr-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-call-state {
+  margin-left: auto;
+}
+
+.sr-call[data-state="error"] .sr-call-state {
+  color: var(--sr-danger);
+}
+
+.sr-call[data-state="running"] .sr-call-state {
+  color: var(--sr-accent);
+}
+
+.sr-call-detail {
+  max-height: 320px;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: var(--sr-shell-border);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+
+/* ---------- composer ---------- */
+
+.sr-composer-seat {
+  position: sticky;
+  bottom: 0;
+  z-index: 7;
+  flex: none;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--sr-bg-base) 0%, transparent) 0,
+    var(--sr-bg-base) 36px
+  );
+}
+
+.sr-conversation[data-phase="hero"] .sr-composer-seat {
+  position: static;
+  background: none;
+}
+
+.sr-composer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 var(--sr-side-clearance) 8px;
+}
+
+.sr-conversation[data-phase="hero"] .sr-composer {
+  padding: 0 0 8px;
+}
+
+/* Hero: the composer rides the column, but keeps the docked card's width (content + 32px), so the
+   input card does not change size when the session starts. */
+.sr-conversation-column > .sr-composer {
+  width: calc(100% + 32px);
+  margin-left: -16px;
+}
+
+.sr-composer-notice {
+  width: 100%;
+  max-width: var(--sr-card-max-width);
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-hover);
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-12);
+  line-height: var(--sr-line-12);
+}
+
+.sr-composer-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: var(--sr-card-max-width);
+  padding-top: 8px;
+  border-radius: var(--sr-radius-card);
+  background: var(--sr-input-fill);
+  box-shadow: 0 0 0 0.5px var(--sr-border-l2), var(--sr-shadow-soft);
+  font-size: var(--sr-text-14);
+  line-height: 24px;
+}
+
+.sr-composer-scroll {
+  max-height: 336px;
+  margin-right: 4px;
+  overflow-y: auto;
+}
+
+.sr-composer-input {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 8px 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--sr-label-primary);
+  caret-color: var(--sr-accent);
+  font-family: var(--sr-font-sans);
+  font-size: inherit;
+  line-height: inherit;
+  outline: none;
+  resize: none;
+}
+
+.sr-composer[data-variant="hero"] .sr-composer-input {
+  min-height: 52px;
+}
+
+.sr-composer-input::placeholder {
+  color: var(--sr-label-caption);
+}
+
+.sr-composer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 8px 6px;
+}
+
+.sr-composer-tools,
+.sr-modes,
+.sr-composer-trailing {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.sr-composer-tools {
+  gap: 12px;
+}
+
+.sr-modes {
+  gap: 4px;
+}
+
+.sr-composer-trailing {
+  flex: none;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Attach circle: 28px, selector fill, primary glyph. */
+.sr-attach {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-selector-fill);
+  color: var(--sr-label-primary);
+  transition: background-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-attach:hover {
+  background: var(--sr-hover);
+}
+
+/* Mode chips: closed chrome, 13/20 medium. */
+.sr-mode {
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-13);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-mode:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+.sr-mode[data-on] {
+  background: var(--sr-active);
+  color: var(--sr-label-primary);
+}
+
+.sr-composer-trailing .sr-chip {
+  cursor: default;
+}
+
+/* Primary send: 34px circle on the accent fill, white-on-acid glyph. */
+.sr-send {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
+  transform: translateY(-2px);
+  transition: background-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-send:hover:not(:disabled) {
+  background: var(--sr-accent-hover);
+}
+
+.sr-send:disabled {
+  opacity: 0.4;
+}

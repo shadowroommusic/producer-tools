@@ -58,11 +58,22 @@ what we borrow, what we replace with our own, and how the agent core plugs in.
 
 Built so far:
 
-- pnpm workspace (`apps/*`, `packages/*`) with `packages/ui-tokens` (`--sr-*` tokens, dark first).
-- `apps/web`: React + Vite shell — sidebar (nav + live MCP status), composer, session list, and the
-  first tool panel (`set-planner`, calling `plan_set` through `/api/call`).
+- pnpm workspace (`apps/*`, `packages/*`) with `packages/ui-tokens`: static ramp + semantic aliases +
+  shell geometry, dark first, light behind `<html data-theme="light">`.
+- `apps/web`, shaped like DSH's shell rather than like a dashboard:
+
+  | DSH | ours |
+  | --- | --- |
+  | `ui-layout` three-column frame, drag handles, rail collapse | `src/shell/AppFrame.tsx` + `shell/columns.ts` |
+  | `ui-sidebar` brand row, New Session, panel rows, rail | `src/components/Sidebar.tsx` — workspaces (工作台 / 曲目库 / Studio / DJ / 设置) then the **plugins** |
+  | `ui-conversation` header, view tabs, hero phase, sticky composer | `src/components/Conversation.tsx`, `Composer.tsx` |
+  | `ui-chat` transcript rows, tool-call disclosure | `src/components/ToolCallRow.tsx` |
+  | `ui-sidebar-right` right dock | `src/components/DockPanel.tsx` — hosts the selected plugin |
+
 - Brand: files taken from shadowroom.cn, applied through `components/BrandMark.tsx` and
   `apps/web/public/brand/`.
+- First runnable panel: `SetPlannerPanel` calls `plan_set` through `/api/call` (needs `pnpm serve`,
+  which is still to be written).
 
 Next: `tools/mcp-bridge.mjs` (the `pnpm serve` script) so the panels talk to MCP over stdio, then the
 Codex `app-server` core behind the composer, then the `ui-*` package split and `apps/desktop`.

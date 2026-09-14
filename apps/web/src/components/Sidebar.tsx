@@ -1,76 +1,234 @@
+/**
+ * Sidebar column: brand row, New Session, the workspace list, the plugin list, the session browser
+ * and the foot. Geometry follows DeepSeek Harness's ui-sidebar (60px logo row, 38px/r12 New Session
+ * bar, 36px rows, 56px rail) with our own marks and copy; the plugins are the ShadowRoom MCP servers.
+ */
+import { useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
-import type { ServerInfo } from "../lib/mcp";
+import {
+  IconDj,
+  IconLibrary,
+  IconNewSession,
+  IconPanelLeft,
+  IconPlugin,
+  IconSettings,
+  IconStudio,
+  IconWorkbench,
+} from "./icons";
 
-const NAV = [
-  { id: "home", label: "工作台", ready: true },
-  { id: "library", label: "曲目库", ready: false },
-  { id: "convert", label: "转换", ready: false },
-  { id: "sets", label: "Set 编排", ready: false },
-  { id: "settings", label: "设置", ready: false },
+export type WorkspaceId = "workbench" | "library" | "studio" | "dj" | "settings";
+
+export type PluginEntry = {
+  id: string;
+  label: string;
+  repo: string;
+  connected: boolean;
+};
+
+export type SessionSummary = {
+  id: string;
+  title: string;
+  meta: string;
+  state: "running" | "done" | "draft";
+};
+
+const WORKSPACES: Array<{ id: WorkspaceId; label: string; icon: typeof IconWorkbench; ready: boolean }> = [
+  { id: "workbench", label: "工作台", icon: IconWorkbench, ready: true },
+  { id: "library", label: "曲目库", icon: IconLibrary, ready: false },
+  { id: "studio", label: "Studio", icon: IconStudio, ready: false },
+  { id: "dj", label: "DJ", icon: IconDj, ready: false },
+  { id: "settings", label: "设置", icon: IconSettings, ready: false },
 ];
 
-export function Sidebar({ servers, active = "home" }: { servers: ServerInfo[]; active?: string }) {
-  const connected = servers.filter((server) => server.connected).length;
+/** Scrollbars are a pointer affordance: a column nobody points at carries none. */
+function usePointerLinger(ref: React.RefObject<HTMLElement | null>) {
+  const [inside, setInside] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!inside) return;
+    const onMove = (event: PointerEvent): void => {
+      const rect = ref.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const within =
+        event.clientX >= rect.left &&
+        event.clientX < rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY < rect.bottom;
+      window.clearTimeout(timer.current);
+      if (!within) timer.current = window.setTimeout(() => setInside(false), 1200);
+    };
+    document.addEventListener("pointermove", onMove);
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      window.clearTimeout(timer.current);
+    };
+  }, [inside, ref]);
+  return [inside, setInside] as const;
+}
+
+export function Sidebar({
+  collapsed,
+  toggleSidebar,
+  plugins,
+  activeWorkspace,
+  activePlugin,
+  onSelectWorkspace,
+  onSelectPlugin,
+  sessions,
+  activeSessionId,
+  onSelectSession,
+  onNewSession,
+}: {
+  collapsed: boolean;
+  toggleSidebar: () => void;
+  plugins: PluginEntry[];
+  activeWorkspace: WorkspaceId;
+  activePlugin?: string;
+  onSelectWorkspace: (workspace: WorkspaceId) => void;
+  onSelectPlugin: (plugin: string) => void;
+  sessions: SessionSummary[];
+  activeSessionId?: string;
+  onSelectSession: (id: string) => void;
+  onNewSession: () => void;
+}) {
+  const root = useRef<HTMLDivElement>(null);
+  const [pointerInside, setPointerInside] = usePointerLinger(root);
 
   return (
-    <aside className="sr-sidebar">
-      <div className="sr-brand">
-        <span className="sr-brand-mark">
-          <BrandMark height={30} />
-        </span>
-        <span className="sr-brand-text">
-          <span className="sr-brand-name">
-            Shadow<span className="sr-brand-accent">Room</span> Producers
-          </span>
-          <span className="sr-brand-sub sr-mono">SHADOWROOM MUSIC · 工作台</span>
-        </span>
+    <div
+      ref={root}
+      className="sr-sidebar"
+      data-collapsed={collapsed || undefined}
+      data-quiet={!pointerInside || undefined}
+      onPointerEnter={() => setPointerInside(true)}
+      onPointerLeave={() => setPointerInside(false)}
+    >
+      <div className="sr-sidebar-logorow">
+        {!collapsed && (
+          <button type="button" className="sr-brand" onClick={onNewSession} title="新建会话">
+            <span className="sr-brand-mark">
+              <BrandMark height={26} strokeWidth={5} />
+            </span>
+            <span className="sr-brand-name">
+              Shadow<span className="sr-brand-accent">Room</span> Producers
+            </span>
+          </button>
+        )}
+        <button
+          type="button"
+          className="sr-icon-btn sr-sidebar-toggle"
+          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+          title={collapsed ? "展开侧栏" : "收起侧栏"}
+          onClick={toggleSidebar}
+        >
+          {collapsed ? (
+            <span className="sr-sidebar-railmark">
+              <BrandMark height={22} strokeWidth={5} />
+            </span>
+          ) : null}
+          <IconPanelLeft className="sr-sidebar-toggle-icon" size={collapsed ? 18 : 16} />
+        </button>
       </div>
 
-      <nav className="sr-nav" aria-label="工作区">
-        <p className="sr-sidebar-title sr-mono">工作区</p>
-        {NAV.map((item) => {
-          const isActive = item.id === active;
+      <button type="button" className="sr-new-session" onClick={onNewSession} aria-label="新建会话">
+        <IconNewSession size={collapsed ? 18 : 14} />
+        {!collapsed && <span className="sr-new-session-label">新建会话</span>}
+      </button>
+
+      <nav className="sr-panel-list" aria-label="工作区">
+        {WORKSPACES.map((entry) => {
+          const Icon = entry.icon;
+          const active = entry.id === activeWorkspace;
           return (
             <button
-              key={item.id}
-              className={`sr-nav-item${isActive ? " is-active" : ""}`}
-              aria-current={isActive ? "page" : undefined}
-              aria-disabled={item.ready ? undefined : true}
-              title={item.ready ? undefined : "即将开放"}
+              key={entry.id}
+              type="button"
+              className="sr-panel-row"
+              data-active={active || undefined}
+              aria-current={active ? "page" : undefined}
+              aria-disabled={entry.ready ? undefined : true}
+              title={collapsed ? entry.label : entry.ready ? undefined : "即将开放"}
+              onClick={() => onSelectWorkspace(entry.id)}
             >
-              <span>{item.label}</span>
-              {item.ready ? null : <span className="sr-nav-soon sr-mono">即将</span>}
+              <span className="sr-panel-glyph">
+                <Icon size={collapsed ? 18 : 16} />
+              </span>
+              {!collapsed && (
+                <>
+                  <span className="sr-panel-title">{entry.label}</span>
+                  {!entry.ready && <span className="sr-panel-soon sr-mono">即将</span>}
+                </>
+              )}
             </button>
           );
         })}
       </nav>
 
-      <div className="sr-sidebar-section">
-        <div className="sr-sidebar-title sr-mono">
-          MCP 服务 <span className="sr-count">{connected}/{servers.length}</span>
-        </div>
-        {servers.map((server) => (
-          <div key={server.id} className="sr-server" title={server.error ?? server.description}>
-            <span className={`sr-dot sr-dot--${server.connected ? "live" : "idle"}`} />
-            <span className="sr-server-body">
-              <span className="sr-server-name sr-mono">{server.label}</span>
-              <span className="sr-server-meta">
-                {server.connected
-                  ? `${server.tools.length} 个工具`
-                  : server.error
-                    ? "连接失败"
-                    : "未连接"}
+      <div className="sr-plugin-list">
+        {!collapsed && <p className="sr-region-title sr-mono">插件</p>}
+        {plugins.map((plugin) => {
+          const active = plugin.id === activePlugin;
+          return (
+            <button
+              key={plugin.id}
+              type="button"
+              className="sr-plugin-row"
+              data-active={active || undefined}
+              aria-current={active ? "page" : undefined}
+              title={collapsed ? plugin.label : plugin.repo}
+              onClick={() => onSelectPlugin(plugin.repo)}
+            >
+              <span className="sr-panel-glyph">
+                <IconPlugin size={collapsed ? 18 : 16} />
               </span>
-            </span>
-          </div>
-        ))}
+              {!collapsed && (
+                <>
+                  <span className="sr-plugin-body">
+                    <span className="sr-plugin-label">{plugin.label}</span>
+                    <span className="sr-plugin-repo sr-mono">{plugin.repo}</span>
+                  </span>
+                  <span className="sr-dot" data-state={plugin.connected ? "live" : "idle"} />
+                </>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      <div className="sr-side-foot sr-mono">
-        <span>AGPL-3.0</span>
-        <span>·</span>
-        <span>v0.0.0</span>
+      <div className="sr-sidebar-region">
+        {!collapsed && <p className="sr-region-title sr-mono">会话</p>}
+        <div className="sr-region-scroll sr-scroll">
+          {sessions.map((session) => (
+            <button
+              key={session.id}
+              type="button"
+              className="sr-session-row"
+              data-active={session.id === activeSessionId || undefined}
+              title={session.title}
+              onClick={() => onSelectSession(session.id)}
+            >
+              <span className="sr-session-dot" data-state={session.state} />
+              {!collapsed && (
+                <span className="sr-session-body">
+                  <span className="sr-session-title">{session.title}</span>
+                  <span className="sr-session-meta sr-mono">{session.meta}</span>
+                </span>
+              )}
+            </button>
+          ))}
+          {!collapsed && sessions.length === 0 && <p className="sr-region-empty">还没有会话</p>}
+        </div>
       </div>
-    </aside>
+
+      <div className="sr-sidebar-foot">
+        <div className="sr-foot-row" title="ShadowRoom Music">
+          <span className="sr-brand-mark sr-foot-mark">
+            <BrandMark height={18} strokeWidth={6} />
+          </span>
+          {!collapsed && <span className="sr-foot-label">ShadowRoom Music</span>}
+        </div>
+        {!collapsed && <div className="sr-foot-version sr-mono">AGPL-3.0 · v0.0.0</div>}
+      </div>
+    </div>
   );
 }

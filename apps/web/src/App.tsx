@@ -1,123 +1,189 @@
+/**
+ * Shadow Producers — app shell.
+ *
+ * Composition only: the frame owns the columns, the sidebar owns navigation and the plugins, the
+ * conversation owns the transcript and the composer, the dock owns the selected plugin's panel.
+ * Everything the agent core will drive lives behind one `session` shape so wiring Codex later does
+ * not move the UI around.
+ */
 import { useCallback, useEffect, useState } from "react";
-import { BrandMark } from "./components/BrandMark";
 import { Composer } from "./components/Composer";
-import { PlannerPanel } from "./components/PlannerPanel";
-import { Sidebar } from "./components/Sidebar";
+import { Conversation, type Message } from "./components/Conversation";
+import { DockPanel } from "./components/DockPanel";
+import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
+import type { ToolCall } from "./components/ToolCallRow";
 import { fetchServers, type ServerInfo } from "./lib/mcp";
+import { AppFrame } from "./shell/AppFrame";
 
-/** Shown before the bridge answers, so the sidebar always lists the four ShadowRoom servers. */
-const KNOWN_SERVERS: ServerInfo[] = [
-  { id: "converter", label: "rekordbox-serato-bridge", description: "Rekordbox ⇄ Serato 转换", connected: false, tools: [] },
-  { id: "analysis", label: "audio-analysis-dedupe", description: "音频分析与去重", connected: false, tools: [] },
-  { id: "planner", label: "set-planner", description: "Set 编排", connected: false, tools: [] },
-  { id: "generator", label: "shadow-music-generator", description: "生成任务队列", connected: false, tools: [] },
+/** The four ShadowRoom MCP servers, keyed by the ids the bridge reports. */
+const PLUGINS: Array<{ id: string; server: string; label: string; repo: string }> = [
+  { id: "bridge", server: "converter", label: "Rekordbox ⇄ Serato", repo: "rekordbox-serato-bridge" },
+  { id: "analysis", server: "analysis", label: "音频分析去重", repo: "audio-analysis-dedupe" },
+  { id: "planner", server: "planner", label: "Set 编排", repo: "set-planner" },
+  { id: "generator", server: "generator", label: "音乐生成队列", repo: "shadow-music-generator" },
+];
+
+const SEED_SESSIONS: SessionSummary[] = [
+  { id: "s1", title: "Rooftop 909 串场", meta: "128 BPM · 昨天", state: "done" },
+  { id: "s2", title: "周五 set 排 60 分钟", meta: "124 BPM · 2 天前", state: "done" },
 ];
 
 type Bridge = "connecting" | "online" | "offline";
 
-type Request = { id: string; text: string; at: string };
-
-const clock = () =>
-  new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-
 export function App() {
-  const [servers, setServers] = useState<ServerInfo[]>(KNOWN_SERVERS);
+  const [servers, setServers] = useState<ServerInfo[]>([]);
   const [bridge, setBridge] = useState<Bridge>("connecting");
+  const [workspace, setWorkspace] = useState<WorkspaceId>("workbench");
+  const [activePlugin, setActivePlugin] = useState("set-planner");
+  const [dockOpen, setDockOpen] = useState(true);
+  const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [draft, setDraft] = useState("");
-  const [queue, setQueue] = useState<Request[]>([]);
+  const [mode, setMode] = useState("标准");
+  const [sessions, setSessions] = useState<SessionSummary[]>(SEED_SESSIONS);
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(undefined);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [calls] = useState<ToolCall[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     fetchServers()
       .then((list) => {
         if (cancelled) return;
-        setServers(list.length ? list : KNOWN_SERVERS);
+        setServers(list);
         setBridge("online");
       })
       .catch(() => {
-        if (cancelled) return;
-        setBridge("offline");
+        if (!cancelled) setBridge("offline");
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  const plugins: PluginEntry[] = PLUGINS.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    repo: entry.repo,
+    connected: servers.some((server) => server.id === entry.server && server.connected),
+  }));
+  const selected = plugins.find((plugin) => plugin.repo === activePlugin) ?? plugins[2];
+  const active = plugins.find((plugin) => plugin.repo === activePlugin);
+
   const submit = useCallback(() => {
     const text = draft.trim();
-    if (!text) return;
-    setQueue((current) => [{ id: crypto.randomUUID(), text, at: clock() }, ...current]);
+    if (text.length === 0) return;
+    setMessages((current) => [
+      ...current,
+      { id: `u${current.length}`, role: "user", text },
+      {
+        id: `a${current.length}`,
+        role: "assistant",
+        text:
+          "收到了。现在还没有接上智能体内核（下一步是 Codex app-server），所以这条需求先记在会话里。" +
+          "内核接上之后，同一个输入框就会真的拆解任务、调用左侧的插件。",
+      },
+    ]);
+    const title = text.length > 16 ? `${text.slice(0, 16)}…` : text;
+    const id = `s${Date.now()}`;
+    setSessions((current) => [{ id, title, meta: "刚刚", state: "draft" }, ...current]);
+    setActiveSessionId(id);
     setDraft("");
   }, [draft]);
 
-  const planner = servers.find((server) => server.id === "planner");
+  const startSession = useCallback(() => {
+    setMessages([]);
+    setActiveSessionId(undefined);
+    setView("chat");
+  }, []);
 
   return (
-    <div className="sr-app">
-      <Sidebar servers={servers} />
-
-      <main className="sr-main">
-        <header className="sr-topbar">
-          <div className="sr-crumbs">
-            <span>工作台</span>
-            <span aria-hidden="true">/</span>
-            <b>新会话</b>
-          </div>
-          <div className="sr-top-right">
-            <span className={`sr-status sr-status--${bridge}`}>
-              <span className={`sr-dot sr-dot--${bridge === "online" ? "live" : "idle"}`} />
-              <span className="sr-mono">
-                {bridge === "online" ? "MCP 已连接" : bridge === "connecting" ? "连接中…" : "MCP 未连接"}
+    <AppFrame
+      dockCollapsed={!dockOpen}
+      sidebar={({ collapsed, toggleSidebar }) => (
+        <Sidebar
+          collapsed={collapsed}
+          toggleSidebar={toggleSidebar}
+          plugins={plugins}
+          activeWorkspace={workspace}
+          activePlugin={active?.repo}
+          onSelectWorkspace={setWorkspace}
+          onSelectPlugin={(repo) => {
+            setActivePlugin(repo);
+            setDockOpen(true);
+          }}
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onSelectSession={(id) => {
+            setActiveSessionId(id);
+            setMessages((current) => (current.length === 0 ? current : current));
+          }}
+          onNewSession={startSession}
+        />
+      )}
+      main={
+        <Conversation
+          crumb={workspaceLabel(workspace)}
+          title={activeSessionId === undefined ? "新会话" : "会话"}
+          view={view}
+          onViewChange={setView}
+          messages={messages}
+          calls={calls}
+          suggestions={SUGGESTIONS}
+          onSuggestion={(text) => {
+            setDraft(text);
+            setView("chat");
+          }}
+          dockCollapsed={!dockOpen}
+          onToggleDock={() => setDockOpen((open) => !open)}
+          status={
+            <span className="sr-chip sr-chip--status" data-state={bridge}>
+              <span className="sr-dot" data-state={bridge === "online" ? "live" : "idle"} />
+              <span className="sr-chip-label">
+                {bridge === "online" ? "插件已连接" : bridge === "connecting" ? "连接中" : "内核未接入"}
               </span>
             </span>
-            <span className="sr-status sr-status--muted" title="下一步接入 Codex app-server">
-              <span className="sr-mono">内核：未接入</span>
-            </span>
-          </div>
-        </header>
-
-        <div className="sr-home">
-          <section className="sr-greet">
-            <span className="sr-greet-mark">
-              <BrandMark height={72} />
-            </span>
-            <h1>把灵感交给智能体</h1>
-            <p>
-              说清楚你要的东西 —— 智能体会拆解任务、调度 ShadowRoom 的 MCP 工具，并把每一步摊开给你看。
-            </p>
-          </section>
-
-          <Composer value={draft} onChange={setDraft} onSubmit={submit} busy={false} />
-
-          <div className="sr-row2">
-            <section className="sr-panel">
-              <header className="sr-panel-head">
-                <span className="sr-panel-title">会话</span>
-                <span className="sr-panel-hint sr-mono">{queue.length} 条待运行</span>
-              </header>
-              {queue.length ? (
-                <ul className="sr-queue">
-                  {queue.map((item) => (
-                    <li key={item.id}>
-                      <span className="sr-dot sr-dot--queued" />
-                      <span className="sr-queue-body">
-                        <span className="sr-queue-text">{item.text}</span>
-                        <span className="sr-queue-meta sr-mono">{item.at} · 等待内核接入</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="sr-panel-hint">
-                  还没有会话。上面写下第一条需求 —— 现在它会排在这里；等 Codex 内核接上后，同一条会话就会真的跑起来。
-                </p>
-              )}
-            </section>
-
-            <PlannerPanel connected={Boolean(planner?.connected)} />
-          </div>
-        </div>
-      </main>
-    </div>
+          }
+          composer={
+            <Composer
+              variant={messages.length === 0 ? "hero" : "docked"}
+              value={draft}
+              onChange={setDraft}
+              onSubmit={submit}
+              busy={false}
+              mode={mode}
+              onModeChange={setMode}
+              plugin={active}
+            />
+          }
+        />
+      }
+      dock={
+        selected === undefined ? null : (
+          <DockPanel plugin={selected} onClose={() => setDockOpen(false)} />
+        )
+      }
+    />
   );
 }
+
+function workspaceLabel(workspace: WorkspaceId): string {
+  switch (workspace) {
+    case "library":
+      return "曲目库";
+    case "studio":
+      return "Studio";
+    case "dj":
+      return "DJ";
+    case "settings":
+      return "设置";
+    default:
+      return "工作台";
+  }
+}
+
+/** Quick starts for the empty session — they only fill the composer, nothing runs yet. */
+const SUGGESTIONS = [
+  "给这 12 首 tech house 排一套 60 分钟的 set",
+  "把 Rekordbox 的 cue 和颜色转到 Serato",
+  "找出资料库里重复的曲目",
+];

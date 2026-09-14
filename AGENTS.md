@@ -53,6 +53,16 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   works as a reference or alternative, but is a developer preview with breaking changes.
   Reference checkouts live in `~/Documents/ShadowRoom/_reference/{codex,deepseek-harness}`.
 
+- **2026-09-14 — the UI is shaped like DeepSeek Harness, not like a dashboard.** The shell is DSH's
+  three-column frame: sidebar (280 default, 264–420 drag, 56px rail below 1024) | conversation |
+  right dock (≥300, 45% on first open), both borders draggable. The conversation column owns a 76px
+  header (crumbs + view tabs), a scrolling transcript, and a composer card (22px capsule, mode chips,
+  34px send circle) that is centred as the hero in an empty session and sticky at the bottom once a
+  session runs. The sidebar lists workspaces — 工作台 / 曲目库 / Studio / DJ / 设置 — and then the
+  **plugins** (the four MCP servers); the dock shows the selected plugin's panel, it is not a server
+  list. Colours, marks and copy are ours; only the layout, geometry and interaction patterns are
+  taken from DSH. `apps/web/src/shell/AppFrame.tsx` holds the frame, `styles/*.css` the geometry.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

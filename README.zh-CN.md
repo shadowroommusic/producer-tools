@@ -9,9 +9,9 @@ producers.
 
 ## 当前状态
 
-进行中。Web UI 外壳已经能跑起来：工作台布局、输入框、会话列表和第一个工具面板（`set-planner`），
-全部基于我们自己的 `--sr-*` token —— 默认暗色，需要时才切浅色。品牌文件直接取自
-[shadowroom.cn](https://shadowroom.cn)（见 `assets/logo/README.md`）。
+进行中。Web UI 外壳已经能跑起来，布局与交互参考 DeepSeek Harness：三栏框架（侧栏放工作区和插件、
+中间是会话与输入框、右侧是当前插件的面板），全部基于我们自己的 `--sr-*` token —— 默认暗色，
+需要时才切浅色。品牌文件直接取自 [shadowroom.cn](https://shadowroom.cn)（见 `assets/logo/README.md`）。
 
 还没做的，按顺序是：让 UI 真正调起四个 MCP 服务器的 bridge，以及把输入框里的需求变成一次真实会话的
 Codex 内核。UI／前端参考写在 [docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek Harness）。
