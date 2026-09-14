@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 import { AnalysisPanel } from "./AnalysisPanel";
+import { GeneratorPanel } from "./GeneratorPanel";
 import { IconCollapse, IconExpand } from "./icons";
 import { SetPlannerPanel } from "./SetPlannerPanel";
 import type { PluginEntry } from "./Sidebar";
@@ -15,10 +16,6 @@ const PLACEHOLDER: Record<string, { body: string; bullets: string[] }> = {
   "rekordbox-serato-bridge": {
     body: "把 Rekordbox 的播放列表、cue / loop / 颜色转换到 Serato。",
     bullets: ["预览报告（dry-run）", "逐曲目对照", "颜色与 loop 映射"],
-  },
-  "shadow-music-generator": {
-    body: "生成任务队列：提示词、歌词、参数和许可证备注。",
-    bullets: ["任务队列与阶段", "产物与版本", "许可证记录"],
   },
 };
 
@@ -76,6 +73,13 @@ export function DockPanel({
           />
         ) : plugin.repo === "audio-analysis-dedupe" ? (
           <AnalysisPanel
+            connected={plugin.connected}
+            tools={plugin.tools}
+            onBegin={onCallBegin}
+            onEnd={onCallEnd}
+          />
+        ) : plugin.repo === "shadow-music-generator" ? (
+          <GeneratorPanel
             connected={plugin.connected}
             tools={plugin.tools}
             onBegin={onCallBegin}

@@ -775,6 +775,84 @@
   text-align: right;
 }
 
+.sr-textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-primary);
+  font-family: var(--sr-font-sans);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-13);
+  outline: none;
+  resize: vertical;
+  transition: border-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-textarea--short {
+  min-height: 68px;
+}
+
+.sr-textarea::placeholder {
+  color: var(--sr-label-caption);
+}
+
+.sr-textarea:focus {
+  border-color: var(--sr-accent);
+}
+
+/* Status pill: one shape, four tones (queued / running / done / failed). */
+.sr-pill {
+  flex: none;
+  padding: 3px 9px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-pill);
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.sr-pill[data-tone="accent"] {
+  border-color: transparent;
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
+}
+
+.sr-pill[data-tone="live"] {
+  border-color: color-mix(in srgb, var(--sr-live) 45%, transparent);
+  color: var(--sr-live);
+}
+
+.sr-pill[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--sr-danger) 45%, transparent);
+  color: var(--sr-danger);
+}
+
+.sr-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border: none;
+  font-size: var(--sr-text-13);
+}
+
+.sr-stage-name {
+  color: var(--sr-label-primary);
+  font-weight: 500;
+}
+
+.sr-stage-detail {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sr-plugin-options {
   display: flex;
   flex-wrap: wrap;

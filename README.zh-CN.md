@@ -24,8 +24,16 @@ pnpm serve   # MCP bridge：拉起四个 ShadowRoom MCP 服务器，在 127.0.0.
 pnpm dev     # Web UI，http://localhost:5173（/api 代理到 bridge）
 ```
 
-bridge 起着的时候，侧栏里的插件显示为已连接，`set-planner` 面板跑的是真实任务：点 **运行 plan_set**，
-时间轴、衔接和小节信息从插件返回，这一次调用同时记进 **轨迹** 标签页。
+bridge 起着的时候，侧栏里的插件显示为已连接，三个面板跑的都是真实任务，每次调用同时记进 **轨迹**
+标签页：
+
+| 面板 | 做什么 |
+| --- | --- |
+| `set-planner` | 给有序 set 计时：cue 段长、衔接、警告、总时长 |
+| `audio-analysis-dedupe` | 单文件分析，或整个文件夹查重（只读，不删文件） |
+| `shadow-music-generator` | 登记生成任务（dry-run，不跑模型），并能读回任务 |
+
+转换面板（`rekordbox-serato-bridge`）是下一步。
 
 bridge 默认到 `~/Documents/ShadowRoom` 找插件；路径不同就设 `SHADOWROOM_HOME`（另外还有
 `SHADOWROOM_PYTHON`、`SHADOWROOM_BRIDGE_PORT`、`SHADOWROOM_CALL_TIMEOUT_MS`）。细节见
@@ -45,8 +53,8 @@ bridge 默认到 `~/Documents/ShadowRoom` 找插件；路径不同就设 `SHADOW
 ## 计划
 
 1. UI 层（按 `docs/ui-reference.md` 的参考）。← *进行中*
-2. 接上 bridge（`pnpm serve`），让各个面板能真的跑任务。← *bridge 和第一个面板（`set-planner`）
-   已经能跑，另外三个面板接着做*
+2. 接上 bridge（`pnpm serve`），让各个面板能真的跑任务。← *bridge 已经能跑，四个面板里接好三个，
+   `rekordbox-serato-bridge` 是下一步*
 3. 接入 Codex harness（内置 `codex` 二进制 + `app-server` 协议），并把四个 MCP 服务器注册进去。
 4. 桌面外壳（`apps/desktop`）。
 

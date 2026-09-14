@@ -27,9 +27,16 @@ pnpm serve   # MCP bridge: spawns the four ShadowRoom MCP servers and serves /ap
 pnpm dev     # the web UI on http://localhost:5173 (proxies /api to the bridge)
 ```
 
-With the bridge running, the plugins in the sidebar show as connected and the `set-planner` panel
-runs real jobs: press **运行 plan_set** and the timeline, overlaps and warnings come back from the
-plugin, and the call is recorded under the **轨迹** tab.
+With the bridge running, the plugins in the sidebar show as connected and three panels run real
+jobs — every call is recorded under the **轨迹** tab:
+
+| Panel | What it does |
+| --- | --- |
+| `set-planner` | times an ordered set: cue segments, overlaps, warnings, total runtime |
+| `audio-analysis-dedupe` | analysis of one file, or a duplicate scan of a folder (read-only) |
+| `shadow-music-generator` | queues a generation job (dry-run — no model is executed) and reads it back |
+
+The conversion panel (`rekordbox-serato-bridge`) is next.
 
 The bridge finds the plugin checkouts under `~/Documents/ShadowRoom` by default; set
 `SHADOWROOM_HOME` if yours live elsewhere. `SHADOWROOM_PYTHON`, `SHADOWROOM_BRIDGE_PORT` and
@@ -50,8 +57,8 @@ keeps their settings and gives DJs one place to work.
 ## Plan
 
 1. UI layer, following the reference in `docs/ui-reference.md`. ← *in progress*
-2. Bridge the four MCP servers (`pnpm serve`) so the panels run real jobs. ← *the bridge and the
-   first panel (`set-planner`) run today; the other three panels are next*
+2. Bridge the four MCP servers (`pnpm serve`) so the panels run real jobs. ← *the bridge runs today,
+   with three of the four panels wired; `rekordbox-serato-bridge` is next*
 3. Wire the Codex harness (bundled `codex` binary + `app-server` protocol) and register the four
    MCP servers with it.
 4. Desktop shell (`apps/desktop`).
