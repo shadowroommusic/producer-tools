@@ -17,9 +17,22 @@ export type StudioClip = {
   source?: string;
   /** Notes detected from a hummed take, drawn as a mini piano roll inside the clip. */
   notes?: StudioNote[];
+  /** Tempo/key the importer detected, shown as a badge on the clip. */
+  analysis?: StudioAnalysis;
+  /** Where a separation job put this clip's stems — marks the clip as already split. */
+  stemsDir?: string;
 };
 
 export type StudioNote = { start_ms: number; end_ms: number; midi: number; name?: string };
+
+/**
+ * What the analysis plugin heard in one file: tempo and key, each with the confidence it had.
+ *
+ * The studio shows it on the clip (`128 BPM · 8A`) and, when the project was still empty, adopts the
+ * tempo as the project's own — the difference between "a file sitting in a timeline" and "a project
+ * that knows what it is".
+ */
+export type StudioAnalysis = { bpm?: number; key?: string; camelot?: string; confidence?: number };
 
 /**
  * One named stretch of the song (`intro` / `drop` / …), as the arrangement tool reported it.
@@ -94,6 +107,52 @@ export function clipFromNotes(notes: StudioNote[], bars: number, start: number, 
 
 export function newTrack(name: string): StudioTrack {
   return { id: newId("track"), name, muted: false, soloed: false, volume: 80, clips: [] };
+}
+
+/**
+ * The track name an imported file deserves: its own name without the extension.
+ * @param path - the file that was imported (a POSIX path, copied or referenced).
+ * @returns the stem of the file name, e.g. `Artist - Track (Extended Mix)`.
+ */
+export function trackNameFromImport(path: string): string {
+  const file = path.split("/").filter(Boolean).pop() ?? path;
+  const stem = file.replace(/\.[^.]+$/, "").trim();
+  return stem === "" ? file : stem;
+}
+
+/**
+ * One imported file's track.
+ *
+ * Every import gets its own track — asking which existing track to drop a song into was the wrong
+ * question: the file *is* a part. A name that is already taken gets a ` 2` so two takes of the same
+ * track never merge silently.
+ * @param path - where the file ended up.
+ * @param existing - track names already in the project.
+ * @returns a new track holding one clip, one bar long until the real duration is known.
+ */
+export function trackFromImport(path: string, existing: string[] = []): StudioTrack {
+  const base = trackNameFromImport(path);
+  let name = base;
+  for (let index = 2; existing.includes(name) && index < 1000; index += 1) {
+    name = `${base} ${index}`;
+  }
+  return { ...newTrack(name), clips: [newClip(trackNameFromImport(path), 0, 4, path)] };
+}
+
+/**
+ * The badge drawn on an analysed clip: `128 BPM · 8A`, `128 BPM`, `8A`, or nothing.
+ * @param analysis - what the analysis tools reported.
+ * @returns the label, or an empty string when there is nothing to say.
+ */
+export function analysisBadge(analysis: StudioAnalysis | undefined): string {
+  if (analysis === undefined) return "";
+  const parts: string[] = [];
+  if (typeof analysis.bpm === "number" && Number.isFinite(analysis.bpm)) {
+    parts.push(`${Math.round(analysis.bpm)} BPM`);
+  }
+  const key = analysis.camelot ?? analysis.key;
+  if (typeof key === "string" && key !== "") parts.push(key);
+  return parts.join(" · ");
 }
 
 /** A project that already looks like a DAW: three labelled tracks, empty clips, 16 bars. */

@@ -775,6 +775,30 @@
   background: var(--sr-bg-base);
 }
 
+/* The file picker is a real input, but nobody should ever see it: the transport button opens it. */
+.sr-import-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Drag a file anywhere over the studio and this says what will happen. */
+.sr-studio-drop {
+  position: absolute;
+  inset: 8px;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--sr-accent);
+  border-radius: var(--sr-radius-md);
+  background: color-mix(in srgb, var(--sr-bg-base) 78%, transparent);
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14);
+  pointer-events: none;
+}
+
 .sr-studio-transport {
   display: flex;
   flex: none;
@@ -885,6 +909,22 @@
   padding: 8px 16px;
   border-bottom: var(--sr-shell-border);
   background: var(--sr-surface);
+}
+
+/* The path is the long field in the import row; every other control keeps its size. */
+.sr-import-path {
+  flex: 1 1 320px;
+  min-width: 220px;
+  font-family: var(--sr-font-mono);
+}
+
+/* What the importer heard: `128 BPM · 8A`, and 已分轨 once the clip has stems. */
+.sr-clip-badge {
+  color: var(--sr-label-secondary);
+}
+
+.sr-clip-badge--stems {
+  color: var(--sr-accent);
 }
 
 /* Export row: labels keep their line, the path takes the slack, nothing wraps mid-word. */
@@ -1219,6 +1259,10 @@
 .sr-clip-meta {
   color: var(--sr-label-caption);
   font-size: 10px;
+  /* `2 小节 · 120 BPM · 7B` on one line: a narrow clip truncates the badge instead of wrapping it */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Mini piano roll inside a clip that came from a hummed take. */

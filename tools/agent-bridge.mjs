@@ -36,11 +36,57 @@ const AGENT_CWD = process.env.SHADOWROOM_AGENT_CWD ?? WORKSPACES;
 const SANDBOX = process.env.SHADOWROOM_AGENT_SANDBOX ?? "workspace-write";
 const APPROVAL = process.env.SHADOWROOM_AGENT_APPROVAL ?? "on-request";
 const PYTHON = process.env.SHADOWROOM_PYTHON ?? "python3";
+/** A plugin's own virtualenv, kept outside the checkouts: <WORKSPACES>/_venvs/<repo>. */
+const VENVS = join(WORKSPACES, "_venvs");
+/** Shared binaries (the imageio-ffmpeg symlink) that every plugin finds on PATH. */
+const BIN = join(WORKSPACES, "bin");
+
+/**
+ * Which interpreter runs one plugin — the same rule as `tools/mcp-bridge.mjs`, so a plugin behaves
+ * identically whether the panel or the agent calls it. Without this the separation model and the
+ * downloader would have to share one interpreter with the four light plugins.
+ */
+function pythonFor(entry) {
+  const override = process.env[`SHADOWROOM_PYTHON_${String(entry.id).toUpperCase()}`];
+  if (override !== undefined && override !== "") return override;
+  const candidates = [join(VENVS, entry.repo, "bin", "python"), join(resolve(WORKSPACES, entry.repo), ".venv", "bin", "python")];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return PYTHON;
+}
+
+/** Environment for a plugin process: the shared `bin` first on PATH, plus unbuffered Python. */
+function pluginEnv() {
+  return {
+    ...process.env,
+    PATH: `${BIN}:${process.env.PATH ?? ""}`,
+    PYTHONUNBUFFERED: "1",
+    PYTHONIOENCODING: "utf-8",
+  };
+}
 const CODEX =
   process.env.SHADOWROOM_CODEX ?? "/Applications/ChatGPT.app/Contents/Resources/codex";
 const INIT_TIMEOUT_MS = Number(process.env.SHADOWROOM_AGENT_INIT_TIMEOUT_MS ?? 60_000);
 /** Where audio the browser records (voice turns, hummed melodies) is written. */
 const RECORDINGS_DIR = process.env.SHADOWROOM_RECORDINGS_DIR ?? join(WORKSPACES, "recordings");
+/** Where files the user drops into the studio are copied. */
+const IMPORTS_DIR = process.env.SHADOWROOM_IMPORTS_DIR ?? join(WORKSPACES, "imports");
+/** Uploads are read into memory as base64, so keep a ceiling: 512 MB of audio is a long DJ set. */
+const MAX_IMPORT_BYTES = Number(process.env.SHADOWROOM_IMPORT_MAX_BYTES ?? 512 * 1024 * 1024);
+
+/** `track.wav` → `track-2.wav` when the name is taken, so an import never overwrites a file. */
+function uniqueName(directory, name) {
+  if (!existsSync(join(directory, name))) return name;
+  const dot = name.lastIndexOf(".");
+  const stem = dot === -1 ? name : name.slice(0, dot);
+  const extension = dot === -1 ? "" : name.slice(dot);
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${stem}-${index}${extension}`;
+    if (!existsSync(join(directory, candidate))) return candidate;
+  }
+  return `${stem}-${Date.now()}${extension}`;
+}
 
 /** Extensions the studio may stream into the browser (audio + MIDI, nothing executable). */
 const STREAMABLE = new Map([
@@ -63,6 +109,8 @@ const PLUGIN_REPOS = [
   "audio-analysis-dedupe",
   "set-planner",
   "shadow-music-generator",
+  "stem-splitter",
+  "ShadowMusicGrabber",
 ];
 
 /**
@@ -94,9 +142,10 @@ function mcpServers() {
     const dir = resolve(WORKSPACES, repo);
     if (!existsSync(join(dir, "mcp_server.py"))) continue;
     servers[repo] = {
-      command: PYTHON,
+      command: pythonFor({ id: repo, repo }),
       args: ["mcp_server.py"],
       cwd: dir,
+      env: pluginEnv(),
       // These four are first-party tools: their calls run without a prompt, while everything else
       // stays under the sandbox/approval policy above.
       default_tools_approval_mode: "approve",
@@ -514,6 +563,96 @@ const http = createServer(async (request, response) => {
       writeFileSync(target, Buffer.from(data, "base64"));
       console.log(`[agent] audio saved: ${target}`);
       json(response, 200, { path: target, bytes: Buffer.byteLength(data, "base64") });
+      return;
+    }
+
+    /**
+     * Import: a file the user dropped or picked in the browser, copied into the workspace.
+     *
+     * A browser cannot hand a local path to the audio server (the File object has no path), so the
+     * bytes come up here and land in `imports/<date>/`; from then on the file behaves like anything
+     * else in the project — it streams through /api/agent/file and exports go through the bridge.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/import") {
+      const body = await readJsonBody(request, MAX_IMPORT_BYTES);
+      const data = typeof body.data === "string" ? body.data : "";
+      if (data === "") {
+        json(response, 400, { error: "缺少文件内容（data）" });
+        return;
+      }
+      const rawName = typeof body.name === "string" && body.name.trim() !== "" ? body.name.trim() : "";
+      if (rawName === "") {
+        json(response, 400, { error: "缺少文件名（name）" });
+        return;
+      }
+      const extension = rawName.slice(rawName.lastIndexOf(".")).toLowerCase();
+      if (!STREAMABLE.has(extension)) {
+        json(response, 415, { error: `不支持的文件类型：${extension || rawName}` });
+        return;
+      }
+      const day = new Date().toISOString().slice(0, 10);
+      const directory = join(IMPORTS_DIR, day);
+      mkdirSync(directory, { recursive: true });
+      const safeName = uniqueName(directory, rawName.replace(/[^\w.\- ()[\]]+/g, "_"));
+      const target = join(directory, safeName);
+      const buffer = Buffer.from(data, "base64");
+      writeFileSync(target, buffer);
+      console.log(`[agent] imported ${buffer.length} bytes → ${target}`);
+      json(response, 200, { path: target, name: safeName, bytes: buffer.length });
+      return;
+    }
+
+    /**
+     * A native "choose file…" dialog, for people who would rather reference a file in place (a DJ
+     * library, a sample folder) than have it copied. macOS only; the UI falls back to the drag/drop
+     * flow when this answers with an error.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/pick") {
+      if (process.platform !== "darwin") {
+        json(response, 501, { error: "原生文件对话框目前只在 macOS 上可用；拖拽或文件选择器一样可以导入" });
+        return;
+      }
+      const body = await readJsonBody(request, 64 * 1024);
+      const multiple = body.multiple === true;
+      const prompt = multiple ? "选择音频文件（可多选）" : "选择音频文件";
+      const script = [
+        `set theFiles to choose file with prompt "${prompt}" of type {"public.audio", "public.midi-audio"}${multiple ? " with multiple selections allowed" : ""}`,
+        "if class of theFiles is not list then set theFiles to {theFiles}",
+        "set thePaths to {}",
+        "repeat with theFile in theFiles",
+        "set end of thePaths to POSIX path of theFile",
+        "end repeat",
+        "set AppleScript's text item delimiters to linefeed",
+        "return thePaths as text",
+      ].join("\n");
+      const picked = await new Promise((resolve) => {
+        const child = spawn("/usr/bin/osascript", ["-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        let err = "";
+        child.stdout.on("data", (chunk) => {
+          out += String(chunk);
+        });
+        child.stderr.on("data", (chunk) => {
+          err += String(chunk);
+        });
+        child.on("error", (cause) => resolve({ out: "", err: cause.message, code: -1 }));
+        child.on("close", (code) => resolve({ out, err, code }));
+      });
+      // -128 is "the user cancelled": not an error, and not worth a red row in the UI.
+      if (picked.code !== 0) {
+        const cancelled = String(picked.err).includes("-128");
+        if (cancelled) {
+          json(response, 200, { paths: [] });
+        } else {
+          json(response, 500, { error: String(picked.err).trim() || "文件对话框打不开（试试拖拽或文件选择器）" });
+        }
+        return;
+      }
+      const paths = String(picked.out)
+        .split("\n")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== "");
+      json(response, 200, { paths });
       return;
     }
 

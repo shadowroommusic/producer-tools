@@ -14,11 +14,12 @@
  * Configuration (all optional):
  *   SHADOWROOM_HOME              directory holding the plugin checkouts (default ~/Documents/ShadowRoom)
  *   SHADOWROOM_PYTHON            interpreter used to run mcp_server.py (default python3)
+ *   SHADOWROOM_PYTHON_<ID>       per-plugin override, e.g. SHADOWROOM_PYTHON_SPLITTER
  *   SHADOWROOM_BRIDGE_PORT       default 8787
  *   SHADOWROOM_CALL_TIMEOUT_MS   default 120000 (analysis and conversion jobs are slow)
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -28,6 +29,46 @@ const HOST = process.env.SHADOWROOM_BRIDGE_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.SHADOWROOM_BRIDGE_PORT ?? 8787);
 const WORKSPACES = process.env.SHADOWROOM_HOME ?? join(homedir(), "Documents", "ShadowRoom");
 const PYTHON = process.env.SHADOWROOM_PYTHON ?? "python3";
+/** Where a plugin's own virtualenv lives; kept outside the checkouts so no repo carries one. */
+const VENVS = join(WORKSPACES, "_venvs");
+/** Shared binaries (the ffmpeg symlink) that every plugin can find on PATH. */
+const BIN = join(WORKSPACES, "bin");
+
+/**
+ * Which interpreter runs one plugin.
+ *
+ * A plugin with heavy dependencies (a separation model, a downloader) must not force those
+ * dependencies on the other four, so each one may bring its own virtualenv:
+ * `SHADOWROOM_PYTHON_<ID>` → `<WORKSPACES>/_venvs/<repo>` → `<repo>/.venv` → `SHADOWROOM_PYTHON`
+ * → `python3`. Nothing has to be configured for the plugins that are happy with the system Python.
+ */
+function pythonFor(entry) {
+  const override = process.env[`SHADOWROOM_PYTHON_${entry.id.toUpperCase()}`];
+  if (override !== undefined && override !== "") return override;
+  const candidates = [join(VENVS, entry.repo, "bin", "python"), join(resolve(WORKSPACES, entry.repo), ".venv", "bin", "python")];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return PYTHON;
+}
+
+/**
+ * The environment every plugin starts with: the shared `bin` first on PATH, so `ffmpeg` (from
+ * imageio-ffmpeg) is found by the decoder in any of them.
+ */
+function pluginEnv() {
+  try {
+    mkdirSync(BIN, { recursive: true });
+  } catch {
+    /* read-only home: plugins simply keep the inherited PATH */
+  }
+  return {
+    ...process.env,
+    PATH: `${BIN}:${process.env.PATH ?? ""}`,
+    PYTHONUNBUFFERED: "1",
+    PYTHONIOENCODING: "utf-8",
+  };
+}
 const PROTOCOL_VERSION = "2024-11-05";
 const HANDSHAKE_TIMEOUT_MS = Number(process.env.SHADOWROOM_HANDSHAKE_TIMEOUT_MS ?? 8000);
 const CALL_TIMEOUT_MS = Number(process.env.SHADOWROOM_CALL_TIMEOUT_MS ?? 120_000);
@@ -59,6 +100,18 @@ const REGISTRY = [
     label: "音乐生成队列",
     description: "Queue for local AI music-generation pipelines",
   },
+  {
+    id: "splitter",
+    repo: "stem-splitter",
+    label: "人声分轨",
+    description: "Separate a finished song into vocals / drums / bass / other (Demucs or a remote command)",
+  },
+  {
+    id: "grabber",
+    repo: "ShadowMusicGrabber",
+    label: "音乐抓取转码",
+    description: "Probe, decrypt (NCM/QMC), transcode and download audio",
+  },
 ];
 
 /**
@@ -71,6 +124,8 @@ class McpServer {
   constructor(entry) {
     this.entry = entry;
     this.dir = resolve(WORKSPACES, entry.repo);
+    /** The interpreter this plugin runs on (its own venv when it has one). */
+    this.python = pythonFor(entry);
     this.child = null;
     this.pending = new Map();
     this.nextId = 1;
@@ -104,17 +159,18 @@ class McpServer {
     this.status = "starting";
     this.error = undefined;
     this.stderr = [];
+    this.python = pythonFor(this.entry);
 
-    const child = spawn(PYTHON, ["mcp_server.py"], {
+    const child = spawn(this.python, ["mcp_server.py"], {
       cwd: this.dir,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
+      env: pluginEnv(),
     });
     this.child = child;
 
     child.on("error", (cause) => {
       this.status = "error";
-      this.error = `${PYTHON}: ${cause.message}`;
+      this.error = `${this.python}: ${cause.message}`;
       this.#failPending(new Error(this.error));
     });
     child.on("exit", (code, signal) => {
@@ -221,6 +277,8 @@ class McpServer {
       description: this.entry.description,
       connected: this.connected,
       status: this.status,
+      /** Which interpreter this plugin runs on (its own venv shows up here). */
+      python: this.python,
       tools: this.tools.map((tool) => ({ name: tool.name, description: tool.description })),
       ...(this.error === undefined ? {} : { error: this.error }),
     };

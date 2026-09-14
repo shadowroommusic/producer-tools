@@ -9,7 +9,7 @@
  * Clips with an audio file behind them are *played*: one `<audio>` per clip, started and stopped as
  * the playhead crosses its edges, volume following the track's fader and mute/solo.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import type { NotePlayer, NoteVoice } from "../lib/synth";
@@ -19,6 +19,9 @@ import {
   isPlayable,
   newClip,
   newTrack,
+  trackFromImport,
+  analysisBadge,
+  type StudioAnalysis,
   type StudioClip,
   type StudioNote,
   type StudioProject,
@@ -29,6 +32,9 @@ import { peaksFor } from "../lib/waveform";
 
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
+
+/** One container the generator can write, as `list_export_formats` reports it. */
+export type ExportFormat = { id: string; extension: string; lossy: boolean; available: boolean; via: string };
 
 /** Where an export lands before the user edits the field. */
 function defaultExportPath(projectName: string, kind: "mix" | "stems" | "midi", container: string): string {
@@ -50,6 +56,10 @@ export function StudioPage({
   onClose,
   onExport,
   onConvertToMidi,
+  onUploadImport,
+  onPickImport,
+  onAnalyze,
+  onExportFormats,
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
@@ -66,6 +76,14 @@ export function StudioPage({
   onExport?: (spec: Record<string, unknown>) => Promise<string | null>;
   /** Notate one audio clip (the melody tool); resolves with its notes. */
   onConvertToMidi?: (path: string) => Promise<{ midi_path?: string; notes?: StudioNote[] } | null>;
+  /** Copy dropped/picked files into the workspace; resolves with where they landed. */
+  onUploadImport?: (files: File[]) => Promise<string[]>;
+  /** A native "choose file…" dialog on the machine; resolves with paths to reference in place. */
+  onPickImport?: () => Promise<string[]>;
+  /** Tempo/key detection for one file (the analysis plugin); `null` when it could not listen. */
+  onAnalyze?: (path: string, context: { wasEmpty: boolean }) => Promise<StudioAnalysis | null>;
+  /** Which export containers this machine can actually write, from the generator plugin. */
+  onExportFormats?: () => Promise<ExportFormat[]>;
 }) {
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
@@ -73,12 +91,19 @@ export function StudioPage({
   const [selected, setSelected] = useState<{ trackId: string; clipId: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importPath, setImportPath] = useState("");
-  const [importTo, setImportTo] = useState<string | undefined>(undefined);
+  const [importing, setImporting] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const filePicker = useRef<HTMLInputElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportKind, setExportKind] = useState<"mix" | "stems" | "midi">("mix");
   const [sampleRate, setSampleRate] = useState(44100);
   const [bitDepth, setBitDepth] = useState(16);
-  const [container, setContainer] = useState<"wav" | "aiff" | "m4a">("wav");
+  const [container, setContainer] = useState<string>("wav");
+  /** What this machine can write. WAV/AIFF until the plugin answers. */
+  const [formats, setFormats] = useState<ExportFormat[]>([
+    { id: "wav", extension: "wav", lossy: false, available: true, via: "built-in" },
+    { id: "aiff", extension: "aiff", lossy: false, available: true, via: "built-in" },
+  ]);
   const [outPath, setOutPath] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<string | null>(null);
@@ -331,43 +356,123 @@ export function StudioPage({
     setSelected(null);
   };
 
-  /** Import a file from disk onto a track: bars come from its real duration once metadata lands. */
-  const importClip = (path: string, trackId: string) => {
-    const name = path.split("/").filter(Boolean).pop() ?? path;
-    const clip = newClip(name, 0, 8, path);
-    updateTrack(trackId, (track) => ({ ...track, clips: [...track.clips, clip] }));
-    setSelected({ trackId, clipId: clip.id });
-    if (isPlayable(path)) {
-      // The real length comes from the file once its metadata lands — read the tempo from the
-      // *current* project inside the updater, never from this render's snapshot.
-      const probe = new Audio(fileUrl(path));
-      probe.addEventListener("loadedmetadata", () => {
-        if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
-        onChange((current) => {
-          const length = Math.max(1, Math.ceil(probe.duration * barsPerSecond(current.bpm)));
-          return {
-            ...current,
-            tracks: current.tracks.map((track) =>
-              track.id === trackId
-                ? { ...track, clips: track.clips.map((entry) => (entry.id === clip.id ? { ...entry, length } : entry)) }
-                : track,
-            ),
-          };
-        });
+  /**
+   * Import files: **one new track per file**, named after it, with the clip's real length.
+   *
+   * The import used to ask which existing track to drop a song into, which is the wrong question —
+   * a song is a part, not a clip on the bass track. The file's tempo and key are analysed
+   * afterwards; when the project was still empty, the detected tempo becomes the project's own.
+   */
+  const importFiles = useCallback(
+    async (paths: string[]) => {
+      const clean = paths.map((path) => path.trim()).filter((path) => path !== "");
+      if (clean.length === 0) return;
+      const wasEmpty = project.tracks.every((track) => track.clips.length === 0);
+      const created: Array<{ trackId: string; clipId: string }> = [];
+      onChange((current) => {
+        let tracks = [...current.tracks];
+        const names = tracks.map((track) => track.name);
+        for (const path of clean) {
+          const track = trackFromImport(path, names);
+          names.push(track.name);
+          tracks = [...tracks, track];
+          created.push({ trackId: track.id, clipId: track.clips[0].id });
+        }
+        return { ...current, tracks };
       });
-    }
-    setImportOpen(false);
-    setImportPath("");
-  };
+      setSelected(created.at(-1) ?? null);
+      setImportOpen(false);
+      setImportPath("");
+
+      for (const [index, path] of clean.entries()) {
+        // 1. the real duration decides the clip's length on the bar grid
+        if (isPlayable(path)) {
+          const probe = new Audio(fileUrl(path));
+          probe.addEventListener("loadedmetadata", () => {
+            if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
+            onChange((current) => ({
+              ...current,
+              tracks: current.tracks.map((track) => ({
+                ...track,
+                clips: track.clips.map((entry) =>
+                  entry.source === path
+                    ? { ...entry, length: Math.max(1, Math.ceil(probe.duration * barsPerSecond(current.bpm))) }
+                    : entry,
+                ),
+              })),
+            }));
+          });
+        }
+        // 2. what is it? (tempo + key) — the App owns the project tempo, so the answer goes up
+        if (onAnalyze === undefined) continue;
+        const analysis = await onAnalyze(path, { wasEmpty: wasEmpty && index === 0 });
+        if (analysis === null) continue;
+        onChange((current) => ({
+          ...current,
+          tracks: current.tracks.map((track) => ({
+            ...track,
+            clips: track.clips.map((entry) =>
+              entry.source === path ? { ...entry, analysis: { ...entry.analysis, ...analysis } } : entry,
+            ),
+          })),
+        }));
+      }
+    },
+    [onAnalyze, onChange, project.tracks],
+  );
+
+  /** Copy the files the browser hands us (drop or picker) into the workspace, then import them. */
+  const uploadAndImport = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0 || onUploadImport === undefined) return;
+      setImporting(true);
+      const paths = await onUploadImport(files);
+      setImporting(false);
+      await importFiles(paths);
+    },
+    [importFiles, onUploadImport],
+  );
+
+  /** Reference files in place through the machine's own file dialog. */
+  const pickAndImport = useCallback(async () => {
+    if (onPickImport === undefined) return;
+    setImporting(true);
+    const paths = await onPickImport();
+    setImporting(false);
+    await importFiles(paths);
+  }, [importFiles, onPickImport]);
 
   const anySoloTrack = project.tracks.find((track) => track.soloed);
   const positionLabel = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
   const grid = useMemo(() => Array.from({ length: project.bars }, (_, bar) => bar), [project.bars]);
-  /** Import target: whatever the picker says, falling back to the selection then the first track. */
-  const importTarget = importTo ?? selected?.trackId ?? project.tracks[0]?.id;
 
   return (
-    <div className="sr-studio">
+    <div
+      className="sr-studio"
+      data-dropping={dragging || undefined}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        // only when the pointer really left the page, not when it crossed a child
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        setDragging(false);
+        void uploadAndImport(Array.from(event.dataTransfer.files));
+      }}
+    >
+      {dragging && (
+        <div className="sr-studio-drop" aria-hidden="true">
+          <span>松手即导入 —— 每个文件会新建一条音轨</span>
+        </div>
+      )}
       <header className="sr-studio-transport">
         <button type="button" className="sr-btn sr-studio-back" onClick={onClose} title="回到工程列表">
           ‹ 工程
@@ -462,12 +567,21 @@ export function StudioPage({
           <button
             type="button"
             className="sr-btn sr-studio-import"
-            onClick={() => {
-              setImportTo(importTarget);
-              setImportOpen((open) => !open);
-            }}
+            onClick={() => filePicker.current?.click()}
+            title="选择文件（可多选）——也可以直接把文件拖进窗口"
           >
-            导入音频
+            {importing ? "导入中…" : "导入音频"}
+          </button>
+          {/* The other two ways in: reference a path, or the machine's own file dialog. */}
+          <button
+            type="button"
+            className="sr-btn sr-studio-import-more"
+            aria-label="更多导入方式"
+            aria-expanded={importOpen}
+            title="更多导入方式：粘贴路径 / 从磁盘选取"
+            onClick={() => setImportOpen((open) => !open)}
+          >
+            ⋯
           </button>
           <button
             type="button"
@@ -475,6 +589,15 @@ export function StudioPage({
             onClick={() => {
               setOutPath((current) => current || defaultExportPath(project.name, exportKind, container));
               setExportOpen((open) => !open);
+              // What the machine can write is the plugin's answer, not our guess: ask each time the
+              // bar opens (cheap) so a freshly installed encoder shows up without a reload.
+              if (onExportFormats !== undefined) {
+                void onExportFormats()
+                  .then((list) => {
+                    if (list.length > 0) setFormats(list);
+                  })
+                  .catch(() => undefined);
+              }
             }}
           >
             导出音频
@@ -517,8 +640,8 @@ export function StudioPage({
             className="sr-input sr-input--num"
             value={bitDepth}
             aria-label="位深"
-            /* AAC has no bit depth: it is refused by the encoder, so the field goes quiet. */
-            disabled={exportKind === "midi" || container === "m4a"}
+            /* A lossy codec has no bit depth: it is refused by the encoder, so the field goes quiet. */
+            disabled={exportKind === "midi" || (formats.find((format) => format.id === container)?.lossy ?? false)}
             onChange={(event) => setBitDepth(Number(event.target.value))}
           >
             <option value={16}>16-bit</option>
@@ -531,16 +654,19 @@ export function StudioPage({
             aria-label="文件格式"
             disabled={exportKind === "midi"}
             onChange={(event) => {
-              const next = event.target.value as "wav" | "aiff" | "m4a";
+              const next = event.target.value;
               setContainer(next);
-              setOutPath((current) =>
-                current.replace(/\.(wav|aiff|m4a)$/i, next === "aiff" ? ".aiff" : next === "m4a" ? ".m4a" : ".wav"),
-              );
+              const extension = formats.find((format) => format.id === next)?.extension ?? next;
+              setOutPath((current) => current.replace(/\.[a-z0-9]+$/i, `.${extension}`));
             }}
           >
-            <option value="wav">WAV</option>
-            <option value="aiff">AIFF</option>
-            <option value="m4a">M4A (AAC)</option>
+            {formats.map((format) => (
+              <option key={format.id} value={format.id} disabled={!format.available}>
+                {format.id.toUpperCase()}
+                {format.lossy ? "（有损）" : ""}
+                {format.available ? "" : " · 需要编码器"}
+              </option>
+            ))}
           </select>
           <input
             className="sr-input sr-export-path"
@@ -589,48 +715,57 @@ export function StudioPage({
           </button>
           {exported !== null && <span className="sr-studio-exported sr-mono">已写入 {exported}</span>}
           <span className="sr-export-note">
-            {container === "m4a" ? "M4A 用系统编码器（macOS afconvert / ffmpeg）" : "MP3 需要另装编码器"}
+            {(() => {
+              const chosen = formats.find((format) => format.id === container);
+              if (chosen === undefined) return "";
+              if (!chosen.available) return `${chosen.id.toUpperCase()} 需要 ffmpeg（装好后这里会自动出现）`;
+              return chosen.via === "built-in" ? "内置编码器" : `用 ${chosen.via} 编码`;
+            })()}
           </span>
         </div>
       )}
 
+      <input
+        ref={filePicker}
+        type="file"
+        multiple
+        accept="audio/*,.wav,.wave,.aif,.aiff,.mp3,.m4a,.aac,.flac,.ogg,.opus,.mid,.midi"
+        className="sr-import-input"
+        aria-label="选择音频文件"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.target.value = "";
+          void uploadAndImport(files);
+        }}
+      />
+
       {importOpen && (
         <div className="sr-studio-import-bar">
-          <span className="sr-field-label sr-mono">文件路径</span>
+          <span className="sr-field-label sr-mono">路径</span>
           <input
-            className="sr-input"
             autoFocus
             value={importPath}
             spellCheck={false}
-            placeholder="/Users/…/loop.wav"
+            className="sr-input sr-import-path"
+            placeholder="/Users/…/loop.wav —— 直接引用磁盘上的文件"
             onChange={(event) => setImportPath(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") setImportOpen(false);
-              if (event.key === "Enter" && importPath.trim() !== "" && importTarget !== undefined) {
-                importClip(importPath.trim(), importTarget);
-              }
+              if (event.key === "Enter" && importPath.trim() !== "") void importFiles([importPath.trim()]);
             }}
           />
-          <select
-            className="sr-input sr-studio-import-track"
-            value={importTarget}
-            aria-label="放到哪条轨道"
-            onChange={(event) => setImportTo(event.target.value)}
-          >
-            {project.tracks.map((track) => (
-              <option key={track.id} value={track.id}>
-                {track.name}
-              </option>
-            ))}
-          </select>
           <button
             type="button"
-            className="sr-btn sr-btn--accent"
-            disabled={importPath.trim() === "" || importTarget === undefined}
-            onClick={() => importTarget !== undefined && importClip(importPath.trim(), importTarget)}
+            className="sr-btn"
+            disabled={importPath.trim() === ""}
+            onClick={() => void importFiles([importPath.trim()])}
           >
-            放到轨道
+            引用这个文件
           </button>
+          <button type="button" className="sr-btn" disabled={onPickImport === undefined} onClick={() => void pickAndImport()}>
+            从磁盘选取…
+          </button>
+          <span className="sr-field-label sr-mono">每个文件会新建一条同名音轨</span>
         </div>
       )}
 
@@ -976,6 +1111,7 @@ function Clip({
   onMenu: (x: number, y: number) => void;
   onBeginEdit: () => void;
 }) {
+  const badge = analysisBadge(clip.analysis);
   const drag = useRef<{
     originX: number;
     start: number;
@@ -1062,7 +1198,11 @@ function Clip({
         </span>
       )}
       {clip.notes !== undefined && clip.notes.length > 0 && <NoteRoll notes={clip.notes} />}
-      <span className="sr-clip-meta sr-mono">{Number(clip.length.toFixed(2))} 小节</span>
+      <span className="sr-clip-meta sr-mono">
+        {Number(clip.length.toFixed(2))} 小节
+        {badge !== "" && <span className="sr-clip-badge"> · {badge}</span>}
+        {clip.stemsDir !== undefined && <span className="sr-clip-badge sr-clip-badge--stems"> · 已分轨</span>}
+      </span>
       <span
         className="sr-clip-resize"
         aria-hidden="true"

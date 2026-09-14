@@ -38,6 +38,7 @@ import { callTool } from "./lib/mcp";
 import {
   clipFromNotes,
   defaultProject,
+  type StudioAnalysis,
   lastOpenProject,
   loadProjects,
   newClip,
@@ -130,6 +131,8 @@ export function App() {
   const voiceSession = useRef<VoiceSession | null>(null);
   const capture = useRef<VoiceCapture | null>(null);
   const level = useRef(0);
+  /** Project edits from inside an async tool callback; assigned once `updateProject` exists. */
+  const updateProjectRef = useRef<(patch: (project: StudioProject) => StudioProject) => void>(() => undefined);
   /** Absorption goes through a ref: `submit` is created before the absorber exists. */
   const absorbRef = useRef<(call: ToolCall) => void>(() => undefined);
   const beginCallRef = useRef<(call: ToolCall) => void>(() => undefined);
@@ -997,6 +1000,23 @@ export function App() {
     [],
   );
 
+  /** Which containers the generator can write on this machine — the export dialog asks when it opens. */
+  const exportFormats = useCallback(async () => {
+    const raw = await callTool<string>("generator", "list_export_formats", {});
+    const parsed = JSON.parse(String(raw)) as {
+      containers?: Array<{ id?: string; extension?: string; lossy?: boolean; available?: boolean; via?: string }>;
+    };
+    return (parsed.containers ?? [])
+      .filter((entry) => typeof entry.id === "string")
+      .map((entry) => ({
+        id: String(entry.id),
+        extension: String(entry.extension ?? entry.id),
+        lossy: entry.lossy === true,
+        available: entry.available !== false,
+        via: String(entry.via ?? ""),
+      }));
+  }, []);
+
   /** Notate one audio clip with the melody tool — "turn this clip into MIDI" from the clip menu. */
   const notateClip = useCallback(async (path: string) => {
     const id = `hum_to_midi-${Date.now()}`;
@@ -1031,6 +1051,135 @@ export function App() {
   }, []);
 
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
+  /**
+   * Copy the files the user dropped (or picked in the browser) into the workspace.
+   *
+   * A `File` has no path, so the bytes go through `POST /api/agent/import` and come back as a real
+   * file under `~/Documents/ShadowRoom/imports/<date>/` — from then on the studio, the exporter and
+   * the agent all treat it like any other file on disk.
+   */
+  const uploadImport = useCallback(async (files: File[]) => {
+    const paths: string[] = [];
+    for (const file of files) {
+      try {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error("读取文件失败"));
+          reader.onload = () => {
+            const result = String(reader.result);
+            resolve(result.slice(result.indexOf(",") + 1));
+          };
+          reader.readAsDataURL(file);
+        });
+        const response = await fetch("/api/agent/import", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: file.name, data }),
+        });
+        const payload = (await response.json()) as { path?: string; error?: string };
+        if (!response.ok || payload.path === undefined) throw new Error(payload.error ?? `${response.status}`);
+        paths.push(payload.path);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        withActiveSession((current) => ({
+          ...current,
+          messages: [
+            ...current.messages,
+            { id: `i-${Date.now()}-${file.name}`, role: "notice", title: "导入失败", text: `${file.name}：${message}`, at: Date.now() },
+          ],
+        }));
+      }
+    }
+    return paths;
+  }, [withActiveSession]);
+
+  /** The machine's own file dialog: reference a file where it lives, copy nothing. */
+  const pickImport = useCallback(async () => {
+    try {
+      const response = await fetch("/api/agent/pick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ multiple: true, kind: "audio" }),
+      });
+      const payload = (await response.json()) as { paths?: string[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? `${response.status}`);
+      return payload.paths ?? [];
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      withActiveSession((current) => ({
+        ...current,
+        messages: [
+          ...current.messages,
+          { id: `p-${Date.now()}`, role: "notice", title: "打开文件对话框失败", text: message, at: Date.now() },
+        ],
+      }));
+      return [];
+    }
+  }, [withActiveSession]);
+
+  /**
+   * What is this file? Tempo and key, from the analysis plugin.
+   *
+   * The two calls are recorded as tool rows like any other, and when the project was empty the
+   * detected tempo becomes the project's own — the studio then places the file on a grid that
+   * matches it instead of on an arbitrary 128.
+   */
+  const analyzeImport = useCallback(
+    async (path: string, context: { wasEmpty: boolean }): Promise<StudioAnalysis | null> => {
+      const id = `analyse-${Date.now()}`;
+      beginCallRef.current({
+        id,
+        server: "audio-analysis-dedupe",
+        name: "detect_tempo",
+        status: "running",
+        summary: path.split("/").pop() ?? path,
+        detail: JSON.stringify({ path }, null, 2),
+      });
+      try {
+        const tempoRaw = await callTool<string>("analysis", "detect_tempo", { path });
+        const tempo = JSON.parse(String(tempoRaw)) as { bpm?: number; confidence?: number; onsets?: number };
+        const keyRaw = await callTool<string>("analysis", "detect_key", { path }).catch(() => "");
+        const key = keyRaw === "" ? {} : (JSON.parse(String(keyRaw)) as { key?: string; camelot?: string; confidence?: number });
+        const analysis: StudioAnalysis = {
+          ...(typeof tempo.bpm === "number" ? { bpm: tempo.bpm } : {}),
+          ...(typeof tempo.confidence === "number" ? { confidence: tempo.confidence } : {}),
+          ...(typeof key.key === "string" ? { key: key.key } : {}),
+          ...(typeof key.camelot === "string" ? { camelot: key.camelot } : {}),
+        };
+        endCallRef.current(id, {
+          status: "ok",
+          summary: [analysis.bpm === undefined ? undefined : `${Math.round(analysis.bpm)} BPM`, analysis.camelot ?? analysis.key]
+            .filter((part) => part !== undefined)
+            .join(" · "),
+          detail: JSON.stringify({ tempo, key }, null, 2).slice(0, 2000),
+        });
+        if (context.wasEmpty && typeof analysis.bpm === "number" && (analysis.confidence ?? 0) >= 0.5) {
+          const name = path.split("/").pop() ?? path;
+          updateProjectRef.current((project) => ({ ...project, bpm: Math.round(analysis.bpm as number) }));
+          withActiveSession((current) => ({
+            ...current,
+            messages: [
+              ...current.messages,
+              {
+                id: `bpm-${Date.now()}`,
+                role: "notice",
+                title: "工程 BPM 已更新",
+                text: `${Math.round(analysis.bpm as number)} BPM（来自 ${name}）`,
+                at: Date.now(),
+              },
+            ],
+          }));
+        }
+        return analysis;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        endCallRef.current(id, { status: "error", summary: message, detail: message });
+        return null;
+      }
+    },
+    [withActiveSession],
+  );
+
   /** Remember the project as it is right now — the point a drag or an edit can return to. */
   const beginEdit = useCallback(() => {
     setProjects((current) => {
@@ -1053,6 +1202,8 @@ export function App() {
     },
     [beginEdit, openProjectId],
   );
+
+  updateProjectRef.current = (patch) => updateProject(patch);
 
   const undo = useCallback(() => {
     setHistory((previous) => {
@@ -1263,6 +1414,10 @@ export function App() {
               canRedo={history.future.length > 0}
               onExport={exportArrangement}
               onConvertToMidi={notateClip}
+              onUploadImport={uploadImport}
+              onPickImport={pickImport}
+              onAnalyze={analyzeImport}
+              onExportFormats={exportFormats}
               composer={chatInDock ? null : composerFor()}
               onClose={() => {
                 setOpenProjectId(undefined);
