@@ -13,7 +13,8 @@ import { Composer } from "./components/Composer";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
-import { IconChat, IconPlugin } from "./components/icons";
+import { IconChat } from "./components/icons";
+import { WorkbenchHome } from "./components/WorkbenchHome";
 import { PluginPanelPage } from "./components/PluginPanelPage";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
@@ -114,6 +115,8 @@ export function App() {
   const level = useRef(0);
   /** Absorption goes through a ref: `submit` is created before the absorber exists. */
   const absorbRef = useRef<(call: ToolCall) => void>(() => undefined);
+  const beginCallRef = useRef<(call: ToolCall) => void>(() => undefined);
+  const endCallRef = useRef<(id: string, patch: Partial<ToolCall>) => void>(() => undefined);
   const voiceModeRef = useRef(false);
   const voiceStateRef = useRef<"listening" | "thinking" | "speaking">("listening");
   voiceModeRef.current = voiceMode;
@@ -585,8 +588,24 @@ export function App() {
   useEffect(() => {
     if (!voiceMode) return;
     let raf: number | null = null;
+    /** Sustained loudness while the answer plays — the user talking over it. */
+    let loud = 0;
     const tick = () => {
-      level.current = capture.current?.level() ?? 0;
+      const value = capture.current?.level() ?? 0;
+      level.current = value;
+      if (voiceStateRef.current === "speaking") {
+        loud = value > 0.28 ? loud + 1 : 0;
+        // ~200ms of speech: stop talking and start listening again — the answer is interruptible.
+        if (loud >= 12) {
+          loud = 0;
+          stopSpeaking();
+          capture.current?.takeWav(); // drop the answer's tail from the next turn's audio
+          setVoiceState("listening");
+          listenRef.current();
+        }
+      } else {
+        loud = 0;
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -636,6 +655,8 @@ export function App() {
     },
     [withActiveSession],
   );
+  beginCallRef.current = beginCall;
+  endCallRef.current = endCall;
 
   const plugins: PluginEntry[] = PLUGINS.map((entry) => ({
     id: entry.id,
@@ -782,9 +803,40 @@ export function App() {
   absorbRef.current = absorbToolResult;
 
   const openProject = projects.find((project) => project.id === openProjectId);
-  /** The dock is offered on the work pages (Studio, plugins); the conversation page *is* the chat. */
-  const dockAvailable = mainView !== "conversation";
-  const chatInDock = dockOpen && dockAvailable;
+  /** The chat dock is available on every page. On 工作台 the main column shows the overview instead,
+      so the same transcript is never drawn twice. */
+  const chatInDock = dockOpen;
+  /** Bounce the arrangement through the generator plugin and record the call in the transcript. */
+  const exportArrangement = useCallback(
+    async (spec: Record<string, unknown>) => {
+      const id = `mix_arrangement-${Date.now()}`;
+      beginCallRef.current({
+        id,
+        server: "shadow-music-generator",
+        name: "mix_arrangement",
+        status: "running",
+        summary: `${spec.sample_rate as number} Hz · ${spec.bit_depth as number}-bit · ${spec.container as string}`,
+        detail: JSON.stringify(spec, null, 2),
+      });
+      try {
+        const raw = await callTool<string>("generator", "mix_arrangement", spec);
+        const text = String(raw);
+        const parsed = JSON.parse(text) as { path?: string };
+        endCallRef.current(id, {
+          status: "ok",
+          summary: `${spec.container as string} · ${spec.sample_rate as number} Hz`,
+          detail: text.slice(0, 4000),
+        });
+        return parsed.path ?? null;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        endCallRef.current(id, { status: "error", summary: message, detail: message });
+        return null;
+      }
+    },
+    [],
+  );
+
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
   const updateProject = (patch: (project: StudioProject) => StudioProject) =>
     setProjects((current) =>
@@ -909,6 +961,7 @@ export function App() {
             <StudioPage
               project={openProject}
               onChange={updateProject}
+              onExport={exportArrangement}
               composer={chatInDock ? null : composerNode}
               onClose={() => {
                 setOpenProjectId(undefined);
@@ -931,25 +984,14 @@ export function App() {
       }
       dockRail={
         <div className="sr-dock-rail">
-          {dockAvailable && (
-            <button
-              type="button"
-              className="sr-dock-rail-btn"
-              title="展开对话"
-              aria-label="展开对话"
-              onClick={() => setDockOpen(true)}
-            >
-              <IconChat size={18} />
-            </button>
-          )}
           <button
             type="button"
             className="sr-dock-rail-btn"
-            title="插件"
-            aria-label="插件"
-            onClick={() => setMainView("plugins")}
+            title="展开对话"
+            aria-label="展开对话"
+            onClick={() => setDockOpen(true)}
           >
-            <IconPlugin size={18} />
+            <IconChat size={18} />
           </button>
         </div>
       }

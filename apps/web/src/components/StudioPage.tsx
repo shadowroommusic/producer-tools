@@ -32,12 +32,15 @@ export function StudioPage({
   onChange,
   composer,
   onClose,
+  onExport,
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
   onChange: (patch: (project: StudioProject) => StudioProject) => void;
   composer: ReactNode;
   onClose: () => void;
+  /** Bounce the arrangement through the generator plugin; resolves with the written path. */
+  onExport?: (spec: Record<string, unknown>) => Promise<string | null>;
 }) {
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
@@ -46,6 +49,13 @@ export function StudioPage({
   const [importOpen, setImportOpen] = useState(false);
   const [importPath, setImportPath] = useState("");
   const [importTo, setImportTo] = useState<string | undefined>(undefined);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [sampleRate, setSampleRate] = useState(44100);
+  const [bitDepth, setBitDepth] = useState(16);
+  const [container, setContainer] = useState<"wav" | "aiff">("wav");
+  const [outPath, setOutPath] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exported, setExported] = useState<string | null>(null);
   /** One audio element per playable clip. */
   const players = useRef<Map<string, HTMLAudioElement>>(new Map());
   /** Detached audio elements still need a home so devtools (and tests) can see them. */
@@ -326,7 +336,102 @@ export function StudioPage({
         >
           导入音频
         </button>
+        <button
+          type="button"
+          className="sr-btn sr-studio-export"
+          onClick={() => {
+            setOutPath(
+              (current) =>
+                current ||
+                `~/Documents/ShadowRoom/exports/${project.name.replace(/\s+/g, "-")}.${
+                  container === "aiff" ? "aiff" : "wav"
+                }`,
+            );
+            setExportOpen((open) => !open);
+          }}
+        >
+          导出音频
+        </button>
       </header>
+
+      {exportOpen && (
+        <div className="sr-studio-import-bar sr-studio-export-bar">
+          <span className="sr-field-label sr-mono">采样率</span>
+          <select
+            className="sr-input sr-input--num"
+            value={sampleRate}
+            aria-label="采样率"
+            onChange={(event) => setSampleRate(Number(event.target.value))}
+          >
+            <option value={44100}>44.1 kHz</option>
+            <option value={48000}>48 kHz</option>
+            <option value={96000}>96 kHz</option>
+          </select>
+          <span className="sr-field-label sr-mono">位深</span>
+          <select
+            className="sr-input sr-input--num"
+            value={bitDepth}
+            aria-label="位深"
+            onChange={(event) => setBitDepth(Number(event.target.value))}
+          >
+            <option value={16}>16-bit</option>
+            <option value={24}>24-bit</option>
+          </select>
+          <span className="sr-field-label sr-mono">格式</span>
+          <select
+            className="sr-input sr-input--num"
+            value={container}
+            aria-label="文件格式"
+            onChange={(event) => {
+              const next = event.target.value as "wav" | "aiff";
+              setContainer(next);
+              setOutPath((current) => current.replace(/\.(wav|aiff)$/i, next === "aiff" ? ".aiff" : ".wav"));
+            }}
+          >
+            <option value="wav">WAV</option>
+            <option value="aiff">AIFF</option>
+          </select>
+          <input
+            className="sr-input sr-export-path"
+            value={outPath}
+            spellCheck={false}
+            aria-label="输出路径"
+            placeholder="~/Documents/ShadowRoom/exports/song.wav"
+            onChange={(event) => setOutPath(event.target.value)}
+          />
+          <button
+            type="button"
+            className="sr-btn sr-btn--accent"
+            disabled={exporting || outPath.trim() === ""}
+            onClick={async () => {
+              if (onExport === undefined) return;
+              setExporting(true);
+              setExported(null);
+              const written = await onExport({
+                out_path: outPath.trim(),
+                bpm: project.bpm,
+                bars: project.bars,
+                sample_rate: sampleRate,
+                bit_depth: bitDepth,
+                container,
+                tracks: project.tracks.map((track) => ({
+                  name: track.name,
+                  gain: audible(track) ? track.volume / 100 : 0,
+                  clips: track.clips
+                    .filter((clip) => isPlayable(clip.source))
+                    .map((clip) => ({ path: clip.source, start: clip.start, bars: clip.length })),
+                })),
+              });
+              setExported(written);
+              setExporting(false);
+            }}
+          >
+            {exporting ? "导出中…" : "导出"}
+          </button>
+          {exported !== null && <span className="sr-studio-exported sr-mono">已写入 {exported}</span>}
+          <span className="sr-field-label sr-mono">MP3 / AAC 需要编码器，暂不支持</span>
+        </div>
+      )}
 
       {importOpen && (
         <div className="sr-studio-import-bar">
