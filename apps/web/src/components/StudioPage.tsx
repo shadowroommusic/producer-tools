@@ -13,6 +13,7 @@ import {
   newClip,
   newTrack,
   type StudioClip,
+  type StudioNote,
   type StudioProject,
   type StudioTrack,
 } from "../lib/studio";
@@ -84,6 +85,7 @@ export function StudioPage({
 
   const anySolo = project.tracks.some((track) => track.soloed);
   const position = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
+
 
   return (
     <div className="sr-studio">
@@ -265,7 +267,7 @@ export function StudioPage({
         </div>
       </div>
 
-      <div className="sr-studio-composer">{composer}</div>
+      {composer !== null && <div className="sr-studio-composer">{composer}</div>}
     </div>
   );
 }
@@ -317,7 +319,34 @@ function Clip({
       }}
     >
       <span className="sr-clip-name">{clip.name}</span>
+      {clip.notes !== undefined && clip.notes.length > 0 && <NoteRoll notes={clip.notes} />}
       <span className="sr-clip-meta sr-mono">{clip.length} 小节</span>
     </div>
+  );
+}
+
+/** Mini piano roll: every detected note as a small block, pitch on the vertical axis. */
+function NoteRoll({ notes }: { notes: StudioNote[] }) {
+  const start = notes.reduce((value, note) => Math.min(value, note.start_ms), Infinity);
+  const end = notes.reduce((value, note) => Math.max(value, note.end_ms), 0);
+  const span = Math.max(1, end - start);
+  const lowest = notes.reduce((value, note) => Math.min(value, note.midi), 127);
+  const highest = notes.reduce((value, note) => Math.max(value, note.midi), 0);
+  const range = Math.max(1, highest - lowest);
+
+  return (
+    <span className="sr-noteroll" aria-hidden="true">
+      {notes.map((note, index) => (
+        <span
+          key={`${note.midi}-${note.start_ms}-${index}`}
+          className="sr-noteroll-note"
+          style={{
+            left: `${((note.start_ms - start) / span) * 100}%`,
+            width: `${Math.max(2, ((note.end_ms - note.start_ms) / span) * 100)}%`,
+            bottom: `${(1 - (note.midi - lowest) / range) * 100}%`,
+          }}
+        />
+      ))}
+    </span>
   );
 }

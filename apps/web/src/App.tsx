@@ -16,6 +16,7 @@ import { DockPanel } from "./components/DockPanel";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
 import { StudioProjects, summarize } from "./components/StudioProjects";
+import { Transcript } from "./components/Transcript";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import type { ToolCall } from "./components/ToolCallRow";
 import {
@@ -30,7 +31,9 @@ import {
   type Mention,
 } from "./lib/agent";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
+import { callTool } from "./lib/mcp";
 import {
+  clipFromNotes,
   defaultProject,
   lastOpenProject,
   loadProjects,
@@ -80,6 +83,7 @@ export function App() {
   );
   const [activePlugin, setActivePlugin] = useState("set-planner");
   const [dockOpen, setDockOpen] = useState(true);
+  const [dockTab, setDockTab] = useState<"chat" | "plugin">("plugin");
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("标准");
@@ -344,6 +348,7 @@ export function App() {
           }
           const call = toolCallFromItem(event.item, event.phase);
           if (call === null) return;
+          if (event.phase === "completed") absorbMelody(call);
           setStore((current) =>
             patchSession(current, sessionId, (session) => {
               const known_ = session.calls.some((entry) => entry.id === call.id);
@@ -682,10 +687,53 @@ export function App() {
   );
 
   const openProject = projects.find((project) => project.id === openProjectId);
+  /** With the dock's 对话 tab open the composer moves there, so there is only ever one input. */
+  const chatInDock = dockOpen && dockTab === "chat";
   const updateProject = (next: StudioProject) =>
     setProjects((current) =>
       current.map((project) => (project.id === next.id ? { ...next, updatedAt: Date.now() } : project)),
     );
+
+  /**
+   * The agent's melody tool lands on the timeline by itself: when `hum_to_midi` completes in a
+   * conversation, its notes become a clip in the open project. No button, no second step — the hum
+   * happens inside the call and the arrangement grows out of the same sentence.
+   */
+  const absorbMelody = useCallback(
+    (call: ToolCall) => {
+      if (call.name !== "hum_to_midi" || call.status !== "ok" || openProjectId === undefined) return;
+      try {
+        const wrapper = JSON.parse(call.detail ?? "{}") as {
+          result?: { content?: Array<{ text?: string }> };
+        };
+        const text = wrapper.result?.content?.[0]?.text;
+        const parsed = JSON.parse(String(text)) as {
+          midi_path?: string;
+          notes?: Array<{ start_ms: number; end_ms: number; midi: number; name?: string }>;
+        };
+        const notes = parsed.notes ?? [];
+        if (notes.length === 0) return;
+        setProjects((current) =>
+          current.map((project) =>
+            project.id !== openProjectId
+              ? project
+              : {
+                  ...project,
+                  updatedAt: Date.now(),
+                  tracks: project.tracks.map((track, index) =>
+                    index === 0
+                      ? { ...track, clips: [...track.clips, clipFromNotes(notes, project.bars, 0, parsed.midi_path ?? "")] }
+                      : track,
+                  ),
+                },
+          ),
+        );
+      } catch {
+        /* a tool result we cannot read simply stays in the transcript */
+      }
+    },
+    [openProjectId],
+  );
 
   return (
     <AppFrame
@@ -715,7 +763,8 @@ export function App() {
         />
       )}
       main={
-        mainView === "plugins" ? (
+        <div className="sr-main-wrap">
+          {mainView === "plugins" ? (
           <PluginsPage
             plugins={plugins}
             activePlugin={active?.repo}
@@ -724,7 +773,7 @@ export function App() {
               setDockOpen(true);
             }}
           />
-        ) : mainView === "studio" ? (
+          ) : mainView === "studio" ? (
           openProject === undefined ? (
             <StudioProjects
               projects={[...projects].sort((a, b) => b.updatedAt - a.updatedAt).map(summarize)}
@@ -750,29 +799,53 @@ export function App() {
             <StudioPage
               project={openProject}
               onChange={updateProject}
-              composer={composerNode}
+              composer={chatInDock ? null : composerNode}
               onClose={() => {
                 setOpenProjectId(undefined);
                 rememberOpenProject(null);
               }}
             />
           )
-        ) : (
+          ) : (
           <Conversation
             messages={session?.messages ?? []}
             calls={session?.calls ?? []}
             running={running}
             suggestions={SUGGESTIONS}
             onSuggestion={setDraft}
-            composer={composerNode}
+            composer={chatInDock ? null : composerNode}
           />
-        )
+          )}
+          {!dockOpen && (
+            <button
+              type="button"
+              className="sr-dock-open"
+              title="展开右侧边栏和 AI 聊天"
+              onClick={() => {
+                setDockOpen(true);
+                setDockTab("chat");
+              }}
+            >
+              对话 ›
+            </button>
+          )}
+        </div>
       }
       dock={
         selected === undefined ? null : (
           <DockPanel
             plugin={selected}
             home={home}
+            tab={dockTab}
+            onTabChange={setDockTab}
+            chat={
+              <>
+                <div className="sr-transcript sr-scroll">
+                  <Transcript messages={session?.messages ?? []} calls={session?.calls ?? []} running={running} />
+                </div>
+                <div className="sr-dock-composer">{composerNode}</div>
+              </>
+            }
             onClose={() => setDockOpen(false)}
             onCallBegin={beginCall}
             onCallEnd={endCall}

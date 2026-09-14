@@ -50,6 +50,19 @@ const PLUGIN_REPOS = [
   "shadow-music-generator",
 ];
 
+/**
+ * House rules for every thread. The workbench is voice-first, so the agent has to know that a spoken
+ * turn arrives with a recording and what to do with a hummed melody.
+ */
+const DEVELOPER_INSTRUCTIONS = [
+  "你运行在 Shadow Producers 工作台里（给 DJ / 制作人用的桌面应用，界面以语音为主）。",
+  "用户很可能用语音说话；每条语音消息会附带一段 WAV 录音的路径（作为附件给出）。",
+  "当用户哼唱/唱一段旋律并想变成 MIDI 时：调用 audio-analysis-dedupe 的 hum_to_midi，path 就用那条录音路径。",
+  "hum_to_midi 检测到的音符会自动变成 Studio 工程里的一个片段（带迷你钢琴卷），你只需用一句话说清你听到的音名和大致节奏。",
+  "其它可用工具：set-planner（set 计时与下一首推荐）、shadow-music-generator（生成任务队列，默认 dry-run，不跑模型）、rekordbox-serato-bridge（Rekordbox ⇄ Serato 曲库、cue、颜色转换）。",
+  "回答尽量短、口语化，因为会被朗读出来；需要执行的操作直接调用工具，不要只描述。",
+].join("\n");
+
 function mcpServers() {
   const servers = {};
   for (const repo of PLUGIN_REPOS) {
@@ -270,6 +283,7 @@ class Agent {
       cwd: AGENT_CWD,
       sandbox: SANDBOX,
       approvalPolicy: APPROVAL,
+      developerInstructions: DEVELOPER_INSTRUCTIONS,
       config: { mcp_servers: mcpServers() },
     });
     const threadId = started?.thread?.id;

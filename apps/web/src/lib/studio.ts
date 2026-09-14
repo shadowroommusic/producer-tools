@@ -15,7 +15,11 @@ export type StudioClip = {
   length: number;
   /** Set when the clip stands for a file the user attached or the agent produced. */
   source?: string;
+  /** Notes detected from a hummed take, drawn as a mini piano roll inside the clip. */
+  notes?: StudioNote[];
 };
+
+export type StudioNote = { start_ms: number; end_ms: number; midi: number; name?: string };
 
 export type StudioTrack = {
   id: string;
@@ -45,6 +49,21 @@ const newId = (prefix: string): string =>
 
 export function newClip(name: string, start = 0, length = 4, source?: string): StudioClip {
   return { id: newId("clip"), name, start, length, ...(source === undefined ? {} : { source }) };
+}
+
+/** Turn detected notes into a clip whose length covers the performance. */
+export function clipFromNotes(notes: StudioNote[], bars: number, start: number, source: string): StudioClip {
+  const last = notes.reduce((end, note) => Math.max(end, note.end_ms), 0);
+  const seconds = last / 1000;
+  const length = Math.max(1, Math.ceil((seconds * 2) / 4)); // rough: half a bar per second at 120 BPM
+  return {
+    id: newId("clip"),
+    name: `哼唱 · ${notes.length} 音符`,
+    start: Math.min(Math.max(0, start), Math.max(0, bars - length)),
+    length: Math.min(length, bars),
+    source,
+    notes,
+  };
 }
 
 export function newTrack(name: string): StudioTrack {

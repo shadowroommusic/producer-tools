@@ -131,6 +131,12 @@ What was measured and matters:
   tool rows in the order they happened, notice rows, and a per-turn `tokens · seconds` line.
 - **Pages** — the plugins page (`PluginsPage`) is the centre column's other occupant; picking a card
   selects that plugin and opens its panel in the dock.
+- **Dock** — two tabs: 对话 (the shared `Transcript` plus the composer; the main column's composer is
+  hidden while it is open, so there is only ever one input) and the selected plugin's panel. With the
+  dock closed a `对话 ›` button floats in the page's top-right corner.
+- **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
+  reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
+  pattern for "the agent does the work, the workbench just shows it": tools write, the UI absorbs.
 - **Studio** (`StudioPage`) — the DAW-shaped page: transport, a header column per track and a
   bar-ruled lane area. `BAR_PX` (56) is the bar width in both the TSX and the CSS grid, so keep the
   two in step. The playhead runs on `requestAnimationFrame` at the project tempo and loops at the

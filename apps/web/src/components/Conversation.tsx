@@ -6,9 +6,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { BrandMark } from "./BrandMark";
-import { NoticeRow } from "./NoticeRow";
-import { ReasoningRow } from "./ReasoningRow";
-import { ToolCallRow, type ToolCall } from "./ToolCallRow";
+import { Transcript } from "./Transcript";
+import type { ToolCall } from "./ToolCallRow";
 import type { ChatMessage } from "../lib/sessions";
 
 /** Dragged transcript width preference (px), remembered per browser. */
@@ -221,48 +220,11 @@ export function Conversation({
                 {composer}
               </>
             ) : (
-              messages.map((message) => {
-                if (message.role === "user") {
-                  return (
-                    <div key={message.id} className="sr-msg-user">
-                      <div className="sr-bubble">{message.text}</div>
-                    </div>
-                  );
-                }
-                if (message.role === "assistant") {
-                  if (message.text === "" && message.streaming === true) {
-                    return <p key={message.id} className="sr-turn-status">正在运行</p>;
-                  }
-                  return (
-                    <div key={message.id} className="sr-msg-assistant">
-                      {message.text}
-                      {message.streaming === true && <span className="sr-caret" aria-hidden="true" />}
-                    </div>
-                  );
-                }
-                if (message.role === "notice") {
-                  return <NoticeRow key={message.id} title={message.title} text={message.text} />;
-                }
-                if (message.role === "reasoning") {
-                  return (
-                    <ReasoningRow key={message.id} text={message.text} running={message.streaming === true} />
-                  );
-                }
-                if (message.role === "usage") {
-                  return (
-                    <p key={message.id} className="sr-usage sr-mono">
-                      {message.text}
-                    </p>
-                  );
-                }
-                const call = calls.find((entry) => entry.id === message.callId);
-                return call === undefined ? null : <ToolCallRow key={message.id} call={call} />;
-              })
+              <Transcript messages={messages} calls={calls} running={running} />
             )}
-            {running && <p className="sr-turn-status">正在运行</p>}
           </div>
         </div>
-        {!heroPhase && <div className="sr-composer-seat">{composer}</div>}
+        {!heroPhase && composer !== null && <div className="sr-composer-seat">{composer}</div>}
       </div>
     </div>
   );

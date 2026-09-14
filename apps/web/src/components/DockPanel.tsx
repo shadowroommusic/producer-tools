@@ -4,6 +4,7 @@
  * way DeepSeek Harness's right column hosts a single registered panel.
  */
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { ConverterPanel } from "./ConverterPanel";
 import { GeneratorPanel } from "./GeneratorPanel";
@@ -19,12 +20,19 @@ const PLACEHOLDER: Record<string, { body: string; bullets: string[] }> = {
 export function DockPanel({
   plugin,
   home,
+  tab,
+  onTabChange,
+  chat,
   onClose,
   onCallBegin,
   onCallEnd,
 }: {
   plugin: PluginEntry;
   home: string;
+  tab: "chat" | "plugin";
+  onTabChange: (tab: "chat" | "plugin") => void;
+  /** The conversation, shown in the dock's 对话 tab. */
+  chat: ReactNode;
   onClose: () => void;
   onCallBegin: (call: ToolCall) => void;
   onCallEnd: (id: string, patch: Partial<ToolCall>) => void;
@@ -35,12 +43,30 @@ export function DockPanel({
   return (
     <section className="sr-dock" data-expanded={expanded || undefined} aria-label={plugin.label}>
       <header className="sr-dock-head">
-        <div className="sr-dock-title">
-          <span className="sr-dock-label">{plugin.label}</span>
-          <span className="sr-dock-repo sr-mono">{plugin.repo}</span>
+        <div className="sr-dock-tabs" role="tablist" aria-label="侧边栏">
+          <button
+            type="button"
+            role="tab"
+            className="sr-dock-tab"
+            aria-selected={tab === "chat"}
+            data-on={tab === "chat" || undefined}
+            onClick={() => onTabChange("chat")}
+          >
+            对话
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="sr-dock-tab"
+            aria-selected={tab === "plugin"}
+            data-on={tab === "plugin" || undefined}
+            onClick={() => onTabChange("plugin")}
+          >
+            {plugin.label}
+          </button>
         </div>
         <div className="sr-dock-actions">
-          <span className="sr-dot" data-state={plugin.connected ? "live" : "idle"} />
+          {tab === "plugin" && <span className="sr-dot" data-state={plugin.connected ? "live" : "idle"} />}
           <button
             type="button"
             className="sr-icon-btn"
@@ -63,7 +89,9 @@ export function DockPanel({
       </header>
 
       <div className="sr-dock-body sr-scroll">
-        {plugin.repo === "rekordbox-serato-bridge" ? (
+        {tab === "chat" ? (
+          <div className="sr-dock-chat">{chat}</div>
+        ) : plugin.repo === "rekordbox-serato-bridge" ? (
           <ConverterPanel
             connected={plugin.connected}
             tools={plugin.tools}

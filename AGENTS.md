@@ -113,6 +113,15 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   the answer is spoken, then listening resumes. Studio opens on a project list and only then shows the
   multi-track workbench; the projects, the open project and the current page are all remembered.
 
+- **2026-09-14 — everything is a plugin, and talk is the interface.** The user's direction: capabilities
+  arrive as plugins (the DeepSeek Harness model), and the workbench stays voice-first. Concretely: the
+  four MCP servers plus the melody tool (`hum_to_midi` in `audio-analysis-dedupe`) are the tool layer;
+  the UI absorbs what tools produce (`absorbMelody` turns a `hum_to_midi` result into a Studio clip
+  without a button); the agent is told the house rules per thread through `developerInstructions`; and
+  typing happens in the dock's 对话 tab while the main page stays the work surface. Next candidates, in
+  this shape: groove/drum recognition (polyphonic — basic-pitch, Apache-2.0), audio trim/edit tools, and
+  splitting melody detection out into its own plugin repository.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2
