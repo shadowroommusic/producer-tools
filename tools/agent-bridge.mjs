@@ -77,6 +77,7 @@ const DEVELOPER_INSTRUCTIONS = [
   "其它可用工具：set-planner（set 计时与下一首推荐）、shadow-music-generator（生成任务队列，默认 dry-run，不跑模型）、rekordbox-serato-bridge（Rekordbox ⇄ Serato 曲库、cue、颜色转换）。",
   "当用户想\"做一首歌 / 一段 beat / 一段 loop\"时，用 shadow-music-generator 的 render_song **真的渲染出音频**：out_path 放在 ~/Documents/ShadowRoom/recordings/<歌名>.wav，bpm 和 bars 按用户要求，parts 里每一项是一个声部 —— 鼓用 16 步 pattern（kick/clap/hat/openhat/snare，x 表示击打），bass/chords/lead/pad 用 notes（midi、start、length 都以拍为单位，wave 可选 saw/square/triangle/sine，bass 一般给 cutoff 0.3 左右）。",
   "render_song 返回的每个 stem 会自动变成 Studio 里一条同名轨道上的片段（鼓 / 贝斯 / 和弦 / 主音 / 铺底）并立刻可以播放 —— 所以渲染完只需简短告诉用户你写了什么（速度、调性、几个声部），不要让他再操作。",
+  "导出同样可以让我做：mix_arrangement 导出整首（out_path/.bpm/.bars/sample_rate/bit_depth/container + tracks），export_stems 导出分轨（out_dir + name），export_midi 导出 MIDI（out_path；音符来自 clip.notes，或指向 .mid 的 clip）。它们的 tracks 结构一致：{name, gain, clips:[{path, start(小节), bars, gain, notes?}]}。",
   "一个可用的例子：{\"out_path\":\"~/Documents/ShadowRoom/recordings/night-drive.wav\",\"bpm\":124,\"bars\":8,\"parts\":[{\"part\":\"drums\",\"pattern\":{\"kick\":\"x...x...x...x...\",\"clap\":\"....x.......x...\",\"hat\":\"..x...x...x...x.\"}},{\"part\":\"bass\",\"wave\":\"saw\",\"cutoff\":0.32,\"notes\":[{\"midi\":33,\"start\":0,\"length\":0.75},{\"midi\":33,\"start\":1.5,\"length\":0.5},{\"midi\":36,\"start\":3,\"length\":1}]}]}",
   "回答尽量短、口语化，因为会被朗读出来；需要执行的操作直接调用工具，不要只描述。",
 ].join("\n");

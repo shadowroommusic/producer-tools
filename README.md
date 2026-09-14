@@ -52,6 +52,15 @@ duration), the transport streams it through the local bridge, clips start and st
 crosses them, and mute / solo / the fader move the volume. Clips can be moved, resized from their right
 edge, and removed; the ruler seeks; zoom changes the bar width.
 
+**导出音频** offers three things, and all three are real files: **整首** (the arrangement mixed down),
+**分轨** (one file per track) and **MIDI** (a Type-1 file, one track per part, notes taken from MIDI
+clips or from clips the hum-to-MIDI flow notated). Sample rate (44.1/48/96 kHz), bit depth (16/24) and
+container (WAV/AIFF) are selectable; lossy formats are refused with a note instead of pretending,
+because MP3/AAC need an encoder this project does not depend on.
+
+All of it is reachable from a sentence as well as from the buttons — ask for a song, a stem export and
+a MIDI file in one message and the agent calls `render_song`, `export_stems` and `export_midi` itself.
+
 **Voice** — the microphone button in any page's composer starts a **call**, not a dictation: the
 composer turns into a live waveform, the call stays open, every finished phrase is sent with its own
 WAV recording attached (so humming a melody reaches the agent as audio, not just as text), the answer

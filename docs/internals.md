@@ -142,6 +142,22 @@ What was measured and matters:
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
   pattern for "the agent does the work, the workbench just shows it": tools write, the UI absorbs.
 
+## Exports (measured 2026-09-14)
+
+| What | Tool | Notes |
+| --- | --- | --- |
+| 整首 | `mix_arrangement` | places every clip on the bar grid, resamples, applies track/clip gain, `tanh` soft clip; WAV 16/24-bit or AIFF, 44.1/48/96 kHz |
+| 分轨 | `export_stems` | one file per track (`<name>-<NN>-<track>.<ext>`), empty tracks skipped |
+| MIDI | `export_midi` | Type-1 with a conductor track (tempo + 4/4); notes come from `clip.notes` or a parsed `.mid` clip, audio-only clips land in `skipped` |
+
+Lossy containers are rejected by the tool (`container must be wav or aiff`) rather than silently
+written as WAV. The UI's 导出音频 dialog picks the tool by 内容 and disables rate/depth/format for MIDI.
+
+One sentence, end to end: *做一首 4 小节 124 BPM 的鼓 + 贝斯，然后把分轨导出到 /tmp/nl-out/stems
+（24-bit 48k WAV），再导出一份 MIDI 到 /tmp/nl-out/song.mid* → the agent called `render_song`,
+`export_stems`, `export_midi`; the disk held `nl-groove-01-drums.wav` / `nl-groove-02-bass.wav`
+(48 kHz, 24-bit, 7.74 s = 4 bars at 124 BPM) and `song.mid` (Type-1, 56 notes, tempo 124).
+
 ## UI audit (2026-09-14)
 
 Checked every page in a real browser at 1600 / 1440 / 1280 / 1100 / 900 / 760, at 1× and 2×, clicking
