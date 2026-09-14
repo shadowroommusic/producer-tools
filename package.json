@@ -1,0 +1,12 @@
+{
+  "name": "producer-tools",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --filter @shadowroom/web dev",
+    "build": "pnpm --filter @shadowroom/web build",
+    "preview": "pnpm --filter @shadowroom/web preview",
+    "serve": "node tools/mcp-bridge.mjs",
+    "typecheck": "pnpm --filter @shadowroom/web typecheck"
+  }
+}

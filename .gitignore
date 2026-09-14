@@ -5,6 +5,11 @@ __pycache__/
 build/
 dist/
 
+# Node / web
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+
 # Local environments
 .venv/
 venv/

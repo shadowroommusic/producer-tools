@@ -1,0 +1,45 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--sr-bg);
+  color: var(--sr-text);
+  font-family: var(--sr-font-sans);
+  font-size: var(--sr-text-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--sr-accent);
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--sr-focus);
+  outline-offset: 2px;
+}
+
+code,
+pre,
+.sr-mono {
+  font-family: var(--sr-font-mono);
+}

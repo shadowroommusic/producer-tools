@@ -1,0 +1,9 @@
+{
+  "name": "@shadowroom/ui-tokens",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    "./tokens.css": "./src/tokens.css",
+    "./base.css": "./src/base.css"
+  }
+}

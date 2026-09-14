@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# esbuild ships its platform binary through a postinstall script; Vite needs it.
+# (pnpm 11 keeps build approvals here; `pnpm approve-builds` writes this key.)
+allowBuilds:
+  esbuild: true
