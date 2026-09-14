@@ -1192,6 +1192,48 @@
   opacity: 0.85;
 }
 
+/* Waveform inside a clip: one thin bar per bucket. */
+.sr-clip-wave {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 1px;
+  min-height: 14px;
+  overflow: hidden;
+}
+
+.sr-clip-wave i {
+  flex: 1;
+  min-width: 1px;
+  border-radius: 1px;
+  background: var(--sr-label-tertiary);
+  opacity: 0.75;
+}
+
+/* Clip context menu: a floating list at the pointer. */
+.sr-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+/* Specificity beats the shared `.sr-menu` rule in conversation.css, which is imported later. */
+.sr-studio .sr-clip-menu {
+  position: fixed;
+  z-index: 41;
+  width: 240px;
+  bottom: auto;
+}
+
+.sr-menu-item--danger:hover {
+  background: color-mix(in srgb, var(--sr-danger) 14%, transparent);
+  color: var(--sr-danger);
+}
+
+.sr-menu-item:disabled {
+  opacity: 0.5;
+}
+
 .sr-playhead {
   position: absolute;
   top: 28px;

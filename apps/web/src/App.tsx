@@ -847,6 +847,39 @@ export function App() {
     [],
   );
 
+  /** Notate one audio clip with the melody tool — "turn this clip into MIDI" from the clip menu. */
+  const notateClip = useCallback(async (path: string) => {
+    const id = `hum_to_midi-${Date.now()}`;
+    beginCallRef.current({
+      id,
+      server: "audio-analysis-dedupe",
+      name: "hum_to_midi",
+      status: "running",
+      summary: path.split("/").pop() ?? path,
+      detail: JSON.stringify({ path }, null, 2),
+    });
+    try {
+      const raw = await callTool<string>("analysis", "hum_to_midi", { path });
+      const text = String(raw);
+      const parsed = JSON.parse(text) as {
+        midi_path?: string;
+        notes?: Array<{ start_ms: number; end_ms: number; midi: number; name?: string }>;
+      };
+      endCallRef.current(id, {
+        status: "ok",
+        summary: `${parsed.notes?.length ?? 0} 个音符`,
+        detail: text.slice(0, 4000),
+      });
+      // Where the notated clip lands is the caller's decision (the clip menu puts it beside the audio
+      // it came from), so this only records the call and hands the notes back.
+      return { midi_path: parsed.midi_path, notes: parsed.notes };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      endCallRef.current(id, { status: "error", summary: message, detail: message });
+      return null;
+    }
+  }, []);
+
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
   const updateProject = (patch: (project: StudioProject) => StudioProject) =>
     setProjects((current) =>
@@ -972,6 +1005,7 @@ export function App() {
               project={openProject}
               onChange={updateProject}
               onExport={exportArrangement}
+              onConvertToMidi={notateClip}
               composer={chatInDock ? null : composerNode}
               onClose={() => {
                 setOpenProjectId(undefined);

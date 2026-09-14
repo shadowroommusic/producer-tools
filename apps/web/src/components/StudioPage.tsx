@@ -23,6 +23,7 @@ import {
   type StudioProject,
   type StudioTrack,
 } from "../lib/studio";
+import { peaksFor } from "../lib/waveform";
 
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
@@ -41,6 +42,7 @@ export function StudioPage({
   composer,
   onClose,
   onExport,
+  onConvertToMidi,
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
@@ -49,6 +51,8 @@ export function StudioPage({
   onClose: () => void;
   /** Bounce the arrangement through the generator plugin; resolves with the written path. */
   onExport?: (spec: Record<string, unknown>) => Promise<string | null>;
+  /** Notate one audio clip (the melody tool); resolves with its notes. */
+  onConvertToMidi?: (path: string) => Promise<{ midi_path?: string; notes?: StudioNote[] } | null>;
 }) {
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
@@ -65,6 +69,12 @@ export function StudioPage({
   const [outPath, setOutPath] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<string | null>(null);
+  /** Peaks per clip, filled in as each file decodes. */
+  const [waves, setWaves] = useState<Record<string, number[]>>({});
+  const [menu, setMenu] = useState<{ trackId: string; clipId: string; x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [converting, setConverting] = useState(false);
   /** One audio element per playable clip. */
   const players = useRef<Map<string, HTMLAudioElement>>(new Map());
   /** Detached audio elements still need a home so devtools (and tests) can see them. */
@@ -197,6 +207,26 @@ export function StudioPage({
   };
 
   // ---------- arrangement editing ----------
+
+  // Decode the audio behind every playable clip once, so the clips can draw themselves.
+  useEffect(() => {
+    let cancelled = false;
+    const wanted = project.tracks.flatMap((track) =>
+      track.clips.filter((clip) => isPlayable(clip.source)).map((clip) => ({ id: clip.id, path: clip.source as string })),
+    );
+    void (async () => {
+      for (const clip of wanted) {
+        if (waves[clip.id] !== undefined) continue;
+        const peaks = await peaksFor(clip.path);
+        if (cancelled || peaks === null) continue;
+        setWaves((current) => ({ ...current, [clip.id]: peaks }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.tracks]);
 
   const updateTrack = (trackId: string, patch: (track: StudioTrack) => StudioTrack) => {
     onChange((current) => ({
@@ -607,14 +637,16 @@ export function StudioPage({
                     key={clip.id}
                     clip={clip}
                     barPx={barPx}
+                    peaks={waves[clip.id]}
                     selected={selected?.clipId === clip.id}
                     onSelect={() => {
                       setSelected({ trackId: track.id, clipId: clip.id });
-                      seek(clip.start);
                     }}
+                    onSeekToStart={() => seek(clip.start)}
                     onMove={(start) => changeClip(track.id, clip.id, (current) => ({ ...current, start }))}
                     onResize={(length) => changeClip(track.id, clip.id, (current) => ({ ...current, length }))}
                     onDelete={() => removeClip(track.id, clip.id)}
+                    onMenu={(x, y) => setMenu({ trackId: track.id, clipId: clip.id, x, y })}
                   />
                 ))}
               </div>
@@ -639,6 +671,136 @@ export function StudioPage({
       {anySoloTrack !== undefined && (
         <p className="sr-studio-hint sr-mono">独奏中：{anySoloTrack.name}</p>
       )}
+
+      {/* Right-click actions on a clip. */}
+      {menu !== null &&
+        (() => {
+          const track = project.tracks.find((entry) => entry.id === menu.trackId);
+          const clip = track?.clips.find((entry) => entry.id === menu.clipId);
+          if (track === undefined || clip === undefined) return null;
+          const inside = playhead > clip.start && playhead < clip.start + clip.length;
+          const close = () => {
+            setMenu(null);
+            setRenaming(false);
+          };
+          return (
+            <>
+              <div className="sr-menu-backdrop" onPointerDown={close} />
+              <div
+                className="sr-menu sr-clip-menu"
+                style={{ left: menu.x, top: menu.y }}
+                role="menu"
+                aria-label={`${clip.name} 操作`}
+              >
+                <p className="sr-menu-title sr-mono">{clip.name}</p>
+                {renaming ? (
+                  <input
+                    className="sr-input sr-menu-input"
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(event) => setNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setRenaming(false);
+                      if (event.key === "Enter" && nameDraft.trim() !== "") {
+                        changeClip(track.id, clip.id, (current) => ({ ...current, name: nameDraft.trim() }));
+                        close();
+                      }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="sr-menu-item"
+                    onClick={() => {
+                      setNameDraft(clip.name);
+                      setRenaming(true);
+                    }}
+                  >
+                    <span className="sr-menu-label">改名</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  onClick={() => {
+                    const copy = { ...clip, id: `${clip.id}-copy-${Date.now().toString(36)}`, start: clip.start + clip.length };
+                    updateTrack(track.id, (current) => ({ ...current, clips: [...current.clips, copy] }));
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">复制到后面</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!inside}
+                  onClick={() => {
+                    const round = (value: number) => Math.round(value * 100) / 100;
+                    const left = { ...clip, length: round(playhead - clip.start) };
+                    const right = {
+                      ...clip,
+                      id: `${clip.id}-b-${Date.now().toString(36)}`,
+                      start: playhead,
+                      length: round(clip.start + clip.length - playhead),
+                    };
+                    updateTrack(track.id, (current) => ({
+                      ...current,
+                      clips: [...current.clips.filter((entry) => entry.id !== clip.id), left, right],
+                    }));
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">在播放头分割</span>
+                  <span className="sr-menu-hint sr-mono">{inside ? `第 ${positionLabel} 小节` : "播放头不在片段里"}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!isPlayable(clip.source) || converting || onConvertToMidi === undefined}
+                  onClick={async () => {
+                    if (clip.source === undefined || onConvertToMidi === undefined) return;
+                    setConverting(true);
+                    const result = await onConvertToMidi(clip.source);
+                    setConverting(false);
+                    const notes = result?.notes ?? [];
+                    if (notes.length > 0) {
+                      const notated = {
+                        ...clip,
+                        id: `${clip.id}-midi-${Date.now().toString(36)}`,
+                        name: `${clip.name} · MIDI`,
+                        start: clip.start + clip.length,
+                        notes,
+                        source: result?.midi_path ?? "",
+                      };
+                      updateTrack(track.id, (current) => ({ ...current, clips: [...current.clips, notated] }));
+                    }
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">{converting ? "识别中…" : "转 MIDI"}</span>
+                  <span className="sr-menu-hint sr-mono">
+                    {isPlayable(clip.source) ? `${clip.notes?.length ?? 0} 个音符` : "只有音频片段能转"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item sr-menu-item--danger"
+                  onClick={() => {
+                    removeClip(track.id, clip.id);
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">删除</span>
+                </button>
+              </div>
+            </>
+          );
+        })()}
     </div>
   );
 }
@@ -647,19 +809,25 @@ export function StudioPage({
 function Clip({
   clip,
   barPx,
+  peaks,
   selected,
   onSelect,
+  onSeekToStart,
   onMove,
   onResize,
   onDelete,
+  onMenu,
 }: {
   clip: StudioClip;
   barPx: number;
+  peaks?: number[];
   selected: boolean;
   onSelect: () => void;
+  onSeekToStart: () => void;
   onMove: (start: number) => void;
   onResize: (length: number) => void;
   onDelete: () => void;
+  onMenu: (x: number, y: number) => void;
 }) {
   const drag = useRef<{
     originX: number;
@@ -671,7 +839,11 @@ function Clip({
   } | null>(null);
 
   const begin = (event: React.PointerEvent<HTMLElement>, mode: "move" | "resize") => {
+    // Right-click opens the menu; only the primary button starts a drag (and the seek that comes
+    // with it — seeking on right-click made 在播放头分割 impossible).
+    if (event.button !== 0) return;
     onSelect();
+    onSeekToStart();
     const element = event.currentTarget;
     element.setPointerCapture(event.pointerId);
     drag.current = {
@@ -723,6 +895,11 @@ function Clip({
       onPointerUp={release}
       onPointerCancel={release}
       onLostPointerCapture={release}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onSelect();
+        onMenu(event.clientX, event.clientY);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Delete" || event.key === "Backspace") onDelete();
         if (event.key === "ArrowRight") onMove(clip.start + 1);
@@ -730,8 +907,15 @@ function Clip({
       }}
     >
       <span className="sr-clip-name">{clip.name}</span>
+      {peaks !== undefined && (
+        <span className="sr-clip-wave" aria-hidden="true">
+          {peaks.map((peak, index) => (
+            <i key={index} style={{ height: `${Math.max(6, Math.round(peak * 100))}%` }} />
+          ))}
+        </span>
+      )}
       {clip.notes !== undefined && clip.notes.length > 0 && <NoteRoll notes={clip.notes} />}
-      <span className="sr-clip-meta sr-mono">{clip.length} 小节</span>
+      <span className="sr-clip-meta sr-mono">{Number(clip.length.toFixed(2))} 小节</span>
       <span
         className="sr-clip-resize"
         aria-hidden="true"
