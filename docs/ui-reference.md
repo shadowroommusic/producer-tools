@@ -56,5 +56,13 @@ what we borrow, what we replace with our own, and how the agent core plugs in.
 
 ## Status
 
-Design reference only — the app scaffold (pnpm workspace + `apps/desktop` + `ui-*` packages) is the
-next implementation step.
+Built so far:
+
+- pnpm workspace (`apps/*`, `packages/*`) with `packages/ui-tokens` (`--sr-*` tokens, dark first).
+- `apps/web`: React + Vite shell — sidebar (nav + live MCP status), composer, session list, and the
+  first tool panel (`set-planner`, calling `plan_set` through `/api/call`).
+- Brand: files taken from shadowroom.cn, applied through `components/BrandMark.tsx` and
+  `apps/web/public/brand/`.
+
+Next: `tools/mcp-bridge.mjs` (the `pnpm serve` script) so the panels talk to MCP over stdio, then the
+Codex `app-server` core behind the composer, then the `ui-*` package split and `apps/desktop`.

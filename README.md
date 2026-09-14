@@ -9,9 +9,14 @@ producers.
 
 ## Status
 
-Scaffolding. The UI/frontend reference is written up in
-[docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek Harness); the agent
-core will be the Codex harness driven over its `app-server` protocol.
+Work in progress. The web UI shell renders today: workbench layout, composer, session list and the
+first tool panel (`set-planner`), all built on our own `--sr-*` tokens — dark by default, light on
+request. The brand files come straight from [shadowroom.cn](https://shadowroom.cn) (see
+`assets/logo/README.md`).
+
+Still missing, in order: the bridge that runs the four MCP servers for the UI, and the Codex core
+that turns a composer message into a running session. The UI/frontend reference lives in
+[docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek Harness).
 
 ## What it will contain
 
@@ -27,10 +32,11 @@ keeps their settings and gives DJs one place to work.
 
 ## Plan
 
-1. UI design, following the reference in `docs/ui-reference.md`.
-2. App scaffold: pnpm workspace, `apps/desktop`, `ui-*` packages, `--sr-*` design tokens.
+1. UI layer, following the reference in `docs/ui-reference.md`. ← *in progress*
+2. Bridge the four MCP servers (`pnpm serve`) so the panels run real jobs.
 3. Wire the Codex harness (bundled `codex` binary + `app-server` protocol) and register the four
    MCP servers with it.
+4. Desktop shell (`apps/desktop`).
 
 ## License
 

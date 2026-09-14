@@ -9,8 +9,12 @@ producers.
 
 ## 当前状态
 
-骨架阶段。UI／前端参考已经写在 [docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek
-Harness）；agent 内核按已定方案接入 —— 内置 `codex` 二进制，走它的 `app-server` 协议。
+进行中。Web UI 外壳已经能跑起来：工作台布局、输入框、会话列表和第一个工具面板（`set-planner`），
+全部基于我们自己的 `--sr-*` token —— 默认暗色，需要时才切浅色。品牌文件直接取自
+[shadowroom.cn](https://shadowroom.cn)（见 `assets/logo/README.md`）。
+
+还没做的，按顺序是：让 UI 真正调起四个 MCP 服务器的 bridge，以及把输入框里的需求变成一次真实会话的
+Codex 内核。UI／前端参考写在 [docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek Harness）。
 
 ## 会包含什么
 
@@ -25,9 +29,10 @@ Harness）；agent 内核按已定方案接入 —— 内置 `codex` 二进制�
 
 ## 计划
 
-1. UI 设计（按 `docs/ui-reference.md` 的参考）；
-2. 应用骨架：pnpm workspace、`apps/desktop`、`ui-*` 包、`--sr-*` 设计 token；
+1. UI 层（按 `docs/ui-reference.md` 的参考）。← *进行中*
+2. 接上 bridge（`pnpm serve`），让各个面板能真的跑任务。
 3. 接入 Codex harness（内置 `codex` 二进制 + `app-server` 协议），并把四个 MCP 服务器注册进去。
+4. 桌面外壳（`apps/desktop`）。
 
 ## 许可证
 
