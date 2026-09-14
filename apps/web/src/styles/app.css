@@ -53,22 +53,36 @@
   height: 100%;
 }
 
-.sr-dock-open {
-  position: absolute;
-  top: 10px;
-  right: 14px;
-  z-index: 6;
-  padding: 6px 12px;
-  border: 0.5px solid var(--sr-border-l3);
-  border-radius: var(--sr-radius-pill);
-  background: var(--sr-floating-fill);
-  color: var(--sr-label-secondary);
-  font-size: var(--sr-text-12);
-  box-shadow: var(--sr-shadow-soft);
+/* Closed dock: a narrow rail of shortcuts. It is a column of its own, so it never covers the
+   transport (the floating button it replaced sat exactly on 导入音频). */
+.sr-frame-dock[data-collapsed] {
+  overflow: hidden;
 }
 
-.sr-dock-open:hover {
-  border-color: var(--sr-border-strong);
+.sr-dock-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 10px 0;
+  border-left: var(--sr-shell-border);
+  background: var(--sr-bg-base);
+}
+
+.sr-dock-rail-btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+}
+
+.sr-dock-rail-btn:hover {
+  background: var(--sr-hover);
   color: var(--sr-label-primary);
 }
 
@@ -1234,6 +1248,30 @@
   margin: 0;
   color: var(--sr-label-secondary);
   font-size: var(--sr-text-13);
+}
+
+/* Panel page: the plugin's own surface, in the centre column. */
+.sr-plugin-page .sr-page-header {
+  gap: 6px;
+}
+
+.sr-page-back {
+  align-self: start;
+  padding: 4px 10px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-12);
+}
+
+.sr-page-back:hover {
+  border-color: var(--sr-border-strong);
+  color: var(--sr-label-primary);
+}
+
+.sr-plugin-page-body {
+  max-width: 760px;
 }
 
 .sr-plugin-grid {

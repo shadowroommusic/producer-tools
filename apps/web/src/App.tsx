@@ -13,6 +13,8 @@ import { Composer } from "./components/Composer";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
+import { IconChat, IconPlugin } from "./components/icons";
+import { PluginPanelPage } from "./components/PluginPanelPage";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
 import { StudioProjects, summarize } from "./components/StudioProjects";
@@ -85,7 +87,6 @@ export function App() {
   );
   const [activePlugin, setActivePlugin] = useState("set-planner");
   const [dockOpen, setDockOpen] = useState(true);
-  const [dockTab, setDockTab] = useState<"chat" | "plugin">("plugin");
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("标准");
@@ -93,8 +94,14 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
-  const [mainView, setMainView] = useState<"conversation" | "plugins" | "studio">(
-    () => (window.localStorage.getItem("shadowroom.view") as "conversation" | "plugins" | "studio" | null) ?? "conversation",
+  const [mainView, setMainView] = useState<"conversation" | "plugins" | "plugin" | "studio">(
+    () =>
+      (window.localStorage.getItem("shadowroom.view") as
+        | "conversation"
+        | "plugins"
+        | "plugin"
+        | "studio"
+        | null) ?? "conversation",
   );
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
@@ -773,8 +780,8 @@ export function App() {
   absorbRef.current = absorbToolResult;
 
   const openProject = projects.find((project) => project.id === openProjectId);
-  /** With the dock's 对话 tab open the composer moves there, so there is only ever one input. */
-  const chatInDock = dockOpen && dockTab === "chat";
+  /** With the chat dock open the composer moves there, so there is only ever one input. */
+  const chatInDock = dockOpen;
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
   const updateProject = (patch: (project: StudioProject) => StudioProject) =>
     setProjects((current) =>
@@ -859,9 +866,17 @@ export function App() {
             activePlugin={active?.repo}
             onOpenPlugin={(repo) => {
               setActivePlugin(repo);
-              setDockOpen(true);
+              setMainView("plugin");
             }}
           />
+          ) : mainView === "plugin" && active !== undefined ? (
+            <PluginPanelPage
+              plugin={active}
+              home={home}
+              onBack={() => setMainView("plugins")}
+              onCallBegin={beginCall}
+              onCallEnd={endCall}
+            />
           ) : mainView === "studio" ? (
           openProject === undefined ? (
             <StudioProjects
@@ -906,46 +921,47 @@ export function App() {
             composer={chatInDock ? null : composerNode}
           />
           )}
-          {!dockOpen && (
-            <button
-              type="button"
-              className="sr-dock-open"
-              title="展开右侧边栏和 AI 聊天"
-              onClick={() => {
-                setDockOpen(true);
-                setDockTab("chat");
-              }}
-            >
-              对话 ›
-            </button>
-          )}
+        </div>
+      }
+      dockRail={
+        <div className="sr-dock-rail">
+          <button
+            type="button"
+            className="sr-dock-rail-btn"
+            title="展开对话"
+            aria-label="展开对话"
+            onClick={() => setDockOpen(true)}
+          >
+            <IconChat size={18} />
+          </button>
+          <button
+            type="button"
+            className="sr-dock-rail-btn"
+            title="插件"
+            aria-label="插件"
+            onClick={() => setMainView("plugins")}
+          >
+            <IconPlugin size={18} />
+          </button>
         </div>
       }
       dock={
-        selected === undefined ? null : (
-          <DockPanel
-            plugin={selected}
-            home={home}
-            tab={dockTab}
-            onTabChange={setDockTab}
-            chat={
-              <>
-                <div className="sr-transcript sr-scroll">
-                  <Transcript
-                    messages={session?.messages ?? []}
-                    calls={session?.calls ?? []}
-                    running={running}
-                    quiet={mode === "极简"}
-                  />
-                </div>
-                <div className="sr-dock-composer">{composerNode}</div>
-              </>
-            }
-            onClose={() => setDockOpen(false)}
-            onCallBegin={beginCall}
-            onCallEnd={endCall}
-          />
-        )
+        <DockPanel
+          chat={
+            <>
+              <div className="sr-transcript sr-scroll">
+                <Transcript
+                  messages={session?.messages ?? []}
+                  calls={session?.calls ?? []}
+                  running={running}
+                  quiet={mode === "极简"}
+                />
+              </div>
+              <div className="sr-dock-composer">{composerNode}</div>
+            </>
+          }
+          onClose={() => setDockOpen(false)}
+        />
       }
     />
   );

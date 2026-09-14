@@ -62,9 +62,10 @@ Say *把这段哼唱转成 MIDI* and it happens inside the same conversation: th
 (`hum_to_midi`, in `audio-analysis-dedupe`) on the recording it was just given, and the detected notes
 appear as a clip with a mini piano roll on the open Studio project — no extra button, no second step.
 
-**The dock** (right column) has two tabs: **对话** — the transcript plus the composer, so you can watch
-and type to the agent while working in Studio — and the selected **plugin panel**. With the dock closed
-a 对话 › button sits in the top-right corner of the page.
+**The dock** (right column) is the conversation: the transcript plus the composer, so you can watch and
+type to the agent while working in Studio. Collapsed it is a narrow rail with two shortcuts —
+**对话** and **插件** — which never covers the page. Plugin panels are pages in the middle column, not
+part of the dock.
 
 | Panel | What it does |
 | --- | --- |

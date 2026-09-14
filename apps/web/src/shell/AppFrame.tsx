@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import {
   computeColumns,
   defaultDockWidth,
+  DOCK_RAIL,
   SIDEBAR_AUTO_COLLAPSE,
   SIDEBAR_DEFAULT,
 } from "./columns";
@@ -96,11 +97,14 @@ export function AppFrame({
   sidebar,
   main,
   dock,
+  dockRail,
   dockCollapsed = false,
 }: {
   sidebar: (shell: { collapsed: boolean; toggleSidebar: () => void }) => ReactNode;
   main: ReactNode;
   dock: ReactNode;
+  /** The shortcuts shown in the dock column while the dock itself is closed. */
+  dockRail?: ReactNode;
   dockCollapsed?: boolean;
 }) {
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -153,7 +157,7 @@ export function AppFrame({
     setSidebarPref((current) => (current === 0 ? SIDEBAR_DEFAULT : 0));
   }, [narrow]);
 
-  const template = `${columns.sidebar}px minmax(0, 1fr) ${dockCollapsed ? 0 : columns.rightbar}px`;
+  const template = `${columns.sidebar}px minmax(0, 1fr) ${dockCollapsed ? DOCK_RAIL : columns.rightbar}px`;
   const sidebarNode = useMemo(
     () => sidebar({ collapsed, toggleSidebar }),
     [sidebar, collapsed, toggleSidebar],
@@ -172,8 +176,12 @@ export function AppFrame({
       <div className="sr-frame-main">{main}</div>
       {/* With no room for a track the panel floats over the centre — mark it so it reads as a
           drawer (shadow, its own edge) instead of looking like it ate the work surface. */}
-      <div className="sr-frame-dock" data-floating={!dockCollapsed && columns.rightbar === 0 ? true : undefined}>
-        {dock}
+      <div
+        className="sr-frame-dock"
+        data-collapsed={dockCollapsed || undefined}
+        data-floating={!dockCollapsed && columns.rightbar === 0 ? true : undefined}
+      >
+        {dockCollapsed ? dockRail : dock}
       </div>
 
       {!collapsed && (

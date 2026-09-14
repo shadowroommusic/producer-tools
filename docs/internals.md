@@ -131,9 +131,10 @@ What was measured and matters:
   tool rows in the order they happened, notice rows, and a per-turn `tokens · seconds` line.
 - **Pages** — the plugins page (`PluginsPage`) is the centre column's other occupant; picking a card
   selects that plugin and opens its panel in the dock.
-- **Dock** — two tabs: 对话 (the shared `Transcript` plus the composer; the main column's composer is
-  hidden while it is open, so there is only ever one input) and the selected plugin's panel. With the
-  dock closed a `对话 ›` button floats in the page's top-right corner.
+- **Dock** — the conversation only: the shared `Transcript` plus the composer (the main column's
+  composer is hidden while it is open, so there is only ever one input). Collapsed it becomes a 44px
+  rail of shortcuts (对话 / 插件) — a column of its own, never a floating button over the transport.
+- **Plugin panels** are pages in the centre column (`PluginPanelPage`), opened from the plugins page.
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
   pattern for "the agent does the work, the workbench just shows it": tools write, the UI absorbs.

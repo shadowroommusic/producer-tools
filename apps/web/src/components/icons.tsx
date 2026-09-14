@@ -130,6 +130,13 @@ export const IconDock = (props: IconProps) => (
   </Glyph>
 );
 
+/** Chat bubble: the dock's own icon. */
+export const IconChat = (props: IconProps) => (
+  <Glyph {...props}>
+    <path d="M13.5 8.6c0 2.5-2.5 4.5-5.5 4.5-.8 0-1.5-.1-2.2-.4L2.8 13.5l1-2.6C3 10.2 2.5 9.4 2.5 8.6c0-2.5 2.5-4.5 5.5-4.5s5.5 2 5.5 4.5Z" />
+  </Glyph>
+);
+
 export const IconExpand = (props: IconProps) => (
   <Glyph {...props}>
     <path d="M9.5 6.5 13 3M10 3h3v3M6.5 9.5 3 13M3 10v3h3" />

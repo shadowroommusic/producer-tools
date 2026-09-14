@@ -23,6 +23,8 @@ export const SIDEBAR_MAX = 420;
 export const SIDEBAR_DEFAULT = 280;
 /** Closed-sidebar rail: a 36px control column inside 10px paddings. */
 export const SIDEBAR_COLLAPSED = 56;
+/** Closed-dock rail: the chat/plugins shortcuts that never cover the work surface. */
+export const DOCK_RAIL = 44;
 /** Frame width below which the sidebar collapses to the rail. */
 export const SIDEBAR_AUTO_COLLAPSE = 1024;
 /** Dock drag clamp floor. */
