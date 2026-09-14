@@ -160,6 +160,10 @@ outro 2 小节只留和弦，顺便把 MIDI 也写出来" produces:
 | exported mix (48 kHz, via the dialog) | intro 0.098 · drop 0.252 · outro 0.105 RMS per section |
 | exported MIDI (via the dialog) | 148 notes, tempo 122, kick/clap/hat + bass + chords |
 
+Exports are not limited to PCM either: `container: "m4a"` goes through the same decoder/encoder the
+mixdown reads with (afconvert or ffmpeg), and a clip the decoder cannot read comes back in the
+export's `warnings` instead of vanishing from the bounce.
+
 The before-picture is worth keeping: a drum part used to render one bar of audio followed by silence
 (`night-drive-drums.wav`: bar 1 = 0.108 RMS, bars 2–8 = 0.000), because `_render_drums` placed its
 step row once instead of tiling it. That bug is fixed in the generator, with a test.

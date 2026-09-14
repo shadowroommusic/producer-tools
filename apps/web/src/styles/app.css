@@ -916,6 +916,13 @@
   overflow-wrap: anywhere;
 }
 
+.sr-export-note {
+  flex: none;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .sr-studio-hint {
   margin: 0;
   padding: 4px 16px 6px;

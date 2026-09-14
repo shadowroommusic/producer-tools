@@ -33,7 +33,7 @@ function defaultExportPath(projectName: string, kind: "mix" | "stems" | "midi", 
   const base = projectName.trim().replace(/\s+/g, "-") || "song";
   if (kind === "stems") return `~/Documents/ShadowRoom/exports/${base}-stems`;
   if (kind === "midi") return `~/Documents/ShadowRoom/exports/${base}.mid`;
-  return `~/Documents/ShadowRoom/exports/${base}.${container === "aiff" ? "aiff" : "wav"}`;
+  return `~/Documents/ShadowRoom/exports/${base}.${container === "aiff" ? "aiff" : container === "m4a" ? "m4a" : "wav"}`;
 }
 
 export function StudioPage({
@@ -76,7 +76,7 @@ export function StudioPage({
   const [exportKind, setExportKind] = useState<"mix" | "stems" | "midi">("mix");
   const [sampleRate, setSampleRate] = useState(44100);
   const [bitDepth, setBitDepth] = useState(16);
-  const [container, setContainer] = useState<"wav" | "aiff">("wav");
+  const [container, setContainer] = useState<"wav" | "aiff" | "m4a">("wav");
   const [outPath, setOutPath] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<string | null>(null);
@@ -493,7 +493,8 @@ export function StudioPage({
             className="sr-input sr-input--num"
             value={bitDepth}
             aria-label="位深"
-            disabled={exportKind === "midi"}
+            /* AAC has no bit depth: it is refused by the encoder, so the field goes quiet. */
+            disabled={exportKind === "midi" || container === "m4a"}
             onChange={(event) => setBitDepth(Number(event.target.value))}
           >
             <option value={16}>16-bit</option>
@@ -506,13 +507,16 @@ export function StudioPage({
             aria-label="文件格式"
             disabled={exportKind === "midi"}
             onChange={(event) => {
-              const next = event.target.value as "wav" | "aiff";
+              const next = event.target.value as "wav" | "aiff" | "m4a";
               setContainer(next);
-              setOutPath((current) => current.replace(/\.(wav|aiff)$/i, next === "aiff" ? ".aiff" : ".wav"));
+              setOutPath((current) =>
+                current.replace(/\.(wav|aiff|m4a)$/i, next === "aiff" ? ".aiff" : next === "m4a" ? ".m4a" : ".wav"),
+              );
             }}
           >
             <option value="wav">WAV</option>
             <option value="aiff">AIFF</option>
+            <option value="m4a">M4A (AAC)</option>
           </select>
           <input
             className="sr-input sr-export-path"
@@ -560,7 +564,9 @@ export function StudioPage({
             {exporting ? "导出中…" : "导出"}
           </button>
           {exported !== null && <span className="sr-studio-exported sr-mono">已写入 {exported}</span>}
-          <span className="sr-field-label sr-mono">MP3 / AAC 需要编码器，暂不支持</span>
+          <span className="sr-export-note">
+            {container === "m4a" ? "M4A 用系统编码器（macOS afconvert / ffmpeg）" : "MP3 需要另装编码器"}
+          </span>
         </div>
       )}
 

@@ -49,15 +49,15 @@ double-clicking a lane, dragged to move and deleted with Delete. A new project s
 tracks, no clips — so what is on the timeline is always something you or the agent actually made.
 
 It **plays**: 导入音频 drops a file from disk onto a track (its length comes from the file's real
-duration), the transport streams it through the local bridge, clips start and stop as the playhead
+duration — mp3, m4a, flac and aiff included, not just WAV), the transport streams it through the local bridge, clips start and stop as the playhead
 crosses them, and mute / solo / the fader move the volume. Clips can be moved, resized from their right
 edge, and removed; the ruler seeks; zoom changes the bar width.
 
 **导出音频** offers three things, and all three are real files: **整首** (the arrangement mixed down),
 **分轨** (one file per track) and **MIDI** (a Type-1 file, one track per part, notes taken from MIDI
 clips or from clips the hum-to-MIDI flow notated). Sample rate (44.1/48/96 kHz), bit depth (16/24) and
-container (WAV/AIFF) are selectable; lossy formats are refused with a note instead of pretending,
-because MP3/AAC need an encoder this project does not depend on.
+container (**WAV / AIFF / M4A (AAC)**) are selectable — the AAC path uses the encoder the machine
+already has (macOS `afconvert`, or ffmpeg), and the dialog says so; only MP3 needs one you install.
 
 All of it is reachable from a sentence as well as from the buttons — ask for a song, a stem export and
 a MIDI file in one message and the agent calls `render_song`, `export_stems` and `export_midi` itself.

@@ -194,3 +194,11 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   finished renders per bar rather than trusting a duration check, fixed with tests in the generator.
   Lesson for this repo: "the file exists and is the right length" is not evidence that it contains
   the music — measure the content.
+
+- **2026-09-15 — exports read and write what a studio actually holds.** The mixdown/stems only
+  understood plain PCM WAV and skipped anything else silently, so an imported mp3 was missing from
+  "export the song" while the result looked successful. The generator now reads extensible RIFF
+  headers and decodes mp3/m4a/flac/aiff through afconvert or ffmpeg, reports clips it cannot read in
+  `warnings`, and can write **M4A (AAC)** — so the export dialog offers WAV / AIFF / M4A and disables
+  位深 for AAC (it has none). Measured: an m4a clip mixed in at level, a 48 kHz m4a mix + stems
+  decoding back at peak 0.945 through the UI.
