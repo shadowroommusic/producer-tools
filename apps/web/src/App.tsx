@@ -47,12 +47,16 @@ import {
   type StudioProject,
 } from "./lib/studio";
 import {
+  createBargeIn,
+  createTurnDetector,
   saveRecording,
   speak,
   startCapture,
   startListening,
   stopSpeaking,
   voiceInputSupported,
+  type BargeIn,
+  type TurnDetector,
   type VoiceCapture,
   type VoiceSession,
 } from "./lib/voice";
@@ -87,9 +91,14 @@ export function App() {
     () => (window.localStorage.getItem("shadowroom.workspace") as WorkspaceId | null) ?? "workbench",
   );
   const [activePlugin, setActivePlugin] = useState("set-planner");
-  // Closed by default: on the conversation page the transcript is already the main surface, and the
-  // dock would show the very same thing twice.
-  const [dockOpen, setDockOpen] = useState(false);
+  /**
+   * The dock is the conversation next to the work. It stays open on the work pages (工作台, Studio,
+   * the plugin pages) and folds away on the conversation page, where the transcript already owns the
+   * main column — the one place the same chat would otherwise be drawn twice. The choice sticks.
+   */
+  const [dockOpen, setDockOpen] = useState(
+    () => window.localStorage.getItem("shadowroom.dock") !== "closed",
+  );
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("标准");
@@ -97,14 +106,17 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
-  const [mainView, setMainView] = useState<"conversation" | "plugins" | "plugin" | "studio">(
+  const [mainView, setMainView] = useState<
+    "workbench" | "conversation" | "plugins" | "plugin" | "studio"
+  >(
     () =>
       (window.localStorage.getItem("shadowroom.view") as
+        | "workbench"
         | "conversation"
         | "plugins"
         | "plugin"
         | "studio"
-        | null) ?? "conversation",
+        | null) ?? "workbench",
   );
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
@@ -125,7 +137,16 @@ export function App() {
   const voiceModeRef = useRef(false);
   const voiceStateRef = useRef<"listening" | "thinking" | "speaking">("listening");
   voiceModeRef.current = voiceMode;
-  voiceStateRef.current = voiceState;
+  /**
+   * The call's state lives in the ref (the callbacks below are not re-created on every render), and
+   * `useState` only draws it. Every change goes through here: `setVoiceState` alone would leave the
+   * ref stale for a moment, and stopping the recognizer fires `onend` *in that moment* — which read
+   * "still listening" and started the user's turn over (measured: one phrase, two messages).
+   */
+  const moveVoice = useCallback((next: "listening" | "thinking" | "speaking") => {
+    voiceStateRef.current = next;
+    setVoiceState(next);
+  }, []);
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   const [modelId, setModelId] = useState<string | undefined>(
@@ -146,7 +167,8 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("shadowroom.view", mainView);
     window.localStorage.setItem("shadowroom.workspace", workspace);
-  }, [mainView, workspace]);
+    window.localStorage.setItem("shadowroom.dock", dockOpen ? "open" : "closed");
+  }, [dockOpen, mainView, workspace]);
 
   // Reopen whatever project was open last, so a reload lands where the work was.
   useEffect(() => {
@@ -527,9 +549,11 @@ export function App() {
   );
 
   /**
-   * Voice call: one tap starts a conversation instead of a dictation. The microphone stays open, each
-   * finished phrase carries its own WAV to the agent, and the answer is spoken before listening
-   * resumes — so the call never really stops.
+   * Voice call: one tap starts a conversation instead of a dictation, and from then on it behaves
+   * like a phone call — the user talks, stops, the answer comes back spoken, and talking over the
+   * answer interrupts it. The microphone stays open for the whole call (needed to hear an
+   * interruption), but only the stretch between "the user stopped" and "the answer finished" is
+   * turned into a message; every turn carries the WAV of the phrase that asked for it.
    *
    * The callbacks go through refs: the speech session outlives renders, but it must always reach the
    * *current* submit (the one that knows which session is active).
@@ -539,78 +563,143 @@ export function App() {
   const submitRef = useRef(submit);
   submitRef.current = submit;
   const listenRef = useRef<() => void>(() => undefined);
-  const phraseRef = useRef<(text: string) => void>(() => undefined);
+  const finishRef = useRef<() => void>(() => undefined);
+  /** Everything the recognizer has finalized for the turn being spoken. */
+  const heardRef = useRef("");
+  /** Its live interim words — shown under the waveform so the user sees what was heard. */
+  const partialRef = useRef("");
+  const [voicePartial, setVoicePartial] = useState("");
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const turnRef = useRef<TurnDetector | null>(null);
+  const bargeRef = useRef<BargeIn | null>(null);
+  /** Bumped on every interruption, so a canceled answer's `onend` cannot resume the call twice. */
+  const answerToken = useRef(0);
+  /**
+   * Every listening session carries a token: `SpeechRecognition` fires `onend`/`onresult` from the
+   * session that was already replaced, and without this the stale session wrote the previous turn's
+   * words into the next one (measured: one phrase came back as the phrase twice).
+   */
+  const listenToken = useRef(0);
+
+  /** Stop the recognizer and make sure nothing it still has queued can reach the call. */
+  const stopListening = useCallback(() => {
+    listenToken.current += 1;
+    voiceSession.current?.stop();
+    voiceSession.current = null;
+  }, []);
 
   const listen = useCallback(() => {
     if (voiceSession.current !== null) return;
+    const token = listenToken.current + 1;
+    listenToken.current = token;
+    const current = () => listenToken.current === token;
+    heardRef.current = "";
+    partialRef.current = "";
+    setVoicePartial("");
+    // A fresh turn: the endpointer starts from "nothing heard yet".
+    turnRef.current?.reset();
     voiceSession.current = startListening({
-      onPartial: () => undefined,
+      onPartial: (text) => {
+        if (!current()) return;
+        partialRef.current = text;
+        setVoicePartial(text);
+      },
       onFinal: (text) => {
-        if (text !== "") phraseRef.current(text);
+        if (text === "" || !current()) return;
+        // A finished phrase is *not* the end of the turn: pausing mid-sentence must not cut the user
+        // off, so the text accumulates and the endpointer decides when the turn is over.
+        heardRef.current = heardRef.current === "" ? text : `${heardRef.current} ${text}`;
+        partialRef.current = "";
+        setVoicePartial("");
+        setVoiceNotice(null);
       },
       onEnd: () => {
+        if (!current()) return;
         voiceSession.current = null;
         // Recognition stops on its own after a silence: keep the call up.
         if (voiceModeRef.current && voiceStateRef.current === "listening") listenRef.current();
+      },
+      onError: (message) => {
+        if (!current() || message === "no-speech" || message === "aborted") return;
+        setVoiceNotice(
+          message === "not-allowed" || message === "audio-capture"
+            ? "拿不到麦克风：在系统设置里允许浏览器使用麦克风。"
+            : `语音识别出错：${message}`,
+        );
       },
     });
   }, []);
   listenRef.current = listen;
 
-  const sendSpokenPhrase = useCallback(async (text: string) => {
-    voiceSession.current?.stop();
-    voiceSession.current = null;
-    setVoiceState("thinking");
+  /** The user stopped talking: hand the turn over, with the WAV of that phrase attached. */
+  const finishTurn = useCallback(async () => {
+    const text = [heardRef.current, partialRef.current]
+      .map((part) => part.trim())
+      .filter((part) => part !== "")
+      .join(" ");
+    if (text === "") {
+      // Noise, not words: keep listening, no turn is opened.
+      turnRef.current?.reset();
+      return;
+    }
+    stopListening();
+    setVoicePartial("");
+    moveVoice("thinking");
     const wav = capture.current?.takeWav() ?? null;
     const path = wav === null ? null : await saveRecording(wav, "voice");
     const mentions: Mention[] =
       path === null ? [] : [{ name: path.split("/").pop() ?? "voice.wav", path, label: "这段语音" }];
     submitRef.current(text, { mentions });
   }, []);
-  phraseRef.current = (text: string) => {
-    void sendSpokenPhrase(text);
-  };
+  finishRef.current = () => void finishTurn();
 
   const startCall = useCallback(async () => {
     const recorder = capture.current ?? (await startCapture());
-    if (recorder === null) return;
+    if (recorder === null) {
+      setVoiceNotice("拿不到麦克风：在系统设置里允许浏览器使用麦克风。");
+      return;
+    }
     capture.current = recorder;
+    setVoiceNotice(null);
+    turnRef.current = createTurnDetector({ onTurnEnd: () => finishRef.current() });
+    bargeRef.current = createBargeIn({
+      onSpeak: () => {
+        if (voiceStateRef.current !== "speaking") return;
+        // The user talked over the answer: stop it and listen from here.
+        answerToken.current += 1;
+        stopSpeaking();
+        capture.current?.takeWav(); // the answer's tail is not part of the next request
+        moveVoice("listening");
+        listenRef.current();
+      },
+    });
     setVoiceMode(true);
-    setVoiceState("listening");
+    moveVoice("listening");
     listenRef.current();
   }, []);
 
   const hangUp = useCallback(() => {
-    voiceSession.current?.stop();
-    voiceSession.current = null;
+    stopListening();
+    answerToken.current += 1;
     stopSpeaking();
     capture.current?.stop();
     capture.current = null;
+    turnRef.current = null;
+    bargeRef.current = null;
+    setVoicePartial("");
     setVoiceMode(false);
   }, []);
 
-  // While the call is up, the level meter feeds the waveform.
+  // While the call is up the microphone feeds exactly one thing at a time: the endpointer while the
+  // user has the turn, the barge-in detector while the answer is playing.
   useEffect(() => {
     if (!voiceMode) return;
     let raf: number | null = null;
-    /** Sustained loudness while the answer plays — the user talking over it. */
-    let loud = 0;
-    const tick = () => {
+    const tick = (now: number) => {
       const value = capture.current?.level() ?? 0;
       level.current = value;
-      if (voiceStateRef.current === "speaking") {
-        loud = value > 0.28 ? loud + 1 : 0;
-        // ~200ms of speech: stop talking and start listening again — the answer is interruptible.
-        if (loud >= 12) {
-          loud = 0;
-          stopSpeaking();
-          capture.current?.takeWav(); // drop the answer's tail from the next turn's audio
-          setVoiceState("listening");
-          listenRef.current();
-        }
-      } else {
-        loud = 0;
-      }
+      if (voiceStateRef.current === "listening") turnRef.current?.feed(value, now);
+      else if (voiceStateRef.current === "speaking") bargeRef.current?.feed(value, now);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -619,20 +708,23 @@ export function App() {
     };
   }, [voiceMode]);
 
-  // When the turn is done, speak the answer and go back to listening.
+  // When the turn is done, speak the answer and go back to listening — the call never stops.
   useEffect(() => {
     if (!voiceMode || voiceState !== "thinking" || running) return;
     const answer = lastAssistant?.role === "assistant" ? lastAssistant.text.trim() : "";
     if (answer === "") {
-      setVoiceState("listening");
+      moveVoice("listening");
       listenRef.current();
       return;
     }
-    setVoiceState("speaking");
-    speak(answer, () => {
-      if (!voiceModeRef.current) return;
+    const token = answerToken.current + 1;
+    answerToken.current = token;
+    moveVoice("speaking");
+    bargeRef.current?.start(performance.now());
+    speak(speechText(answer), () => {
+      if (!voiceModeRef.current || answerToken.current !== token) return;
       capture.current?.takeWav(); // drop the audio captured while the answer played
-      setVoiceState("listening");
+      moveVoice("listening");
       listenRef.current();
     });
   }, [lastAssistant, running, voiceMode, voiceState]);
@@ -684,7 +776,8 @@ export function App() {
         : "draft",
   }));
 
-  const composerNode = (
+  /** One composer, two homes (the main column or the dock); the dock gets a shorter placeholder. */
+  const composerFor = (placeholder?: string) => (
     <>
         {pendingForSession.map((approval) => (
           <ApprovalCard
@@ -720,7 +813,10 @@ export function App() {
         voiceMode={voiceMode}
         voiceState={voiceState}
         voiceLevel={() => level.current}
+        voicePartial={voicePartial}
+        voiceNotice={voiceNotice}
         onEndVoice={hangUp}
+        {...(placeholder === undefined ? {} : { placeholder })}
       />
     </>
   );
@@ -1017,10 +1113,15 @@ export function App() {
           showPlugins={mainView === "plugins"}
           onSelectWorkspace={(next) => {
             setWorkspace(next);
-            setMainView(next === "studio" ? "studio" : "conversation");
-            if (next === "workbench") setDockOpen(false);
+            // The work pages keep the conversation beside them; the conversation page is the
+            // conversation, so the dock folds away there.
+            setMainView(next === "studio" ? "studio" : "workbench");
+            setDockOpen(true);
           }}
-          onShowPlugins={() => setMainView("plugins")}
+          onShowPlugins={() => {
+            setMainView("plugins");
+            setDockOpen(true);
+          }}
           sessions={summaries}
           activeSessionId={store.activeId}
           onSelectSession={(id) => {
@@ -1037,7 +1138,33 @@ export function App() {
       )}
       main={
         <div className="sr-main-wrap">
-          {mainView === "plugins" ? (
+          {mainView === "workbench" ? (
+          <WorkbenchHome
+            projects={[...projects].sort((a, b) => b.updatedAt - a.updatedAt)}
+            sessions={summaries}
+            plugins={plugins}
+            onOpenProject={(id) => {
+              setOpenProjectId(id);
+              rememberOpenProject(id);
+              setWorkspace("studio");
+              setMainView("studio");
+            }}
+            onOpenSession={(id) => {
+              setStore((current) => ({ ...current, activeId: id }));
+              setMainView("conversation");
+              setDockOpen(false);
+            }}
+            onOpenPlugins={() => setMainView("plugins")}
+            onCreateProject={() => {
+              const created = defaultProject();
+              setProjects((current) => [created, ...current]);
+              setOpenProjectId(created.id);
+              rememberOpenProject(created.id);
+              setWorkspace("studio");
+              setMainView("studio");
+            }}
+          />
+          ) : mainView === "plugins" ? (
           <PluginsPage
             plugins={plugins}
             activePlugin={active?.repo}
@@ -1087,7 +1214,7 @@ export function App() {
               canRedo={history.future.length > 0}
               onExport={exportArrangement}
               onConvertToMidi={notateClip}
-              composer={chatInDock ? null : composerNode}
+              composer={chatInDock ? null : composerFor()}
               onClose={() => {
                 setOpenProjectId(undefined);
                 rememberOpenProject(null);
@@ -1102,7 +1229,7 @@ export function App() {
             quiet={mode === "极简"}
             suggestions={SUGGESTIONS}
             onSuggestion={setDraft}
-            composer={chatInDock ? null : composerNode}
+            composer={chatInDock ? null : composerFor()}
           />
           )}
         </div>
@@ -1112,8 +1239,9 @@ export function App() {
           <button
             type="button"
             className="sr-dock-rail-btn"
-            title="展开对话"
+            title={running ? "对话 · 正在运行" : "展开对话"}
             aria-label="展开对话"
+            data-busy={running || voiceMode || undefined}
             onClick={() => setDockOpen(true)}
           >
             <IconChat size={18} />
@@ -1132,7 +1260,7 @@ export function App() {
                   quiet={mode === "极简"}
                 />
               </div>
-              <div className="sr-dock-composer">{composerNode}</div>
+              <div className="sr-dock-composer">{composerFor("和智能体说点什么…")}</div>
             </>
           }
           onClose={() => setDockOpen(false)}
@@ -1148,6 +1276,28 @@ const SUGGESTIONS = [
   "把 Rekordbox 的 cue 和颜色转到 Serato",
   "找出资料库里重复的曲目",
 ];
+
+/**
+ * What the call reads out loud: the answer without the parts that only make sense on screen —
+ * fenced code, backticks, markdown emphasis, links and list bullets. Spelling "star star four bars
+ * star star" out loud is worse than saying nothing.
+ * @param text - the assistant's answer as it appears in the transcript.
+ * @returns the same answer, spoken-shaped.
+ */
+function speechText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, "（代码略）")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "链接")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(^|\s)[*_]([^*_]+)[*_]/g, "$1$2")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
 
 /** Part names the synth uses, in the workbench's language. */
 const PART_LABEL: Record<string, string> = {

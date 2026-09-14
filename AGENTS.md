@@ -129,6 +129,32 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   file duration, clip move/resize/delete, ruler seek and zoom. Lesson recorded in the code: Studio
   edits are functional updates — a captured snapshot silently reverted an import once.
 
+- **2026-09-15 — 工作台 is a page again, and the dock is the chat everywhere else.** The user's
+  report ("面板按钮根本就没啥用，右侧对话栏在主工作台中不显示"): 工作台 rendered the conversation,
+  and selecting it closed the dock, so the work page had no chat beside it and the same transcript
+  appeared twice. Now 工作台 is `WorkbenchHome` (recent projects / conversations / plugins entry) with
+  the conversation dock open on the right; opening a session moves the transcript into the centre
+  column and folds the dock; the open/closed choice is remembered (`shadowroom.dock`). The plugin
+  page's empty 面板 section is gone, and the plugin panel's back pill no longer stretches across the
+  header (a grid item's inline default is `stretch`). A frame too narrow for a dock column (below
+  ~760px) draws the open dock as a 420px drawer over the centre column instead of a zero-width track
+  — measured 1px wide, with its close button off-screen, before that.
+
+- **2026-09-15 — the voice call is turn-based, like a phone call.** "你说话停下来 → 他回答 →
+  你说话可以打断他". Implemented as two pure detectors in `lib/voice.ts` (`createTurnDetector`,
+  `createBargeIn`), because the recognizer's own phrase ends are unreliable and the answer leaks into
+  the microphone. Three races were found by scripted tests and fixed with tokens (see
+  `docs/voice-call.md`): a stopped recognizer's `onend` re-opened the turn (one phrase became two
+  messages), a replaced session wrote the previous turn's words into the next, and a canceled
+  answer's `onend` resumed listening twice. `pnpm test` drives both detectors with synthetic
+  loudness traces; the real-speaker thresholds are still unverified.
+
+- **2026-09-15 — every claim in this repo has a way to be checked again.** `pnpm typecheck` for the
+  web app, `pnpm test` for the call's detectors, `python3 -m unittest discover -s tests -q` in each
+  MCP repo, Playwright scripts under `/tmp/sp-shots` for the browser runs. The studio transport's
+  action group (音轨 / 导入音频 / 导出音频) is one flex block so a narrow centre column wraps it as a
+  row instead of orphaning 导出音频 above the timeline.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

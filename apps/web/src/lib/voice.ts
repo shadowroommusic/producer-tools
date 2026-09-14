@@ -50,6 +50,162 @@ export type VoiceSession = {
 };
 
 /**
+ * Endpointing for the voice call: the call listens, the *user* decides when the turn is over by
+ * stopping, and the answer comes back without anyone pressing anything.
+ *
+ * The detector watches loudness rather than the recognizer's own phrase breaks: Chrome ends a result
+ * whenever it feels like it (and `continuous` mode still splits on pauses), so a final transcript is
+ * not a turn boundary — a stretch of quiet after speech is. The noise floor adapts, otherwise a room
+ * with a fan in it would either never trigger or trigger on the fan.
+ *
+ * Pure on purpose: the maths is the part worth testing, and it must not depend on a browser.
+ */
+export type TurnDetectorOptions = {
+  /** Loudness (0–1, the value `VoiceCapture.level()` returns) that counts as speech in a quiet room. */
+  speechLevel?: number;
+  /** Quiet after speech that closes the turn, in ms. */
+  silenceMs?: number;
+  /** How long the level must stay above the threshold before it counts as speech, in ms. */
+  holdMs?: number;
+  /** The user started talking again. */
+  onSpeechStart?: () => void;
+  /** The user spoke and then stopped: this is the end of their turn. */
+  onTurnEnd?: () => void;
+};
+
+export type TurnDetector = {
+  /** Feed one loudness reading with the matching timestamp (`performance.now()`). */
+  feed: (level: number, now: number) => void;
+  /** Back to "nothing heard yet" — call it when a new turn begins. */
+  reset: () => void;
+  /** True between the start of a burst of speech and the end of the turn. */
+  inTurn: () => boolean;
+};
+
+/**
+ * Create the endpointer used by the call.
+ * @param options - thresholds and the two callbacks the call state machine hangs off.
+ * @returns the detector; feed it every animation frame for the length of the call.
+ */
+export function createTurnDetector(options: TurnDetectorOptions = {}): TurnDetector {
+  const speechLevel = options.speechLevel ?? 0.1;
+  const silenceMs = options.silenceMs ?? 900;
+  const holdMs = options.holdMs ?? 70;
+  /** Noise floor: falls immediately, creeps back up, so speech itself never becomes the baseline. */
+  let floor = speechLevel;
+  let loudSince: number | null = null;
+  let lastVoiceAt = 0;
+  let speaking = false;
+  let turnOpen = false;
+
+  return {
+    feed: (level, now) => {
+      floor = level < floor ? level : floor + (level - floor) * 0.0004;
+      const threshold = Math.max(speechLevel, floor * 2.5);
+      if (level > threshold) {
+        loudSince ??= now;
+        lastVoiceAt = now;
+        if (!speaking && now - loudSince >= holdMs) {
+          speaking = true;
+          if (!turnOpen) {
+            turnOpen = true;
+            options.onSpeechStart?.();
+          }
+        }
+        return;
+      }
+      loudSince = null;
+      if (speaking && now - lastVoiceAt >= silenceMs) {
+        speaking = false;
+        turnOpen = false;
+        options.onTurnEnd?.();
+      }
+    },
+    reset: () => {
+      loudSince = null;
+      speaking = false;
+      turnOpen = false;
+    },
+    inTurn: () => speaking,
+  };
+}
+
+/**
+ * Barge-in for the answer that is playing: interrupting it must work with the mic the call already
+ * holds, but the answer itself leaks into that mic (especially on speakers). So the trigger is a
+ * *jump* above the running baseline — the answer's own level — not an absolute number. The first
+ * half second only measures the baseline, so the answer can never cut itself off on its first word.
+ */
+export type BargeIn = {
+  /** The answer starts here: the baseline (the answer's own leakage) is measured from now on. */
+  start: (now: number) => void;
+  /** Feed one loudness reading. */
+  feed: (level: number, now: number) => void;
+  /** True once the user has talked over the answer long enough. */
+  fired: () => boolean;
+  reset: () => void;
+};
+
+export function createBargeIn(options: {
+  /** Called once the user has been talking over the answer for `holdMs`. */
+  onSpeak: () => void;
+  /** Sustained-over-baseline time before the answer is stopped, in ms. */
+  holdMs?: number;
+  /** How far above the baseline the voice has to be, as a ratio. */
+  ratio?: number;
+  /** Absolute floor, so silence around a quiet answer cannot trigger it. */
+  floor?: number;
+}): BargeIn {
+  const holdMs = options.holdMs ?? 260;
+  const ratio = options.ratio ?? 1.7;
+  const floorLevel = options.floor ?? 0.16;
+  /** The answer's own loudness as it leaks into the microphone; `null` until the first reading. */
+  let baseline: number | null = null;
+  let warmupUntil = 0;
+  let loudSince: number | null = null;
+  let fired = false;
+
+  return {
+    start: (now) => {
+      baseline = null;
+      loudSince = null;
+      fired = false;
+      warmupUntil = now + 500;
+    },
+    feed: (level, now) => {
+      if (fired) return;
+      baseline ??= level;
+      const threshold = Math.max(floorLevel, baseline * ratio);
+      if (level > threshold && now >= warmupUntil) {
+        // Above the answer: this is the candidate voice. The baseline must *not* follow it, or the
+        // answer's own level would rise to meet the interruption and the trigger would never fire
+        // (measured: a 5%/frame EMA swallowed a 0.45 voice over a 0.18 answer in ~250ms).
+        loudSince ??= now;
+        if (now - loudSince >= holdMs) {
+          fired = true;
+          options.onSpeak();
+        }
+        return;
+      }
+      if (!(level > threshold)) {
+        // Only quiet stretches teach the detector what "the answer alone" sounds like — and it is a
+        // peak hold, not an average: an answer that pauses between words must not lower its own
+        // threshold far enough for the next word to look like an interruption.
+        baseline = Math.max(level, baseline * 0.997);
+        loudSince = null;
+      }
+    },
+    fired: () => fired,
+    reset: () => {
+      baseline = null;
+      warmupUntil = 0;
+      loudSince = null;
+      fired = false;
+    },
+  };
+}
+
+/**
  * Start listening. Interim words are handed to `onPartial` so the draft fills while the user speaks;
  * finished phrases go to `onFinal`. Returns a handle that stops the microphone.
  */

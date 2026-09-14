@@ -141,6 +141,12 @@ export function AppFrame({
   const sidebarPreference = collapsed ? 0 : sidebarPref === 0 ? SIDEBAR_DEFAULT : sidebarPref;
   const dockPreference = dockWidth ?? defaultDockWidth(viewport);
   const columns = computeColumns(viewport, sidebarPreference, dockCollapsed ? 0 : dockPreference);
+  /**
+   * Too narrow for a dock column: the dock still opens, as a drawer over the centre column. Without
+   * this the open dock sat in a zero-width grid track — measured 1px wide at a 700px frame — so the
+   * conversation (and its only close button) was off-screen.
+   */
+  const dockFloating = !dockCollapsed && columns.rightbar === 0;
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
   const dockWidthRef = useRef(columns.rightbar);
@@ -179,7 +185,7 @@ export function AppFrame({
       <div
         className="sr-frame-dock"
         data-collapsed={dockCollapsed || undefined}
-        data-floating={!dockCollapsed && columns.rightbar === 0 ? true : undefined}
+        data-floating={dockFloating || undefined}
       >
         {dockCollapsed ? dockRail : dock}
       </div>

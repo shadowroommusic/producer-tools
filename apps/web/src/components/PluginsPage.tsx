@@ -83,16 +83,10 @@ export function PluginsPage({
           </div>
         </section>
 
-        <section className="sr-page-section">
-          <div className="sr-page-section-head">
-            <h2 className="sr-page-section-title">面板</h2>
-            <span className="sr-page-section-meta sr-mono">{plugins.length} 个工具</span>
-          </div>
-          <p className="sr-page-note">
-            <IconPlugin size={14} />
-            每个插件都是独立的 MCP 服务器：面板里可以手动跑，智能体在会话里也会调用同一批工具。
-          </p>
-        </section>
+        <p className="sr-page-note">
+          <IconPlugin size={14} />
+          每个插件都是独立的 MCP 服务器：面板里可以手动跑，右边的对话里说一句话，智能体也会调用同一批工具。
+        </p>
       </div>
     </div>
   );

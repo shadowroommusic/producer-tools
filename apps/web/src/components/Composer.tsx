@@ -37,6 +37,8 @@ export function Composer({
   voiceMode = false,
   voiceState = "listening",
   voiceLevel,
+  voicePartial,
+  voiceNotice,
   onEndVoice,
   placeholder = "描述你想做的音乐或任务，例如：排一套 60 分钟的 tech house set",
 }: {
@@ -67,6 +69,10 @@ export function Composer({
   voiceMode?: boolean;
   voiceState?: "listening" | "thinking" | "speaking";
   voiceLevel?: () => number;
+  /** Live interim words, shown while listening so the user can see what was heard. */
+  voicePartial?: string;
+  /** Something the call needs to say (no microphone, recognition refused…). */
+  voiceNotice?: string | null;
   onEndVoice?: () => void;
   placeholder?: string;
 }) {
@@ -118,6 +124,18 @@ export function Composer({
               />
             ))}
           </div>
+          <p className="sr-voicebar-heard" data-empty={(voicePartial ?? "") === "" || undefined}>
+            {voiceState === "listening"
+              ? voicePartial !== undefined && voicePartial !== ""
+                ? voicePartial
+                : "说吧，停下我就接"
+              : voiceState === "thinking"
+                ? "在想……"
+                : "（说话可以打断我）"}
+          </p>
+          {voiceNotice !== null && voiceNotice !== undefined && (
+            <p className="sr-voicebar-notice">{voiceNotice}</p>
+          )}
           <div className="sr-voicebar-foot">
             <span className="sr-voicebar-status">
               <span className="sr-voicebar-dot" data-state={voiceState} />

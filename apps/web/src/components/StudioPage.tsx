@@ -422,36 +422,40 @@ export function StudioPage({
             />
           </label>
         </div>
-        <button
-          type="button"
-          className="sr-btn sr-studio-addtrack"
-          onClick={() =>
-            onChange((current) => ({ ...current, tracks: [...current.tracks, newTrack(`音轨 ${current.tracks.length + 1}`)] }))
-          }
-        >
-          <IconPlus size={14} />
-          音轨
-        </button>
-        <button
-          type="button"
-          className="sr-btn sr-studio-import"
-          onClick={() => {
-            setImportTo(importTarget);
-            setImportOpen((open) => !open);
-          }}
-        >
-          导入音频
-        </button>
-        <button
-          type="button"
-          className="sr-btn sr-studio-export"
-          onClick={() => {
-            setOutPath((current) => current || defaultExportPath(project.name, exportKind, container));
-            setExportOpen((open) => !open);
-          }}
-        >
-          导出音频
-        </button>
+        {/* The three actions wrap as one group: a narrow centre column must never orphan 导出音频
+            onto its own line above the timeline. */}
+        <div className="sr-transport-actions">
+          <button
+            type="button"
+            className="sr-btn sr-studio-addtrack"
+            onClick={() =>
+              onChange((current) => ({ ...current, tracks: [...current.tracks, newTrack(`音轨 ${current.tracks.length + 1}`)] }))
+            }
+          >
+            <IconPlus size={14} />
+            音轨
+          </button>
+          <button
+            type="button"
+            className="sr-btn sr-studio-import"
+            onClick={() => {
+              setImportTo(importTarget);
+              setImportOpen((open) => !open);
+            }}
+          >
+            导入音频
+          </button>
+          <button
+            type="button"
+            className="sr-btn sr-studio-export"
+            onClick={() => {
+              setOutPath((current) => current || defaultExportPath(project.name, exportKind, container));
+              setExportOpen((open) => !open);
+            }}
+          >
+            导出音频
+          </button>
+        </div>
       </header>
 
       {exportOpen && (

@@ -11,8 +11,8 @@ producers.
 
 Work in progress. The web UI shell renders today, with the layout and interaction patterns of
 DeepSeek Harness: a three-column frame (sidebar with the workspace list and the plugins, the
-conversation with its composer, and a right dock for the selected plugin), built on our own `--sr-*`
-tokens — dark by default, light on request. The brand files come straight from
+work surface in the middle, and the conversation dock on the right), built on our own `--sr-*` tokens
+— dark by default, light on request. The brand files come straight from
 [shadowroom.cn](https://shadowroom.cn) (see `assets/logo/README.md`).
 
 The core asks before it leaves its sandbox: command and file-change approvals show up as a card above
@@ -40,7 +40,7 @@ tools the panels also call by hand.
 The composer is the generic agent shape: attach context from **+** (a file or folder path, or a
 plugin — it becomes a chip above the draft), pick the model on the right, press Enter. Plugins are not
 chosen in the composer; they live on the **插件** page in the sidebar, and picking one opens its panel
-in the right dock. Each panel still runs jobs on its own:
+as a page in the middle column, next to the conversation. Each panel still runs jobs on its own:
 
 **Studio** (sidebar → Studio) opens on a **project list** — 新建工程, or reopen the last one — and only
 then goes into the multi-track workbench: a transport with BPM / key / bar count, a column of track
@@ -62,20 +62,26 @@ All of it is reachable from a sentence as well as from the buttons — ask for a
 a MIDI file in one message and the agent calls `render_song`, `export_stems` and `export_midi` itself.
 
 **Voice** — the microphone button in any page's composer starts a **call**, not a dictation: the
-composer turns into a live waveform, the call stays open, every finished phrase is sent with its own
-WAV recording attached (so humming a melody reaches the agent as audio, not just as text), the answer
-is spoken back, and listening resumes. Chrome/Edge only; the button is disabled where the browser has
-no speech recognition.
+composer turns into a live waveform, the call stays open, and the turns behave like a phone call —
+you talk, *stopping* is what sends the turn, the answer is spoken back, and talking over the answer
+cuts it off and starts listening again. Each turn carries its own WAV recording (so humming a melody
+reaches the agent as audio, not just as text), and the waveform shows what was heard while you speak.
+Chrome/Edge only; the button is disabled where the browser has no speech recognition.
 
 Say *把这段哼唱转成 MIDI* and it happens inside the same conversation: the agent calls the melody tool
 (`hum_to_midi`, in `audio-analysis-dedupe`) on the recording it was just given, and the detected notes
 appear as a clip with a mini piano roll on the open Studio project — no extra button, no second step.
 
 **The dock** (right column) is the conversation: the transcript plus the composer, so you can watch and
-type to the agent while working in Studio. It only exists on the work pages — on 工作台 the transcript
-*is* the page, so there is nothing to duplicate. Collapsed it is a narrow rail whose shortcuts
-(**对话** / **插件**) never cover the page; plugin panels are pages in the middle column, not part of
-the dock.
+type to the agent while the middle column stays on the work — 工作台 (recent projects, recent
+conversations, the plugins), Studio, or a plugin panel. Opening a session from the sidebar moves the
+transcript into the middle column and folds the dock away, so the same chat is never drawn twice.
+Collapsed, the dock is a narrow rail whose button never covers the page buttons. The choice sticks
+across reloads.
+
+```sh
+pnpm test    # the voice call's two detectors (turn end + barge-in) against synthetic loudness traces
+```
 
 | Panel | What it does |
 | --- | --- |

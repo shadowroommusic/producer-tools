@@ -17,6 +17,7 @@ export function WorkbenchHome({
   onOpenProject,
   onOpenSession,
   onOpenPlugins,
+  onCreateProject,
 }: {
   projects: StudioProject[];
   sessions: SessionSummary[];
@@ -24,6 +25,7 @@ export function WorkbenchHome({
   onOpenProject: (id: string) => void;
   onOpenSession: (id: string) => void;
   onOpenPlugins: () => void;
+  onCreateProject: () => void;
 }) {
   const connected = plugins.filter((plugin) => plugin.connected).length;
 
@@ -31,14 +33,16 @@ export function WorkbenchHome({
     <div className="sr-page sr-workbench">
       <header className="sr-page-header">
         <h1 className="sr-page-title">工作台</h1>
-        <p className="sr-page-sub">最近做的工程和会话 —— 右边可以直接跟智能体说话</p>
+        <p className="sr-page-sub">最近做的工程和会话。右边是对话：打字或说话，主区留给作品。</p>
       </header>
 
       <div className="sr-page-body sr-scroll">
         <section className="sr-page-section">
           <div className="sr-page-section-head">
             <h2 className="sr-page-section-title">最近的工程</h2>
-            <span className="sr-page-section-meta sr-mono">{projects.length} 个</span>
+            <button type="button" className="sr-page-action" onClick={onCreateProject}>
+              新建工程
+            </button>
           </div>
           <div className="sr-plugin-grid">
             {projects.slice(0, 4).map((project) => (
@@ -62,7 +66,9 @@ export function WorkbenchHome({
                 <span className="sr-plugin-card-action sr-mono">打开</span>
               </button>
             ))}
-            {projects.length === 0 && <p className="sr-view-hint">还没有工程 —— 侧栏点 Studio 新建一个。</p>}
+            {projects.length === 0 && (
+              <p className="sr-view-hint">还没有工程 —— 或者直接在右边的对话里说“做一个 4 小节的鼓”。</p>
+            )}
           </div>
         </section>
 
@@ -106,7 +112,7 @@ export function WorkbenchHome({
 
         <p className="sr-page-note">
           <IconChat size={14} />
-          右边是对话栏：打字或说话都在那里，主区留给工程。
+          右边是对话：哼一段、敲一段，或直接说想要什么，工具会在那里跑，结果落回工程。
         </p>
       </div>
     </div>

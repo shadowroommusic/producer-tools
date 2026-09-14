@@ -39,7 +39,14 @@
   min-width: 0;
 }
 
+/* Too narrow for a dock column: the conversation becomes a drawer over the centre column, with its
+   own close button — not an invisible 1px track. */
 .sr-frame-dock[data-floating] .sr-dock {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(420px, calc(100vw - 120px));
+  z-index: 40;
+  border-left: var(--sr-shell-border);
   box-shadow: var(--sr-shadow-panel);
 }
 
@@ -82,6 +89,37 @@
 }
 
 .sr-dock-rail-btn:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+/* The dock is folded away but the agent is talking or running: say so from the rail. */
+.sr-dock-rail-btn[data-busy] {
+  color: var(--sr-accent);
+  animation: sr-rail-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes sr-rail-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sr-accent) 45%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--sr-accent) 0%, transparent);
+  }
+}
+
+/* A small section action ("新建工程") that sits where the meta label used to. */
+.sr-page-action {
+  padding: 3px 10px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  white-space: nowrap;
+}
+
+.sr-page-action:hover {
   background: var(--sr-hover);
   color: var(--sr-label-primary);
 }
@@ -667,65 +705,10 @@
   border-bottom: var(--sr-shell-border);
 }
 
-/* Dock tabs: 对话 / the plugin's panel. */
-.sr-dock-tabs {
-  display: flex;
-  gap: 4px;
-  min-width: 0;
-}
-
-.sr-dock-tab {
-  max-width: 140px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: var(--sr-radius-sm);
-  background: transparent;
-  color: var(--sr-label-tertiary);
-  font-size: var(--sr-text-13);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Which plugin the 面板 tab is showing. */
-.sr-dock-panelhead {
-  display: grid;
-  gap: 1px;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: var(--sr-shell-border);
-}
-
-.sr-dock-tab:hover {
-  background: var(--sr-hover);
-  color: var(--sr-label-primary);
-}
-
-.sr-dock-tab[data-on] {
-  background: var(--sr-active);
-  color: var(--sr-label-primary);
-}
-
-.sr-dock-title {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
 .sr-dock-label {
   overflow: hidden;
   font-size: var(--sr-text-14);
   font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sr-dock-repo {
-  overflow: hidden;
-  color: var(--sr-label-caption);
-  font-size: 10px;
-  letter-spacing: 0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -850,8 +833,15 @@
 }
 
 .sr-studio-addtrack {
-  margin-left: auto;
   white-space: nowrap;
+}
+
+/* 音轨 / 导入音频 / 导出音频 are one block: they wrap together or not at all. */
+.sr-transport-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .sr-studio-back {
@@ -1328,6 +1318,9 @@
 }
 
 .sr-page-back {
+  /* In a grid header the inline default is `stretch`: without this the pill becomes a full-width
+     bar across the panel page. */
+  justify-self: start;
   align-self: start;
   padding: 4px 10px;
   border: 0.5px solid var(--sr-border-l3);

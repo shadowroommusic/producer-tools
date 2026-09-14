@@ -118,7 +118,8 @@ What was measured and matters:
 | `shadowroom.studio.v1` | `lib/studio.ts` | the Studio project: tracks, clips, tempo, key, bars |
 | `shadowroom.studio.projects.v1` | `lib/studio.ts` | every Studio project |
 | `shadowroom.studio.open` | `lib/studio.ts` | which project was open last |
-| `shadowroom.view`, `shadowroom.workspace` | `App.tsx` | the page and workspace a reload should land on |
+| `shadowroom.view`, `shadowroom.workspace` | `App.tsx` | the page and workspace a reload should land on (workbench / conversation / plugins / plugin / studio) |
+| `shadowroom.dock` | `App.tsx` | whether the conversation dock was left open (`open` / `closed`) |
 
 ## Where things live in the UI
 
@@ -129,14 +130,15 @@ What was measured and matters:
   right, and the send/stop circle. No plugin picker here.
 - **Transcript** — user bubbles, streamed answers, folded 思考 rows (`ReasoningRow`, DSH's geometry),
   tool rows in the order they happened, notice rows, and a per-turn `tokens · seconds` line.
-- **Pages** — the plugins page (`PluginsPage`) is the centre column's other occupant; picking a card
-  selects that plugin and opens its panel in the dock.
+- **Pages** — 工作台 (`WorkbenchHome`: recent projects, recent conversations, the plugins entry — the
+  landing page), the plugins page (`PluginsPage`), and a plugin's panel (`PluginPanelPage`). Picking
+  a plugin card opens its panel as a page in the centre column.
 - **Dock** — the conversation only: the shared `Transcript` plus the composer (the main column's
   composer is hidden while it is open, so there is only ever one input). Collapsed it becomes a 44px
-  rail of shortcuts (对话 / 插件) — a column of its own, never a floating button over the transport.
-  It is offered on the work pages only (`mainView !== "conversation"`): on the conversation page the
-  transcript is already the main surface, so the rail shows just 插件 and going back there closes the
-  chat. Default state is closed.
+  rail whose single button opens it again (it pulses while a turn runs) — a column of its own, never a
+  floating button over the transport. It is open on the work pages and closed on the conversation
+  page, because there the transcript already owns the centre column; the state is remembered, and
+  navigating between the two applies that rule again.
 - **Plugin panels** are pages in the centre column (`PluginPanelPage`), opened from the plugins page.
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
