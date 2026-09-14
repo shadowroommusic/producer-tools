@@ -13,7 +13,8 @@ producers.
 中间是会话与输入框、右侧是当前插件的面板），全部基于我们自己的 `--sr-*` token —— 默认暗色，
 需要时才切浅色。品牌文件直接取自 [shadowroom.cn](https://shadowroom.cn)（见 `assets/logo/README.md`）。
 
-还没做的：把输入框里的需求变成一次真实会话的 Codex 内核，以及另外三个插件的面板。UI／前端参考写在
+还没做的：把输入框里的需求变成一次真实会话的 Codex 内核（现在提交只会把需求记进会话，并加一条
+"内核未接入"的状态行），以及 `stage_serato_cues` 的界面。UI／前端参考写在
 [docs/ui-reference.md](docs/ui-reference.md)（模式参考 DeepSeek Harness）。
 
 ## 跑起来

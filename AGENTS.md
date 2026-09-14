@@ -16,7 +16,7 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
 | `audio-analysis-dedupe` | Audio analysis + duplicate detection | published; not yet user-tested |
 | `set-planner` | Set timing + next-track suggestions | published; not yet user-tested |
 | `shadow-music-generator` | Queue for local AI music generation pipelines | published; not yet user-tested |
-| `producer-tools` | the app that collects these tools into one product | web UI + MCP bridge run today with all four plugin panels wired; Codex core next |
+| `producer-tools` | the app that collects these tools into one product | web UI + MCP bridge + persisted sessions, all four plugin panels wired; Codex core next |
 | `shadow-producers` (planned) | the AI agent | not started |
 
 ## House rules

@@ -15,9 +15,10 @@ conversation with its composer, and a right dock for the selected plugin), built
 tokens — dark by default, light on request. The brand files come straight from
 [shadowroom.cn](https://shadowroom.cn) (see `assets/logo/README.md`).
 
-Still missing: the Codex core that turns a composer message into a running session, and the panels
-for the other three plugins. The UI/frontend reference lives in
-[docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek Harness).
+Still missing: the Codex core that turns a composer message into a running session (today a submit
+records the request and adds a 内核未接入 notice), and a UI for `stage_serato_cues`. The UI/frontend
+reference lives in [docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek
+Harness).
 
 ## Run it
 

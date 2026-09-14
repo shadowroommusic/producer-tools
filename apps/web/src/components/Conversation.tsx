@@ -6,9 +6,9 @@
 import type { ReactNode } from "react";
 import { BrandMark } from "./BrandMark";
 import { IconDock } from "./icons";
+import { NoticeRow } from "./NoticeRow";
 import { ToolCallRow, type ToolCall } from "./ToolCallRow";
-
-export type Message = { id: string; role: "user" | "assistant"; text: string };
+import type { ChatMessage } from "../lib/sessions";
 
 export function Conversation({
   crumb,
@@ -29,7 +29,7 @@ export function Conversation({
   status: ReactNode;
   view: "chat" | "trajectory";
   onViewChange: (view: "chat" | "trajectory") => void;
-  messages: Message[];
+  messages: ChatMessage[];
   calls: ToolCall[];
   composer: ReactNode;
   suggestions: string[];
@@ -127,17 +127,27 @@ export function Conversation({
                 {composer}
               </>
             ) : (
-              messages.map((message) =>
-                message.role === "user" ? (
-                  <div key={message.id} className="sr-msg-user">
-                    <div className="sr-bubble">{message.text}</div>
-                  </div>
-                ) : (
-                  <div key={message.id} className="sr-msg-assistant">
-                    {message.text}
-                  </div>
-                ),
-              )
+              messages.map((message) => {
+                if (message.role === "user") {
+                  return (
+                    <div key={message.id} className="sr-msg-user">
+                      <div className="sr-bubble">{message.text}</div>
+                    </div>
+                  );
+                }
+                if (message.role === "assistant") {
+                  return (
+                    <div key={message.id} className="sr-msg-assistant">
+                      {message.text}
+                    </div>
+                  );
+                }
+                if (message.role === "notice") {
+                  return <NoticeRow key={message.id} title={message.title} text={message.text} />;
+                }
+                const call = calls.find((entry) => entry.id === message.callId);
+                return call === undefined ? null : <ToolCallRow key={message.id} call={call} />;
+              })
             )}
           </div>
         </div>

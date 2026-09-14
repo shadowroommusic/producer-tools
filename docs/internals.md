@@ -42,7 +42,21 @@ Details that matter:
 
 ## The UI ↔ agent boundary
 
-`apps/web/src/App.tsx` keeps one session shape: `messages` (what the user and the assistant said),
-`calls` (tool calls, rendered under 轨迹) and the composer draft. Today a submit only appends to
-`messages`; when the Codex `app-server` core lands it writes the same arrays, so no layout code has
-to move.
+Sessions live in `apps/web/src/lib/sessions.ts` and are persisted under `shadowroom.sessions.v1`:
+
+```ts
+type Session = { id, title, createdAt, messages: ChatMessage[], calls: ToolCall[] }
+type ChatMessage =
+  | { role: "user"; text }
+  | { role: "assistant"; text }
+  | { role: "notice"; title; text }   // dim status row, e.g. 内核未接入
+  | { role: "tool"; callId }          // rendered from `calls`, so one row drives both views
+```
+
+- A session is titled from its first user message and listed in the sidebar with a relative time.
+- **A tool a panel runs is written twice**: into `calls` (the 轨迹 tab) and into `messages` as a
+  `tool` row, so it also appears in the transcript where the request was made — the same place the
+  Codex core will write its own steps.
+- `App.tsx` only ever updates the active session (`withActiveSession`), creating one on the fly when
+  the hero is still empty. When the Codex `app-server` core lands it writes the same two arrays; no
+  layout code has to move.
