@@ -7,6 +7,7 @@ import { useState } from "react";
 import { IconCollapse, IconExpand } from "./icons";
 import { SetPlannerPanel } from "./SetPlannerPanel";
 import type { PluginEntry } from "./Sidebar";
+import type { ToolCall } from "./ToolCallRow";
 
 /** Copy for the plugins that are published but not wired into the UI yet. */
 const PLACEHOLDER: Record<string, { body: string; bullets: string[] }> = {
@@ -27,9 +28,13 @@ const PLACEHOLDER: Record<string, { body: string; bullets: string[] }> = {
 export function DockPanel({
   plugin,
   onClose,
+  onCallBegin,
+  onCallEnd,
 }: {
   plugin: PluginEntry;
   onClose: () => void;
+  onCallBegin: (call: ToolCall) => void;
+  onCallEnd: (id: string, patch: Partial<ToolCall>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const placeholder = PLACEHOLDER[plugin.repo];
@@ -66,7 +71,12 @@ export function DockPanel({
 
       <div className="sr-dock-body sr-scroll">
         {plugin.repo === "set-planner" ? (
-          <SetPlannerPanel connected={plugin.connected} />
+          <SetPlannerPanel
+            connected={plugin.connected}
+            tools={plugin.tools}
+            onBegin={onCallBegin}
+            onEnd={onCallEnd}
+          />
         ) : (
           <div className="sr-plugin-pane">
             <p className="sr-plugin-hint">{placeholder?.body ?? "这个插件还没有面板。"}</p>

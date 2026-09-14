@@ -14,6 +14,19 @@ export type ToolCall = {
   detail?: string;
 };
 
+/** Tool results arrive as one long JSON line; readers deserve indentation. */
+function readable(detail: string): string {
+  const trimmed = detail.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return detail;
+    }
+  }
+  return detail;
+}
+
 export function ToolCallRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(call.status === "error");
   const Chevron = open ? IconChevronDown : IconChevronRight;
@@ -39,7 +52,7 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
           {call.status === "running" ? "运行中" : call.status === "error" ? "失败" : "完成"}
         </span>
       </button>
-      {open && call.detail && <pre className="sr-call-detail sr-scroll">{call.detail}</pre>}
+      {open && call.detail && <pre className="sr-call-detail sr-scroll">{readable(call.detail)}</pre>}
     </div>
   );
 }

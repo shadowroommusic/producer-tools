@@ -63,6 +63,13 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   list. Colours, marks and copy are ours; only the layout, geometry and interaction patterns are
   taken from DSH. `apps/web/src/shell/AppFrame.tsx` holds the frame, `styles/*.css` the geometry.
 
+- **2026-09-14 — the bridge is an HTTP shim over stdio MCP.** `tools/mcp-bridge.mjs` (`pnpm serve`)
+  spawns each plugin's `mcp_server.py`, speaks MCP over stdio (one JSON object per line — that is how
+  every ShadowRoom plugin frames messages), and exposes `GET /api/servers` plus `POST /api/call` to
+  the web app. Node builtins only, lazy start, per-call timeouts, and stderr kept in the snapshot so
+  the UI can say why a plugin is dark. Tool calls the UI runs are recorded as rows under the 轨迹
+  tab. Notes: `docs/internals.md`.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

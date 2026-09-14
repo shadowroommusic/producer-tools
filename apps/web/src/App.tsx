@@ -42,21 +42,26 @@ export function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>(SEED_SESSIONS);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [calls] = useState<ToolCall[]>([]);
+  const [calls, setCalls] = useState<ToolCall[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    fetchServers()
-      .then((list) => {
-        if (cancelled) return;
-        setServers(list);
-        setBridge("online");
-      })
-      .catch(() => {
-        if (!cancelled) setBridge("offline");
-      });
+    const load = () =>
+      fetchServers()
+        .then((list) => {
+          if (cancelled) return;
+          setServers(list);
+          setBridge("online");
+        })
+        .catch(() => {
+          if (!cancelled) setBridge("offline");
+        });
+    void load();
+    // The bridge can be started after the page; a slow poll keeps the plugin dots honest.
+    const timer = window.setInterval(load, 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -65,6 +70,7 @@ export function App() {
     label: entry.label,
     repo: entry.repo,
     connected: servers.some((server) => server.id === entry.server && server.connected),
+    tools: servers.find((server) => server.id === entry.server)?.tools ?? [],
   }));
   const selected = plugins.find((plugin) => plugin.repo === activePlugin) ?? plugins[2];
   const active = plugins.find((plugin) => plugin.repo === activePlugin);
@@ -94,6 +100,14 @@ export function App() {
     setMessages([]);
     setActiveSessionId(undefined);
     setView("chat");
+  }, []);
+
+  const beginCall = useCallback((call: ToolCall) => {
+    setCalls((current) => [...current, call]);
+  }, []);
+
+  const endCall = useCallback((id: string, patch: Partial<ToolCall>) => {
+    setCalls((current) => current.map((call) => (call.id === id ? { ...call, ...patch } : call)));
   }, []);
 
   return (
@@ -159,7 +173,12 @@ export function App() {
       }
       dock={
         selected === undefined ? null : (
-          <DockPanel plugin={selected} onClose={() => setDockOpen(false)} />
+          <DockPanel
+            plugin={selected}
+            onClose={() => setDockOpen(false)}
+            onCallBegin={beginCall}
+            onCallEnd={endCall}
+          />
         )
       }
     />

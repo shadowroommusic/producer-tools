@@ -4,6 +4,7 @@
  */
 import { useState } from "react";
 import { callTool } from "../lib/mcp";
+import type { ToolCall } from "./ToolCallRow";
 
 const SAMPLE = {
   tracks: [
@@ -49,25 +50,71 @@ type PlanResult = {
   warnings?: string[];
 };
 
-export function SetPlannerPanel({ connected }: { connected: boolean }) {
+type Parsed =
+  | { kind: "plan"; value: PlanResult }
+  | { kind: "text"; value: string };
+
+/** The tool returns JSON; keep anything else readable instead of throwing a parse error. */
+function parse(raw: unknown): Parsed {
+  if (raw !== null && typeof raw === "object") return { kind: "plan", value: raw as PlanResult };
+  const text = String(raw ?? "");
+  try {
+    return { kind: "plan", value: JSON.parse(text) as PlanResult };
+  } catch {
+    return { kind: "text", value: text };
+  }
+}
+
+export function SetPlannerPanel({
+  connected,
+  tools = [],
+  onBegin,
+  onEnd,
+}: {
+  connected: boolean;
+  tools?: { name: string; description?: string }[];
+  onBegin: (call: ToolCall) => void;
+  onEnd: (id: string, patch: Partial<ToolCall>) => void;
+}) {
   const [input, setInput] = useState(JSON.stringify(SAMPLE, null, 2));
-  const [result, setResult] = useState<PlanResult | null>(null);
+  const [result, setResult] = useState<Parsed | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function run() {
     setBusy(true);
     setError(null);
+    const id = `plan_set-${Date.now()}`;
+    onBegin({
+      id,
+      server: "set-planner",
+      name: "plan_set",
+      status: "running",
+      summary: "default_overlap_ms=16000",
+      detail: input,
+    });
+    let raw: unknown = null;
     try {
       const payload = JSON.parse(input);
-      const raw = await callTool<string>("planner", "plan_set", {
+      raw = await callTool<unknown>("planner", "plan_set", {
         set: payload,
         default_overlap_ms: 16000,
       });
-      setResult(typeof raw === "string" ? (JSON.parse(raw) as PlanResult) : (raw as PlanResult));
+      const parsed = parse(raw);
+      setResult(parsed);
+      onEnd(id, {
+        status: "ok",
+        summary:
+          parsed.kind === "plan"
+            ? `总时长 ${parsed.value.summary?.total_duration ?? "—"}`
+            : "已返回文本结果",
+        detail: String(raw).slice(0, 4000),
+      });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message);
       setResult(null);
+      onEnd(id, { status: "error", summary: message, detail: raw === null ? input : String(raw).slice(0, 4000) });
     } finally {
       setBusy(false);
     }
@@ -78,6 +125,11 @@ export function SetPlannerPanel({ connected }: { connected: boolean }) {
       <p className="sr-plugin-hint">
         这份 JSON 经 MCP bridge 发给 set-planner 的 <code>plan_set</code>。
       </p>
+      {tools.length > 0 && (
+        <p className="sr-plugin-tools sr-mono">
+          {tools.map((tool) => tool.name).join(" · ")}
+        </p>
+      )}
       <textarea
         className="sr-plugin-input sr-scroll"
         value={input}
@@ -98,14 +150,14 @@ export function SetPlannerPanel({ connected }: { connected: boolean }) {
 
       {error && <div className="sr-alert" data-level="danger">{error}</div>}
 
-      {result && (
+      {result?.kind === "plan" && (
         <div className="sr-plugin-result">
           <div className="sr-plugin-summary sr-mono">
-            总时长 {result.summary?.total_duration ?? "—"} · 衔接节省{" "}
-            {result.summary?.overlap_saved_ms ?? 0} ms
+            总时长 {result.value.summary?.total_duration ?? "—"} · 衔接节省{" "}
+            {result.value.summary?.overlap_saved_ms ?? 0} ms
           </div>
           <ul className="sr-plugin-list">
-            {(result.timeline ?? []).map((row, index) => (
+            {(result.value.timeline ?? []).map((row, index) => (
               <li key={row.id ?? index} className="sr-plugin-timeline-row">
                 <span className="sr-plugin-timeline-title">{row.title ?? row.id ?? `#${index + 1}`}</span>
                 <span className="sr-plugin-timeline-meta sr-mono">
@@ -115,13 +167,14 @@ export function SetPlannerPanel({ connected }: { connected: boolean }) {
               </li>
             ))}
           </ul>
-          {(result.warnings ?? []).length > 0 && (
+          {(result.value.warnings ?? []).length > 0 && (
             <div className="sr-alert" data-level="warn">
-              {(result.warnings ?? []).slice(0, 3).join("；")}
+              {(result.value.warnings ?? []).slice(0, 3).join("；")}
             </div>
           )}
         </div>
       )}
+      {result?.kind === "text" && <pre className="sr-plugin-raw sr-scroll">{result.value}</pre>}
     </div>
   );
 }

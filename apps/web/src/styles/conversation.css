@@ -146,7 +146,7 @@
   margin-right: 2px;
 }
 
-.sr-conversation[data-phase="hero"] .sr-conversation-scroll {
+.sr-conversation[data-hero] .sr-conversation-scroll {
   justify-content: center;
 }
 

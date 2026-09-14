@@ -37,10 +37,17 @@ export function Conversation({
   dockCollapsed: boolean;
   onToggleDock: () => void;
 }) {
-  const hero = messages.length === 0;
+  /** Empty session: the composer rides the column as the hero. */
+  const heroPhase = messages.length === 0;
+  /** …but only the chat view shows the hero block; the trajectory tab shows its own content. */
+  const heroChat = heroPhase && view === "chat";
 
   return (
-    <div className="sr-conversation" data-phase={hero ? "hero" : "active"}>
+    <div
+      className="sr-conversation"
+      data-phase={heroPhase ? "hero" : "active"}
+      data-hero={heroChat || undefined}
+    >
       <header className="sr-conversation-header">
         <div className="sr-conversation-titlerow">
           <div className="sr-crumbs">
@@ -89,7 +96,15 @@ export function Conversation({
       <div className="sr-conversation-body">
         <div className="sr-conversation-scroll sr-scroll">
           <div className="sr-conversation-column">
-            {hero ? (
+            {view === "trajectory" ? (
+              calls.length > 0 ? (
+                calls.map((call) => <ToolCallRow key={call.id} call={call} />)
+              ) : (
+                <p className="sr-view-hint">
+                  还没有工具调用。左侧插件面板里点一次"运行"，这里就会按顺序列出调用、参数和返回。
+                </p>
+              )
+            ) : heroChat ? (
               <>
                 <section className="sr-hero">
                   <span className="sr-hero-mark">
@@ -111,7 +126,7 @@ export function Conversation({
                 </div>
                 {composer}
               </>
-            ) : view === "chat" ? (
+            ) : (
               messages.map((message) =>
                 message.role === "user" ? (
                   <div key={message.id} className="sr-msg-user">
@@ -123,16 +138,10 @@ export function Conversation({
                   </div>
                 ),
               )
-            ) : calls.length > 0 ? (
-              calls.map((call) => <ToolCallRow key={call.id} call={call} />)
-            ) : (
-              <p className="sr-view-hint">
-                还没有工具调用。等 MCP bridge 接上后，这里会按顺序列出每一次调用、参数和返回。
-              </p>
             )}
           </div>
         </div>
-        {!hero && <div className="sr-composer-seat">{composer}</div>}
+        {!heroChat && <div className="sr-composer-seat">{composer}</div>}
       </div>
     </div>
   );

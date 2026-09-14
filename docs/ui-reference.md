@@ -72,8 +72,9 @@ Built so far:
 
 - Brand: files taken from shadowroom.cn, applied through `components/BrandMark.tsx` and
   `apps/web/public/brand/`.
-- First runnable panel: `SetPlannerPanel` calls `plan_set` through `/api/call` (needs `pnpm serve`,
-  which is still to be written).
+- First runnable panel: `SetPlannerPanel` calls `plan_set` through `/api/call`; `tools/mcp-bridge.mjs`
+  (`pnpm serve`) is the HTTP shim that spawns the plugin and speaks MCP over stdio. Runs are recorded
+  as tool-call rows under the 轨迹 tab.
 
 Next: `tools/mcp-bridge.mjs` (the `pnpm serve` script) so the panels talk to MCP over stdio, then the
 Codex `app-server` core behind the composer, then the `ui-*` package split and `apps/desktop`.

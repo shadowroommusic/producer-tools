@@ -23,6 +23,7 @@ export type PluginEntry = {
   label: string;
   repo: string;
   connected: boolean;
+  tools: { name: string; description?: string }[];
 };
 
 export type SessionSummary = {
