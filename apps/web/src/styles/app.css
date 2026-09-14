@@ -889,11 +889,41 @@
 .sr-studio-import-bar {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   padding: 8px 16px;
   border-bottom: var(--sr-shell-border);
   background: var(--sr-surface);
+}
+
+/* Export row: labels keep their line, the path takes the slack, nothing wraps mid-word. */
+.sr-studio-export-bar .sr-field-label {
+  flex: none;
+  white-space: nowrap;
+}
+
+.sr-studio-export-bar .sr-input--num {
+  width: 104px;
+  font-family: var(--sr-font-sans);
+}
+
+.sr-export-path {
+  flex: 1 1 240px;
+  min-width: 200px;
+  font-family: var(--sr-font-mono);
+}
+
+.sr-studio-export-bar .sr-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.sr-studio-exported {
+  flex: 1 1 100%;
+  color: var(--sr-live);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .sr-studio-hint {
