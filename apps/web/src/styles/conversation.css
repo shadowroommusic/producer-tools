@@ -997,3 +997,42 @@
 .sr-send--stop:hover:not(:disabled) {
   background: var(--sr-hover-solid);
 }
+
+/* Voice control: a quiet icon button that pulses red while the microphone is live. */
+.sr-voice {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-voice:hover:not(:disabled) {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+.sr-voice:disabled {
+  opacity: 0.35;
+}
+
+.sr-voice[data-listening] {
+  background: color-mix(in srgb, var(--sr-danger) 16%, transparent);
+  color: var(--sr-danger);
+  animation: sr-voice-pulse 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes sr-voice-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sr-danger) 40%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--sr-danger) 0%, transparent);
+  }
+}

@@ -100,6 +100,13 @@ it), and together they are the toolkit that `producer-tools` bundles into one ap
   picker**, and the plugins page lists the installed cards. Reasoning is folded into 思考 rows and
   every turn ends with a `tokens · seconds` line.
 
+- **2026-09-14 — no header chrome, and Studio is a DAW.** The conversation column carries no
+  breadcrumbs, status chips or view tabs (the 轨迹 tab is gone with them); the transcript and the
+  composer are the whole surface. Studio is the multi-track page — transport (BPM / key / bars),
+  per-track header (name, mute, solo, fader, meter), a bar-ruled lane area with draggable clips, and
+  the same composer docked underneath with a microphone button (Web Speech in, `speechSynthesis`
+  out). Mode chips are 标准 / 极简 only.
+
 - **2026-09-14 — generator backend (option B).** `shadow-music-generator` stays backend-less for
   now: it is used as a job record + request manager (prompts, lyrics, parameters, license notes,
   dry-run by default). The real provider wiring happens later inside `producer-tools`. The YuE2

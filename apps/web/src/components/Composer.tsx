@@ -8,9 +8,9 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentModel, Mention } from "../lib/agent";
-import { IconArrowUp, IconChevronDown, IconPlugin, IconPlus, IconStop } from "./icons";
+import { IconArrowUp, IconChevronDown, IconMic, IconPlugin, IconPlus, IconStop } from "./icons";
 
-const MODES = ["标准", "极简", "Code Mode"] as const;
+const MODES = ["标准", "极简"] as const;
 
 export function Composer({
   variant,
@@ -31,6 +31,9 @@ export function Composer({
   pluginRoot = "",
   onOpenPlugin,
   notice,
+  listening = false,
+  voiceSupported = false,
+  onToggleVoice,
   placeholder = "描述你想做的音乐或任务，例如：排一套 60 分钟的 tech house set",
 }: {
   variant: "hero" | "docked";
@@ -52,6 +55,10 @@ export function Composer({
   pluginRoot?: string;
   onOpenPlugin?: (repo: string) => void;
   notice?: string;
+  /** Voice control state (speech recognition). */
+  listening?: boolean;
+  voiceSupported?: boolean;
+  onToggleVoice?: () => void;
   placeholder?: string;
 }) {
   const [menu, setMenu] = useState<"none" | "attach" | "model" | "path">("none");
@@ -156,6 +163,20 @@ export function Composer({
             </div>
           </div>
           <div className="sr-composer-trailing">
+            {onToggleVoice && (
+              <button
+                type="button"
+                className="sr-voice"
+                aria-label={listening ? "停止语音输入" : "语音输入"}
+                title={voiceSupported ? (listening ? "停止语音输入" : "语音输入") : "这个浏览器不支持语音识别"}
+                aria-pressed={listening}
+                data-listening={listening || undefined}
+                disabled={!voiceSupported}
+                onClick={onToggleVoice}
+              >
+                <IconMic size={16} />
+              </button>
+            )}
             <button
               type="button"
               className="sr-chip sr-chip--button"

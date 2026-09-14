@@ -36,7 +36,7 @@ export type SessionSummary = {
 const WORKSPACES: Array<{ id: WorkspaceId; label: string; icon: typeof IconWorkbench; ready: boolean }> = [
   { id: "workbench", label: "工作台", icon: IconWorkbench, ready: true },
   { id: "library", label: "曲目库", icon: IconLibrary, ready: false },
-  { id: "studio", label: "Studio", icon: IconStudio, ready: false },
+  { id: "studio", label: "Studio", icon: IconStudio, ready: true },
   { id: "dj", label: "DJ", icon: IconDj, ready: false },
   { id: "settings", label: "设置", icon: IconSettings, ready: false },
 ];

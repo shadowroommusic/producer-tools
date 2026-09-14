@@ -161,3 +161,24 @@ export const IconThink = (props: IconProps) => (
     <path d="M12.4 11.2 13 12.7l1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" />
   </Glyph>
 );
+
+export const IconPlay = (props: IconProps) => (
+  <Glyph {...props} strokeWidth={0}>
+    <path d="M4.5 3.2 12.5 8l-8 4.8V3.2Z" fill="currentColor" />
+  </Glyph>
+);
+
+export const IconPause = (props: IconProps) => (
+  <Glyph {...props} strokeWidth={0}>
+    <rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor" />
+    <rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor" />
+  </Glyph>
+);
+
+/** Microphone: the voice control in the composer. */
+export const IconMic = (props: IconProps) => (
+  <Glyph {...props}>
+    <rect x="6" y="2.5" width="4" height="7" rx="2" />
+    <path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" />
+  </Glyph>
+);

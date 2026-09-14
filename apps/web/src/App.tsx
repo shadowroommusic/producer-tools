@@ -8,12 +8,13 @@
  * tool a panel runs lands in that session's transcript next to the message that asked for it — the
  * same place the Codex core will write when it is wired.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Composer } from "./components/Composer";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
 import { PluginsPage } from "./components/PluginsPage";
+import { StudioPage } from "./components/StudioPage";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import type { ToolCall } from "./components/ToolCallRow";
 import {
@@ -28,6 +29,8 @@ import {
   type Mention,
 } from "./lib/agent";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
+import { clipsFromCalls, loadProject, type StudioProject } from "./lib/studio";
+import { speak, startListening, voiceInputSupported, type VoiceSession } from "./lib/voice";
 import {
   createSession,
   loadSessions,
@@ -58,7 +61,6 @@ export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>("workbench");
   const [activePlugin, setActivePlugin] = useState("set-planner");
   const [dockOpen, setDockOpen] = useState(true);
-  const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("标准");
@@ -66,7 +68,11 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
-  const [mainView, setMainView] = useState<"conversation" | "plugins">("conversation");
+  const [mainView, setMainView] = useState<"conversation" | "plugins" | "studio">("conversation");
+  const [project, setProject] = useState<StudioProject>(() => loadProject());
+  const [listening, setListening] = useState(false);
+  const voiceSession = useRef<VoiceSession | null>(null);
+  const speakAnswer = useRef(false);
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   const [modelId, setModelId] = useState<string | undefined>(
@@ -159,7 +165,6 @@ export function App() {
   const startSession = useCallback(() => {
     const fresh = createSession();
     setStore((current) => ({ sessions: [fresh, ...current.sessions], activeId: fresh.id }));
-    setView("chat");
   }, []);
 
   /** Append a message to one session inside the store. */
@@ -170,8 +175,9 @@ export function App() {
     };
   }, []);
 
-  const submit = useCallback(() => {
-    const text = draft.trim();
+  const submit = useCallback(
+    (override?: string) => {
+    const text = (override ?? draft).trim();
     if (text === "" || running) return;
     setDraft("");
     const at = Date.now();
@@ -402,7 +408,9 @@ export function App() {
           );
         }
       });
-  }, [agent, attachments, draft, modelId, patchSession, running, store.activeId, store.sessions]);
+    },
+    [agent, attachments, draft, modelId, patchSession, running, store.activeId, store.sessions],
+  );
 
   const stop = useCallback(() => {
     if (store.activeId === undefined) return;
@@ -447,6 +455,44 @@ export function App() {
     (approval) => approval.sessionId === undefined || approval.sessionId === store.activeId,
   );
 
+  /** Voice: the microphone fills the draft, and a finished phrase sends itself — a spoken turn. */
+  const voiceSupported = voiceInputSupported();
+  const toggleVoice = useCallback(() => {
+    if (voiceSession.current !== null) {
+      voiceSession.current.stop();
+      voiceSession.current = null;
+      setListening(false);
+      return;
+    }
+    const session = startListening({
+      onPartial: (text) => setDraft(text),
+      onFinal: (text) => {
+        if (text === "") return;
+        speakAnswer.current = true;
+        setDraft("");
+        submit(text);
+      },
+      onEnd: () => {
+        voiceSession.current = null;
+        setListening(false);
+      },
+    });
+    if (session !== null) {
+      voiceSession.current = session;
+      setListening(true);
+    }
+  }, [submit]);
+
+  // Speak the answer when the turn was started by voice.
+  const lastAssistant = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant");
+  useEffect(() => {
+    if (running || speakAnswer.current !== true || lastAssistant === undefined) return;
+    speakAnswer.current = false;
+    if (lastAssistant.role === "assistant") speak(lastAssistant.text);
+  }, [running, lastAssistant]);
+
+  useEffect(() => () => voiceSession.current?.stop(), []);
+
   /** A tool run appears in the transcript and under 轨迹 at the same time. */
   const beginCall = useCallback(
     (call: ToolCall) => {
@@ -490,6 +536,43 @@ export function App() {
         : "draft",
   }));
 
+  const composerNode = (
+    <>
+        {pendingForSession.map((approval) => (
+          <ApprovalCard
+            key={approval.approvalId}
+            approval={approval}
+            onDecide={(decision) => decide(approval, decision)}
+          />
+      ))}
+              <Composer
+        variant={session === undefined || session.messages.length === 0 ? "hero" : "docked"}
+        value={draft}
+        onChange={setDraft}
+        onSubmit={submit}
+        onStop={stop}
+        busy={running}
+        mode={mode}
+        onModeChange={setMode}
+        models={models}
+        modelId={modelId}
+        onModelSelect={chooseModel}
+        attachments={attachments}
+        onAttach={(mention) =>
+                  setAttachments((current) =>
+                    current.some((entry) => entry.name === mention.name) ? current : [...current, mention],
+                  )
+                }
+        onDetach={(name) => setAttachments((current) => current.filter((entry) => entry.name !== name))}
+        plugins={plugins}
+        pluginRoot={workspaces}
+        listening={listening}
+        voiceSupported={voiceSupported}
+        onToggleVoice={toggleVoice}
+      />
+    </>
+  );
+
   return (
     <AppFrame
       dockCollapsed={!dockOpen}
@@ -502,14 +585,13 @@ export function App() {
           showPlugins={mainView === "plugins"}
           onSelectWorkspace={(next) => {
             setWorkspace(next);
-            setMainView("conversation");
+            setMainView(next === "studio" ? "studio" : "conversation");
           }}
           onShowPlugins={() => setMainView("plugins")}
           sessions={summaries}
           activeSessionId={store.activeId}
           onSelectSession={(id) => {
             setStore((current) => ({ ...current, activeId: id }));
-            setView("chat");
             setMainView("conversation");
           }}
           onNewSession={() => {
@@ -528,75 +610,16 @@ export function App() {
               setDockOpen(true);
             }}
           />
+        ) : mainView === "studio" ? (
+          <StudioPage project={project} onChange={setProject} composer={composerNode} />
         ) : (
           <Conversation
-          crumb={workspaceLabel(workspace)}
-          title={session === undefined || session.messages.length === 0 ? "新会话" : session.title}
-          view={view}
-          onViewChange={setView}
-          messages={session?.messages ?? []}
-          calls={session?.calls ?? []}
-          running={running}
-          suggestions={SUGGESTIONS}
-          onSuggestion={(text) => {
-            setDraft(text);
-            setView("chat");
-          }}
-          dockCollapsed={!dockOpen}
-          onToggleDock={() => setDockOpen((open) => !open)}
-          status={
-            <>
-              <span className="sr-chip sr-chip--status" data-state={bridge}>
-                <span className="sr-dot" data-state={bridge === "online" ? "live" : "idle"} />
-                <span className="sr-chip-label">
-                  {bridge === "online" ? "插件已连接" : bridge === "connecting" ? "连接中" : "插件未连接"}
-                </span>
-              </span>
-              <span
-                className="sr-chip sr-chip--status"
-                data-state={agent?.ok === true ? "online" : "offline"}
-                title={agent === null ? "pnpm serve:agent 未运行" : `${agent.cwd} · ${agent.sandbox}`}
-              >
-                <span className="sr-dot" data-state={agent?.ok === true ? "live" : "idle"} />
-                <span className="sr-chip-label">
-                  {agent?.ok === true ? `内核 ${agent.model ?? "就绪"}` : "内核未启动"}
-                </span>
-              </span>
-            </>
-          }
-          composer={
-            <>
-              {pendingForSession.map((approval) => (
-                <ApprovalCard
-                  key={approval.approvalId}
-                  approval={approval}
-                  onDecide={(decision) => decide(approval, decision)}
-                />
-              ))}
-              <Composer
-                variant={session === undefined || session.messages.length === 0 ? "hero" : "docked"}
-                value={draft}
-                onChange={setDraft}
-                onSubmit={submit}
-                onStop={stop}
-                busy={running}
-                mode={mode}
-                onModeChange={setMode}
-                models={models}
-                modelId={modelId}
-                onModelSelect={chooseModel}
-                attachments={attachments}
-                onAttach={(mention) =>
-                  setAttachments((current) =>
-                    current.some((entry) => entry.name === mention.name) ? current : [...current, mention],
-                  )
-                }
-                onDetach={(name) => setAttachments((current) => current.filter((entry) => entry.name !== name))}
-                plugins={plugins}
-                pluginRoot={workspaces}
-              />
-            </>
-          }
+            messages={session?.messages ?? []}
+            calls={session?.calls ?? []}
+            running={running}
+            suggestions={SUGGESTIONS}
+            onSuggestion={setDraft}
+            composer={composerNode}
           />
         )
       }
@@ -613,21 +636,6 @@ export function App() {
       }
     />
   );
-}
-
-function workspaceLabel(workspace: WorkspaceId): string {
-  switch (workspace) {
-    case "library":
-      return "曲目库";
-    case "studio":
-      return "Studio";
-    case "dj":
-      return "DJ";
-    case "settings":
-      return "设置";
-    default:
-      return "工作台";
-  }
 }
 
 /** Quick starts for the empty session — they only fill the composer, nothing runs yet. */

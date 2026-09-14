@@ -115,6 +115,7 @@ What was measured and matters:
 | `shadowroom.chat.width` | `components/Conversation.tsx` | dragged transcript width in px (absent = adaptive clamp) |
 | `shadowroom.converter.paths` | `components/ConverterPanel.tsx` | Rekordbox database/dir and Serato database paths |
 | `shadowroom.model` | `App.tsx` | the model picked in the composer |
+| `shadowroom.studio.v1` | `lib/studio.ts` | the Studio project: tracks, clips, tempo, key, bars |
 
 ## Where things live in the UI
 
@@ -127,6 +128,17 @@ What was measured and matters:
   tool rows in the order they happened, notice rows, and a per-turn `tokens · seconds` line.
 - **Pages** — the plugins page (`PluginsPage`) is the centre column's other occupant; picking a card
   selects that plugin and opens its panel in the dock.
+- **Studio** (`StudioPage`) — the DAW-shaped page: transport, a header column per track and a
+  bar-ruled lane area. `BAR_PX` (56) is the bar width in both the TSX and the CSS grid, so keep the
+  two in step. The playhead runs on `requestAnimationFrame` at the project tempo and loops at the
+  bar count.
+- **Voice** (`lib/voice.ts`) — input uses `webkitSpeechRecognition` when it exists, output uses
+  `speechSynthesis`. A finished phrase is sent straight away and the answer is spoken back; where the
+  browser has neither, the microphone button is disabled and nothing else changes.
+
+There is deliberately **no conversation header**: no breadcrumbs, no status chips, no view tabs. The
+header row the conversation used to carry was removed on request; the dock states its own plugin and
+carries its own close button.
 
 ## Transcript width handles
 
