@@ -63,9 +63,10 @@ Say *把这段哼唱转成 MIDI* and it happens inside the same conversation: th
 appear as a clip with a mini piano roll on the open Studio project — no extra button, no second step.
 
 **The dock** (right column) is the conversation: the transcript plus the composer, so you can watch and
-type to the agent while working in Studio. Collapsed it is a narrow rail with two shortcuts —
-**对话** and **插件** — which never covers the page. Plugin panels are pages in the middle column, not
-part of the dock.
+type to the agent while working in Studio. It only exists on the work pages — on 工作台 the transcript
+*is* the page, so there is nothing to duplicate. Collapsed it is a narrow rail whose shortcuts
+(**对话** / **插件**) never cover the page; plugin panels are pages in the middle column, not part of
+the dock.
 
 | Panel | What it does |
 | --- | --- |

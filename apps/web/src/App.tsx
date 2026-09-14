@@ -86,7 +86,9 @@ export function App() {
     () => (window.localStorage.getItem("shadowroom.workspace") as WorkspaceId | null) ?? "workbench",
   );
   const [activePlugin, setActivePlugin] = useState("set-planner");
-  const [dockOpen, setDockOpen] = useState(true);
+  // Closed by default: on the conversation page the transcript is already the main surface, and the
+  // dock would show the very same thing twice.
+  const [dockOpen, setDockOpen] = useState(false);
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("标准");
@@ -780,8 +782,9 @@ export function App() {
   absorbRef.current = absorbToolResult;
 
   const openProject = projects.find((project) => project.id === openProjectId);
-  /** With the chat dock open the composer moves there, so there is only ever one input. */
-  const chatInDock = dockOpen;
+  /** The dock is offered on the work pages (Studio, plugins); the conversation page *is* the chat. */
+  const dockAvailable = mainView !== "conversation";
+  const chatInDock = dockOpen && dockAvailable;
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
   const updateProject = (patch: (project: StudioProject) => StudioProject) =>
     setProjects((current) =>
@@ -833,7 +836,7 @@ export function App() {
 
   return (
     <AppFrame
-      dockCollapsed={!dockOpen}
+      dockCollapsed={!chatInDock}
       sidebar={({ collapsed, toggleSidebar }) => (
         <Sidebar
           collapsed={collapsed}
@@ -844,6 +847,7 @@ export function App() {
           onSelectWorkspace={(next) => {
             setWorkspace(next);
             setMainView(next === "studio" ? "studio" : "conversation");
+            if (next === "workbench") setDockOpen(false);
           }}
           onShowPlugins={() => setMainView("plugins")}
           sessions={summaries}
@@ -851,10 +855,12 @@ export function App() {
           onSelectSession={(id) => {
             setStore((current) => ({ ...current, activeId: id }));
             setMainView("conversation");
+            setDockOpen(false);
           }}
           onNewSession={() => {
             startSession();
             setMainView("conversation");
+            setDockOpen(false);
           }}
         />
       )}
@@ -925,15 +931,17 @@ export function App() {
       }
       dockRail={
         <div className="sr-dock-rail">
-          <button
-            type="button"
-            className="sr-dock-rail-btn"
-            title="展开对话"
-            aria-label="展开对话"
-            onClick={() => setDockOpen(true)}
-          >
-            <IconChat size={18} />
-          </button>
+          {dockAvailable && (
+            <button
+              type="button"
+              className="sr-dock-rail-btn"
+              title="展开对话"
+              aria-label="展开对话"
+              onClick={() => setDockOpen(true)}
+            >
+              <IconChat size={18} />
+            </button>
+          )}
           <button
             type="button"
             className="sr-dock-rail-btn"

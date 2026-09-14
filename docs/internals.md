@@ -134,6 +134,9 @@ What was measured and matters:
 - **Dock** — the conversation only: the shared `Transcript` plus the composer (the main column's
   composer is hidden while it is open, so there is only ever one input). Collapsed it becomes a 44px
   rail of shortcuts (对话 / 插件) — a column of its own, never a floating button over the transport.
+  It is offered on the work pages only (`mainView !== "conversation"`): on the conversation page the
+  transcript is already the main surface, so the rail shows just 插件 and going back there closes the
+  chat. Default state is closed.
 - **Plugin panels** are pages in the centre column (`PluginPanelPage`), opened from the plugins page.
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
