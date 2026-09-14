@@ -137,6 +137,57 @@
   min-height: 0;
 }
 
+/* Transcript width handles: 40px strips beside the shared width axis, invisible until hovered, with
+   a short glow that rides the pointer's Y (DSH's conversation width gesture). */
+.sr-width-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 8;
+  width: min(40px, calc((100% - var(--sr-content-width)) / 2 - 48px));
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sr-width-handle[data-side="left"] {
+  right: calc(50% + var(--sr-content-width) / 2 + 24px);
+}
+
+.sr-width-handle[data-side="right"] {
+  left: calc(50% + var(--sr-content-width) / 2 + 24px);
+}
+
+.sr-width-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--sr-handle-y, 50%) - 52px),
+    var(--sr-border-strong) calc(var(--sr-handle-y, 50%) - 12px),
+    var(--sr-border-strong) calc(var(--sr-handle-y, 50%) + 12px),
+    transparent calc(var(--sr-handle-y, 50%) + 52px)
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sr-width-handle[data-side="left"]::after {
+  right: 16px;
+}
+
+.sr-width-handle[data-side="right"]::after {
+  left: 16px;
+}
+
+.sr-width-handle:hover::after,
+.sr-width-handle[data-dragging]::after {
+  opacity: 1;
+}
+
 .sr-conversation-scroll {
   display: flex;
   flex: 1;

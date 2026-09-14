@@ -66,7 +66,7 @@ Built so far:
   | --- | --- |
   | `ui-layout` three-column frame, drag handles, rail collapse | `src/shell/AppFrame.tsx` + `shell/columns.ts` |
   | `ui-sidebar` brand row, New Session, panel rows, rail | `src/components/Sidebar.tsx` — workspaces (工作台 / 曲目库 / Studio / DJ / 设置) then the **plugins** |
-  | `ui-conversation` header, view tabs, hero phase, sticky composer | `src/components/Conversation.tsx`, `Composer.tsx` |
+  | `ui-conversation` header, view tabs, hero phase, sticky composer, transcript width handles | `src/components/Conversation.tsx`, `Composer.tsx` |
   | `ui-chat` transcript rows, tool-call disclosure | `src/components/ToolCallRow.tsx` |
   | `ui-sidebar-right` right dock | `src/components/DockPanel.tsx` — hosts the selected plugin |
 

@@ -60,3 +60,20 @@ type ChatMessage =
 - `App.tsx` only ever updates the active session (`withActiveSession`), creating one on the fly when
   the hero is still empty. When the Codex `app-server` core lands it writes the same two arrays; no
   layout code has to move.
+
+## Browser storage keys
+
+| Key | Owner | Contents |
+| --- | --- | --- |
+| `shadowroom.sessions.v1` | `lib/sessions.ts` | every session: title, messages, tool calls, active id |
+| `shadowroom.chat.width` | `components/Conversation.tsx` | dragged transcript width in px (absent = adaptive clamp) |
+| `shadowroom.converter.paths` | `components/ConverterPanel.tsx` | Rekordbox database/dir and Serato database paths |
+
+## Transcript width handles
+
+The conversation column keeps one width axis (`--sr-content-width`, an adaptive
+`clamp(640px, 62%, 880px)`). Two 40px strips sit 24px outside it; dragging either one writes a
+symmetric preference (outward travel widens by 2× the pointer distance), clamped to
+`[640px, column − 176px]`, and double-clicking a strip clears it. When the column cannot hold
+`inset + strip + safe zone` the computed strip width is 0 — the DSH behaviour, so a narrow column
+never carries a mispositioned hit area.
