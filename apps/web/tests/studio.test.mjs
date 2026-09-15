@@ -11,7 +11,17 @@ import {
   clipNoteRange,
   newNoteId,
   nudgeNotes,
+  TRACK_COLORS,
+  TRACK_OVERFLOW_LIMIT,
+  canAddTracks,
+  defaultTrackName,
   duplicateSection,
+  drumVoice,
+  nextTrackColor,
+  overflowNotice,
+  trackColor,
+  trackOfType,
+  trackTypeOf,
   insertBars,
   notesRevision,
   quantiseNotes,
@@ -270,4 +280,83 @@ test("the structure revision notices every structural change", () => {
   const moved = arrangement();
   moved.tracks[0].clips[0].start = 1;
   assert.notEqual(structureRevision(moved), base, "dragging a clip changes the arrangement");
+});
+
+test("track colours cycle in creation order so neighbours differ", () => {
+  const tracks = [];
+  for (let index = 0; index < 9; index += 1) {
+    const track = trackOfType(tracks, "instrument");
+    tracks.push(track);
+  }
+  assert.deepEqual(tracks.map((track) => track.color), [0, 1, 2, 3, 4, 5, 6, 7, 0]);
+  assert.equal(trackColor(tracks[0]), TRACK_COLORS[0]);
+  assert.equal(trackColor(tracks[8]), TRACK_COLORS[0], "the palette cycles");
+  assert.notEqual(trackColor(tracks[0]), trackColor(tracks[1]));
+});
+
+test("a track knows what it is, and older projects fall back to their name", () => {
+  assert.equal(trackTypeOf({ ...trackOfType([], "drums") }), "drums");
+  const notes = [{ id: "n", midi: 36, start_ms: 0, end_ms: 100 }];
+  const clip = (withNotes) => ({ id: "c", name: "c", start: 0, length: 4, source: "/tmp/a.wav", ...(withNotes ? { notes } : {}) });
+  assert.equal(
+    trackTypeOf({ id: "x", name: "鼓", muted: false, soloed: false, volume: 80, clips: [clip(true)] }),
+    "drums",
+    "the synth's drum part is a drum track",
+  );
+  /**
+   * The same name, no notes: that is a 鼓 *stem* from a separation — audio, and its double-click
+   * must not open an editor with nothing in it.
+   */
+  assert.equal(
+    trackTypeOf({ id: "x2", name: "鼓", muted: false, soloed: false, volume: 80, clips: [clip(false)] }),
+    "audio",
+  );
+  assert.equal(
+    trackTypeOf({ id: "y", name: "贝斯", muted: false, soloed: false, volume: 80, clips: [clip(true)] }),
+    "instrument",
+  );
+  assert.equal(trackTypeOf({ id: "z", name: "Audio 2", muted: false, soloed: false, volume: 80, clips: [], type: "audio" }), "audio");
+});
+
+test("drums are named at the five pitches the kit actually has", () => {
+  assert.equal(drumVoice(36)?.name, "Kick");
+  assert.equal(drumVoice(36)?.zh, "底鼓");
+  assert.equal(drumVoice(46)?.name, "Open hat");
+  // 45 is a low tom in General MIDI — we never write it, so calling it a tom would be a lie.
+  assert.equal(drumVoice(45), undefined);
+  assert.equal(drumVoice(60), undefined);
+});
+
+test("the overflow notice counts what to delete, and says nothing inside the limit", () => {
+  const many = (count) => Array.from({ length: count }, (_, index) => ({ id: `t${index}`, name: `T${index}`, muted: false, soloed: false, volume: 80, clips: [] }));
+  assert.equal(overflowNotice(many(10)), undefined);
+  assert.equal(
+    overflowNotice(many(13)),
+    "已临时扩展到 13 轨（分轨结果）。删除 3 条轨道后将自动恢复 10 轨上限。",
+  );
+  assert.equal(
+    overflowNotice(many(11)),
+    "已临时扩展到 11 轨（分轨结果）。删除 1 条轨道后将自动恢复 10 轨上限。",
+  );
+});
+
+test("new track names are numbered per kind", () => {
+  const tracks = [];
+  const first = trackOfType(tracks, "drums");
+  assert.equal(first.name, "鼓");
+  tracks.push(first);
+  const second = trackOfType(tracks, "drums");
+  assert.equal(second.name, "鼓 2");
+  tracks.push(second);
+  assert.equal(trackOfType(tracks, "audio").name, "音频");
+  assert.equal(trackOfType(tracks, "instrument").name, "乐器");
+});
+
+test("automatic additions may overflow to the hard limit, not past it", () => {
+  const many = (count) => Array.from({ length: count }, (_, index) => ({ id: `t${index}`, name: `T${index}`, muted: false, soloed: false, volume: 80, clips: [] }));
+  assert.equal(canAddTracks(many(6), 4), true, "10 tracks is fine");
+  assert.equal(canAddTracks(many(10), 4), true, "stems may push a full project to 14");
+  assert.equal(canAddTracks(many(11), 4), true, "11 + 4 lands exactly on the hard limit of 15");
+  assert.equal(canAddTracks(many(12), 4), false, "12 + 4 would pass 15");
+  assert.equal(canAddTracks(many(TRACK_OVERFLOW_LIMIT), 1), false);
 });

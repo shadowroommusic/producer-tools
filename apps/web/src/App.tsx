@@ -38,6 +38,8 @@ import { callTool } from "./lib/mcp";
 import {
   clipFromNotes,
   defaultProject,
+  canAddTracks,
+  trackTypeOf,
   notesRevision,
   structureRevision,
   tracksFromStems,
@@ -152,6 +154,15 @@ export function App() {
   const level = useRef(0);
   /** Project edits from inside an async tool callback; assigned once `updateProject` exists. */
   const updateProjectRef = useRef<(patch: (project: StudioProject) => StudioProject) => void>(() => undefined);
+  /**
+   * The projects as this render sees them.
+   *
+   * A tool result can arrive seconds later, and by then the callback that handles it was created
+   * with an older `projects`. Reading the ref is what lets that handler decide *before* touching the
+   * project — which is the only way to refuse an edit without leaving an empty undo step behind.
+   */
+  const projectsRef = useRef<StudioProject[]>(projects);
+  projectsRef.current = projects;
   /** Absorption goes through a ref: `submit` is created before the absorber exists. */
   const absorbRef = useRef<(call: ToolCall) => void>(() => undefined);
   const beginCallRef = useRef<(call: ToolCall) => void>(() => undefined);
@@ -406,7 +417,7 @@ export function App() {
               ? []
               : [`render_spec: ${JSON.stringify(noteContext.render)}`]),
             "[/clip_context]",
-            "（这一段是用户在 Studio 里选中的片段：改音符用 transform_notes；想让这一轨的声音变一点就调 regenerate_part，把上面的 render_spec 原样放进 part、clip_id 必填、patch 只动要改的那几个键。）",
+            "（这一段是用户在 Studio 里选中的片段：改音符用 transform_notes；想让这一轨的声音变一点就调 regenerate_part，把上面的 render_spec 原样放进 part、clip_id 必填、patch 只动要改的那几个键。注意：没有 notes 的片段是音频（导入的文件、分轨结果），它没有可编辑的音符——transform_notes 打过去会被拒绝，这种情况应该先用 stem-splitter 分轨，或在乐器轨/鼓轨上操作。）",
             ...arrangementContext,
           ].join("\n");
 
@@ -1123,6 +1134,23 @@ export function App() {
           velocity: Math.max(1, Math.min(127, Number(note.velocity ?? 100))),
         }));
         if (translated.length === 0) throw new Error("结果里没有音符");
+        /**
+         * A clip with no notes is a file, not a score — there is nothing for `transform_notes` to
+         * change, and the tool would have been given an empty note list anyway. Refusing *before*
+         * `updateProject` is what keeps an edit that did not happen out of the undo stack.
+         */
+        const openProject = projectsRef.current.find((project) => project.id === openProjectId);
+        const openTrack = openProject?.tracks.find((track) => track.clips.some((clip) => clip.id === parsed.clip_id));
+        const openClip = openTrack?.clips.find((clip) => clip.id === parsed.clip_id);
+        if (openTrack !== undefined && openClip !== undefined && (openClip.notes?.length ?? 0) === 0) {
+          notice(
+            "音符没改成",
+            trackTypeOf(openTrack) === "audio"
+              ? "这个片段是音频（导入的文件、分轨结果或渲染出来的音频），里面没有音符。先用 hum_to_midi 或「转 MIDI」把它变成音符，再改。"
+              : "这个片段还没有音符，transform_notes 没有东西可以改。先让 render_part 写一段，或把它转成 MIDI。",
+          );
+          return;
+        }
         let stale = false;
         let applied = false;
         updateProjectRef.current((project) => {
@@ -1438,6 +1466,26 @@ export function App() {
           }
           const stems = status.stems;
           const outDir = status.out_dir ?? "";
+          const currentProject = projects.find((entry) => entry.id === openProjectId);
+          const stemCount = Object.keys(stems).length;
+          if (currentProject !== undefined && !canAddTracks(currentProject.tracks, stemCount)) {
+            // The soft limit (10) may be overflowed by automatic work; the hard one (15) may not.
+            endCallRef.current(id, { status: "error", summary: "轨道数已达上限", detail: "超过 15 轨" });
+            withActiveSession((current) => ({
+              ...current,
+              messages: [
+                ...current.messages,
+                {
+                  id: `st-${Date.now()}`,
+                  role: "notice",
+                  title: "分轨结果没落轨",
+                  text: `当前 ${currentProject.tracks.length} 条轨道，再加 ${stemCount} 条会超过 15 轨硬上限。先删掉几条，再说一次「分轨」。`,
+                  at: Date.now(),
+                },
+              ],
+            }));
+            return false;
+          }
           updateProjectRef.current((project) => {
             const created = tracksFromStems(stems, project.tracks, clip);
             return {

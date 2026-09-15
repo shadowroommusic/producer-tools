@@ -12,7 +12,9 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  DRUM_VOICES,
   clipNoteRange,
+  drumVoice,
   newNoteId,
   quantiseNotes,
   transposeNotes,
@@ -31,6 +33,12 @@ const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 type Props = {
   clipName: string;
   bpm: number;
+  /**
+   * A drum track's roll is the same editor with different row labels: Kick/Snare/Hi-hat instead of
+   * C1/D1. Notes are still MIDI — the labels are the only difference, which is what makes one
+   * editor enough for both.
+   */
+  drumKit?: boolean;
   /** The clip's own length in milliseconds — notes never leave it. */
   lengthMs: number;
   notes: StudioNote[];
@@ -46,6 +54,7 @@ type Props = {
 export function PianoRoll({
   clipName,
   bpm,
+  drumKit = false,
   lengthMs,
   notes,
   onChange,
@@ -70,7 +79,31 @@ export function PianoRoll({
   const stepMs = beatMs / step;
   const pixelsPerMs = (BEAT_PX * zoom) / beatMs;
   const { from, to } = useMemo(() => clipNoteRange(notes), [notes]);
-  const rows = useMemo(() => Array.from({ length: to - from + 1 }, (_, index) => to - index), [from, to]);
+  /**
+   * Which pitches get a row.
+   *
+   * Normally that is just the range the clip uses. A drum track is different: the kit's five voices
+   * are *always* there to click on — an empty drum clip opens with 底鼓 / 军鼓 / 拍手 / 闭镲 / 开镲
+   * waiting, which is the whole point of naming the rows. The rest of the keyboard is not taken away
+   * (a note at 45 still gets its row, named by pitch), because a row that cannot be reached is a
+   * dead end for anyone who learned a fill from a tutorial.
+   */
+  const rows = useMemo(() => {
+    if (!drumKit) return Array.from({ length: to - from + 1 }, (_, index) => to - index);
+    const pitches = new Set<number>();
+    /* An empty drum clip opens as five rows — a kit, not a keyboard. Once a note exists outside the
+       kit (a tom fill someone typed in), its row is added rather than being hidden. */
+    if (notes.length > 0) {
+      for (let pitch = from; pitch <= to; pitch += 1) pitches.add(pitch);
+    }
+    for (const voice of DRUM_VOICES) pitches.add(voice.midi);
+    return [...pitches].sort((a, b) => b - a);
+  }, [drumKit, from, to, notes.length]);
+  /** Row index instead of `to - midi`: the drum rows are not contiguous. */
+  const rowOf = (midi: number) => {
+    const index = rows.indexOf(midi);
+    return index === -1 ? 0 : index;
+  };
   const bars = Math.max(1, Math.ceil(lengthMs / beatMs / 4));
   const width = bars * 4 * BEAT_PX * zoom;
   const height = rows.length * ROW_PX;
@@ -139,7 +172,7 @@ export function PianoRoll({
   const createAt = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     const box = event.currentTarget.getBoundingClientRect();
-    const pitch = to - Math.floor((event.clientY - box.top) / ROW_PX);
+    const pitch = rows[Math.max(0, Math.min(rows.length - 1, Math.floor((event.clientY - box.top) / ROW_PX)))];
     const start = Math.max(0, Math.min(Math.max(0, lengthMs - stepMs), snap((event.clientX - box.left) / pixelsPerMs, event.altKey)));
     const note: StudioNote = {
       id: newNoteId(),
@@ -203,6 +236,7 @@ export function PianoRoll({
         <span className="sr-roll-meta sr-mono">
           {notes.length} 个音符 · {bars} 小节 · 网格 1/{step * 4}
         </span>
+        {drumKit && <span className="sr-roll-tag sr-mono">鼓轨 · 按鼓件编辑</span>}
         <div className="sr-roll-actions">
           <button
             type="button"
@@ -263,23 +297,37 @@ export function PianoRoll({
         </div>
       </header>
 
-      <div className="sr-roll-body sr-scroll">
+      <div className="sr-roll-body sr-scroll" data-kit={drumKit || undefined}>
         <div className="sr-roll-keys" style={{ height }}>
-          {rows.map((pitch) => (
-            <button
-              key={pitch}
-              type="button"
-              className="sr-roll-key"
-              data-black={BLACK.has(pitch % 12) || undefined}
-              style={{ height: ROW_PX }}
-              title={`${NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1} · 点一下试听`}
-              onClick={() => onAudition?.(pitch, stepMs * 2)}
-            >
-              <span className="sr-roll-key-label sr-mono">
-                {pitch % 12 === 0 ? `C${Math.floor(pitch / 12) - 1}` : ""}
-              </span>
-            </button>
-          ))}
+          {rows.map((pitch) => {
+            const voice = drumKit ? drumVoice(pitch) : undefined;
+            const noteName = `${NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
+            return (
+              <button
+                key={pitch}
+                type="button"
+                className="sr-roll-key"
+                data-black={BLACK.has(pitch % 12) || undefined}
+                data-voice={voice?.name}
+                style={{ height: ROW_PX }}
+                title={
+                  voice === undefined
+                    ? `${noteName} · 点一下试听`
+                    : `${voice.zh} ${voice.name} · MIDI ${pitch} · 点一下试听`
+                }
+                onClick={() => onAudition?.(pitch, stepMs * 2)}
+              >
+                <span className="sr-roll-key-label sr-mono">
+                  {/* 底鼓 (Kick): the studio speaks Chinese, the tutorials speak English. */}
+                  {voice !== undefined
+                    ? `${voice.zh} (${voice.name})`
+                    : pitch % 12 === 0
+                      ? `C${Math.floor(pitch / 12) - 1}`
+                      : ""}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         <div
@@ -290,6 +338,7 @@ export function PianoRoll({
           {notes.map((note) => {
             const id = note.id ?? "";
             const velocity = note.velocity ?? 100;
+            const voice = drumKit ? drumVoice(note.midi) : undefined;
             return (
               <div
                 key={id}
@@ -298,10 +347,14 @@ export function PianoRoll({
                 style={{
                   left: note.start_ms * pixelsPerMs,
                   width: Math.max(6, (note.end_ms - note.start_ms) * pixelsPerMs),
-                  top: (to - note.midi) * ROW_PX + 1,
+                  top: rowOf(note.midi) * ROW_PX + 1,
                   opacity: 0.35 + (velocity / 127) * 0.65,
                 }}
-                title={`${NAMES[note.midi % 12]}${Math.floor(note.midi / 12) - 1} · 力度 ${velocity}`}
+                title={
+                  voice === undefined
+                    ? `${NAMES[note.midi % 12]}${Math.floor(note.midi / 12) - 1} · 力度 ${velocity}`
+                    : `${voice.zh} ${voice.name} · 力度 ${velocity}`
+                }
                 onPointerDown={(event) => {
                   event.stopPropagation();
                   const additive = event.shiftKey;

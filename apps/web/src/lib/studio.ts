@@ -64,9 +64,6 @@ export type StudioNote = {
   name?: string;
 };
 
-/** How many tracks a project may hold when the user adds them by hand. */
-export const MAX_TRACKS = 10;
-
 /** Default note length in the editor: one 16th. */
 export const NOTE_STEP_MS = (bpm: number): number => 60_000 / Math.max(1, bpm) / 4;
 
@@ -334,6 +331,12 @@ export function isPlayable(path: string | undefined): boolean {
   return /\.(wav|mp3|m4a|aac|aif|aiff|flac|ogg|opus)$/i.test(path);
 }
 
+/**
+ * What a track is for — and the only three differences that make it real:
+ * what the piano roll shows, whether notes can be edited, and the default sound.
+ */
+export type StudioTrackType = "instrument" | "audio" | "drums";
+
 export type StudioTrack = {
   id: string;
   name: string;
@@ -342,7 +345,120 @@ export type StudioTrack = {
   /** 0–100, the fader position. */
   volume: number;
   clips: StudioClip[];
+  /** Set on creation (and by the renderer); older projects fall back to the name. */
+  type?: StudioTrackType;
+  /** Index into `TRACK_COLORS`, assigned in creation order so neighbours differ. */
+  color?: number;
 };
+
+/**
+ * Eight colours for a dark UI, hue-spaced so two neighbouring tracks never look alike.
+ *
+ * They are the only染色 in the app: a 4px bar beside the track name, a 3px left edge on the clip,
+ * and the notes themselves. Nothing paints a whole surface — that is what makes a busy arrangement
+ * still readable.
+ */
+export const TRACK_COLORS = [
+  "#6EE7B7", // mint
+  "#60A5FA", // blue
+  "#F472B6", // pink
+  "#FBBF24", // amber
+  "#A78BFA", // violet
+  "#34D399", // emerald
+  "#FB923C", // orange
+  "#94A3B8", // slate
+] as const;
+
+/** Tracks the user adds by hand; automatic additions (stems, imports) may go beyond, up to here. */
+export const MAX_TRACKS = 10;
+export const TRACK_OVERFLOW_LIMIT = 15;
+
+/** The next colour in the cycle: creation order, so adjacent tracks differ. */
+export function nextTrackColor(tracks: StudioTrack[]): number {
+  return tracks.length % TRACK_COLORS.length;
+}
+
+/** The colour a track is drawn with, falling back to its position for older projects. */
+export function trackColor(track: StudioTrack, index = 0): string {
+  return TRACK_COLORS[(track.color ?? index) % TRACK_COLORS.length];
+}
+
+/**
+ * What kind of track this is. Explicit when we set it, inferred from the name for older projects
+ * (the synth's drum parts land on a track called 鼓).
+ *
+ * The inference also asks whether there are notes at all: an old project's 鼓 can be the synth's
+ * drum part (notes: a drum track) or a 鼓 stem from a separation (audio, no notes). Getting that
+ * wrong is not cosmetic — it decides whether the piano roll opens and whether the agent may edit.
+ */
+export function trackTypeOf(track: StudioTrack): StudioTrackType {
+  if (track.type !== undefined) return track.type;
+  const notated = track.clips.some((clip) => (clip.notes?.length ?? 0) > 0);
+  if (!notated) return "audio";
+  return /鼓|drum|kick/i.test(track.name) ? "drums" : "instrument";
+}
+
+/** Default name for a new track of each kind; numbering keeps them apart. */
+export function defaultTrackName(tracks: StudioTrack[], type: StudioTrackType): string {
+  const base = type === "drums" ? "鼓" : type === "audio" ? "音频" : "乐器";
+  const taken = new Set(tracks.map((track) => track.name));
+  if (!taken.has(base)) return base;
+  for (let index = 2; index < 100; index += 1) {
+    if (!taken.has(`${base} ${index}`)) return `${base} ${index}`;
+  }
+  return `${base} ${tracks.length + 1}`;
+}
+
+/** A new track of the given kind, with the palette colour it should carry. */
+export function trackOfType(tracks: StudioTrack[], type: StudioTrackType): StudioTrack {
+  return { ...newTrack(defaultTrackName(tracks, type)), type, color: nextTrackColor(tracks) };
+}
+
+/** Whether an automatic addition (stems, imports) may add `count` more tracks. */
+export function canAddTracks(tracks: StudioTrack[], count: number): boolean {
+  return tracks.length + count <= TRACK_OVERFLOW_LIMIT;
+}
+
+/**
+ * The drum voices the synth can play, at the General-MIDI pitches it writes them at.
+ *
+ * The list is not a catalogue — it is exactly `DRUM_MIDI` in shadow-music-generator, so a drum
+ * track's notes always land on a row that has a name. The English name is the label (drum machines
+ * have said "Kick" since the 808); the Chinese one is the tooltip, for the beginner who has only
+ * ever seen 底鼓 in a tutorial.
+ */
+export const DRUM_VOICES: ReadonlyArray<{ midi: number; name: string; zh: string }> = [
+  { midi: 36, name: "Kick", zh: "底鼓" },
+  { midi: 38, name: "Snare", zh: "军鼓" },
+  { midi: 39, name: "Clap", zh: "拍手" },
+  { midi: 42, name: "Hi-hat", zh: "闭镲" },
+  { midi: 46, name: "Open hat", zh: "开镲" },
+];
+
+/**
+ * What a pitch is called on a drum track, or `undefined` when it is not one of our voices.
+ *
+ * Returning `undefined` (rather than guessing "Tom") is the honest answer: a note at 45 was not
+ * written by our drum kit, and mislabelling it would teach the user something false.
+ */
+export function drumVoice(midi: number): { name: string; zh: string } | undefined {
+  const voice = DRUM_VOICES.find((entry) => entry.midi === midi);
+  return voice === undefined ? undefined : { name: voice.name, zh: voice.zh };
+}
+
+/**
+ * What to say when a separation (or a run of imports) pushed the project past the manual limit.
+ *
+ * The rule the user asked for: stems may overflow to {@link TRACK_OVERFLOW_LIMIT}, the banner says
+ * how many to delete, and nothing disappears on its own — the count going back down only re-enables
+ * the "＋ 音轨" button.
+ * @returns the sentence to show, or `undefined` when the project is inside its limit.
+ */
+export function overflowNotice(tracks: StudioTrack[]): string | undefined {
+  const count = tracks.length;
+  if (count <= MAX_TRACKS) return undefined;
+  return `已临时扩展到 ${count} 轨（分轨结果）。删除 ${count - MAX_TRACKS} 条轨道后将自动恢复 ${MAX_TRACKS} 轨上限。`;
+}
 
 export type StudioProject = {
   id: string;
@@ -412,7 +528,16 @@ export function trackFromImport(path: string, existing: string[] = []): StudioTr
   for (let index = 2; existing.includes(name) && index < 1000; index += 1) {
     name = `${base} ${index}`;
   }
-  return { ...newTrack(name), clips: [newClip(trackNameFromImport(path), 0, 4, path)] };
+  /**
+   * An import is an audio track: it plays the file as it is and has no notes to edit. That is what
+   * keeps double-clicking it from opening a piano roll that would have nothing in it.
+   */
+  return {
+    ...newTrack(name),
+    type: "audio",
+    color: existing.length % TRACK_COLORS.length,
+    clips: [newClip(trackNameFromImport(path), 0, 4, path)],
+  };
 }
 
 /**
@@ -466,6 +591,10 @@ export function tracksFromStems(
     taken.push(label);
     created.push({
       ...newTrack(label),
+      // A stem is a finished audio file, not notes: even 鼓 is an audio track here, which is why
+      // the type is set explicitly instead of being inferred from the name.
+      type: "audio",
+      color: (existing.length + created.length) % TRACK_COLORS.length,
       clips: [newClip(`${label} · ${clip.name}`, clip.start, clip.length, path)],
     });
   }
@@ -486,7 +615,11 @@ export function defaultProject(): StudioProject {
      * them — a timeline that looked like a song and played nothing. A project now starts empty: the
      * song arrives from a render (one sentence) or from an import.
      */
-    tracks: [newTrack("鼓"), newTrack("贝斯"), newTrack("合成器")],
+    tracks: [
+      { ...newTrack("鼓"), type: "drums", color: 0 },
+      { ...newTrack("贝斯"), type: "instrument", color: 1 },
+      { ...newTrack("合成器"), type: "instrument", color: 2 },
+    ],
   };
 }
 

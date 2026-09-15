@@ -15,13 +15,20 @@ import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./i
 import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
   MAX_TRACKS,
+  TRACK_COLORS,
   barsPerSecond,
+  canAddTracks,
+  defaultTrackName,
   duplicateSection,
   insertBars,
   notesRevision,
+  overflowNotice,
   removeSection,
   repeatLastSection,
   structureRevision,
+  trackColor,
+  trackOfType,
+  trackTypeOf,
   withNoteIds,
   fileUrl,
   isPlayable,
@@ -137,8 +144,19 @@ export function StudioPage({
     | { kind: "section"; sectionId: string; x: number; y: number }
     | null
   >(null);
+  /** The "+ 音轨" menu: three kinds, no sub-menus (an instrument's sound is the agent's job). */
+  const [trackMenu, setTrackMenu] = useState<{ x: number; y: number } | null>(null);
+  /** A track header being dragged to a new position. */
+  const [draggingTrack, setDraggingTrack] = useState<{ id: string; index: number } | null>(null);
+  /** The track whose delete button has been armed by a first click. */
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   /** The clip whose notes the piano roll is editing (at most one: the editor shows one clip). */
   const [editing, setEditing] = useState<{ trackId: string; clipId: string } | null>(null);
+  /** One sentence about something that just happened, cleared after a few seconds. */
+  const [flash, setFlash] = useState<string | null>(null);
+  const flashTimer = useRef<number | null>(null);
+  /** The overflow banner can be put away; the extra tracks stay until they are deleted. */
+  const [overflowHidden, setOverflowHidden] = useState(false);
   const [dragging, setDragging] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -545,6 +563,39 @@ export function StudioPage({
   );
 
   const anySoloTrack = project.tracks.find((track) => track.soloed);
+  const overflow = overflowNotice(project.tracks);
+
+  /**
+   * Say one sentence and let it fade. Used where a control exists but cannot do anything here —
+   * silencing it (the way a disabled button does) would leave the user guessing why.
+   */
+  const say = useCallback((text: string) => {
+    setFlash(text);
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(null), 4500);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+
+  /**
+   * The overflow banner stops being true the moment the count is back inside the limit — and the
+   * user deserves to be told that the limit is theirs again, not left wondering whether the extra
+   * tracks broke something.
+   */
+  const previousCount = useRef(project.tracks.length);
+  useEffect(() => {
+    const count = project.tracks.length;
+    if (previousCount.current > MAX_TRACKS && count <= MAX_TRACKS) {
+      setOverflowHidden(false);
+      say(`已恢复 ${MAX_TRACKS} 轨上限。`);
+    }
+    previousCount.current = count;
+  }, [project.tracks.length, say]);
   const positionLabel = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
   const grid = useMemo(() => Array.from({ length: project.bars }, (_, bar) => bar), [project.bars]);
 
@@ -660,24 +711,26 @@ export function StudioPage({
             type="button"
             className="sr-btn sr-studio-addtrack"
             disabled={project.tracks.length >= MAX_TRACKS}
+            aria-haspopup="menu"
+            aria-expanded={trackMenu !== null}
             title={
               project.tracks.length >= MAX_TRACKS
-                ? `最多 ${MAX_TRACKS} 条音轨；删掉一条再加，或者让智能体帮你合并`
+                ? `已达到 ${MAX_TRACKS} 轨上限；删掉一条即可继续添加`
                 : `加一条音轨（上限 ${MAX_TRACKS}）`
             }
-            onClick={() =>
-              onChange((current) =>
-                current.tracks.length >= MAX_TRACKS
-                  ? current
-                  : { ...current, tracks: [...current.tracks, newTrack(`音轨 ${current.tracks.length + 1}`)] },
-              )
-            }
+            onClick={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
+              setTrackMenu({ x: box.left, y: box.bottom + 6 });
+            }}
           >
             <IconPlus size={14} />
             音轨
           </button>
-          {project.tracks.length > MAX_TRACKS && (
-            <span className="sr-transport-hint sr-mono" title={`超过上限 ${MAX_TRACKS} 条；删掉几条就恢复`}>
+          {overflow !== undefined && (
+            <span
+              className="sr-transport-hint sr-mono"
+              title={`已有 ${project.tracks.length} 条轨道，超过手动的 ${MAX_TRACKS} 轨上限；删掉几条就恢复`}
+            >
               {project.tracks.length}/{MAX_TRACKS} 轨
             </span>
           )}
@@ -886,18 +939,108 @@ export function StudioPage({
         </div>
       )}
 
+      {/*
+        Separating one clip adds four tracks at once. Refusing would make the user choose which stem
+        to lose; so the project is allowed past the manual limit, and this bar says by how much —
+        it is the only thing that changes when tracks are deleted, and it goes away on its own once
+        the count is back inside the limit.
+      */}
+      {overflow !== undefined && !overflowHidden && (
+        <div className="sr-studio-overflow">
+          <span className="sr-studio-overflow-text">{overflow}</span>
+          <button
+            type="button"
+            className="sr-icon-btn"
+            aria-label="关闭提示"
+            title="先收起提示（轨道还在）"
+            onClick={() => setOverflowHidden(true)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div className="sr-studio-body">
         <div className="sr-studio-headers">
           <div className="sr-studio-headers-top" />
           <div className="sr-studio-headers-scroll sr-scroll">
-            {project.tracks.map((track) => {
+            {project.tracks.map((track, trackIndex) => {
               const live = !track.muted && (anySolo ? track.soloed : true);
+              const type = trackTypeOf(track);
+              const colour = trackColor(track, trackIndex);
               return (
-                <div key={track.id} className="sr-track-head" data-muted={!live || undefined}>
+                <div
+                  key={track.id}
+                  className="sr-track-head"
+                  data-muted={!live || undefined}
+                  data-dragging={draggingTrack?.id === track.id || undefined}
+                  style={{ ["--sr-track-color" as string]: colour }}
+                >
+                  <span className="sr-track-colour" aria-hidden="true" />
                   <input
                     className="sr-track-name"
                     value={track.name}
                     aria-label="音轨名称"
+                    data-type={type}
+                    title={`${track.name} · ${type === "drums" ? "鼓轨道" : type === "audio" ? "音频轨道" : "乐器轨道"} · 按住名字上下拖动可排序`}
+                    onPointerDown={(event) => {
+                      // Reordering starts on the name only: a clip drag that crosses the header must
+                      // never reorder tracks.
+                      if (event.button !== 0 || project.tracks.length < 2) return;
+                      const element = event.currentTarget as HTMLInputElement;
+                      const startY = event.clientY;
+                      const origin = trackIndex;
+                      const rows = 84;
+                      /**
+                       * The pointer is captured so the drag keeps reporting after the cursor leaves
+                       * this 20px-tall input — without it the very first move ended the gesture
+                       * (measured: reordering silently did nothing).
+                       */
+                      element.setPointerCapture(event.pointerId);
+                      /** Where the row would land. Kept here, not in state: the drop is read once. */
+                      let target: number | null = null;
+                      const onMove = (moveEvent: PointerEvent) => {
+                        const wanted = Math.max(
+                          0,
+                          Math.min(project.tracks.length - 1, origin + Math.round((moveEvent.clientY - startY) / rows)),
+                        );
+                        target = wanted === origin ? null : wanted;
+                        setDraggingTrack(target === null ? null : { id: track.id, index: target });
+                      };
+                      const onUp = () => {
+                        element.removeEventListener("pointermove", onMove);
+                        element.removeEventListener("pointerup", onUp);
+                        element.removeEventListener("pointercancel", onUp);
+                        if (element.hasPointerCapture(event.pointerId)) {
+                          element.releasePointerCapture(event.pointerId);
+                        }
+                        setDraggingTrack(null);
+                        /**
+                         * One drop = one edit, and it happens *here* rather than inside a state
+                         * updater: StrictMode runs updaters twice, so a reorder written that way
+                         * would push two snapshots (measured earlier on undo: two undos, half a step).
+                         */
+                        const landing = target;
+                        if (landing === null) return;
+                        /**
+                         * A drag is not a rename: leaving the caret in the name would swallow the
+                         * next ⌘Z (the app ignores shortcuts typed into a text field), so the undo
+                         * of a reorder would appear to do nothing.
+                         */
+                        element.blur();
+                        onChange((project_) => {
+                          const from = project_.tracks.findIndex((entry) => entry.id === track.id);
+                          if (from === -1) return project_;
+                          const next = [...project_.tracks];
+                          const [moved] = next.splice(from, 1);
+                          next.splice(Math.max(0, Math.min(next.length, landing)), 0, moved);
+                          return { ...project_, tracks: next };
+                        });
+                      };
+                      element.addEventListener("pointermove", onMove);
+                      element.addEventListener("pointerup", onUp);
+                      element.addEventListener("pointercancel", onUp);
+                    }}
                     onChange={(event) => updateTrack(track.id, (current) => ({ ...current, name: event.target.value }))}
                   />
                   <div className="sr-track-controls">
@@ -935,16 +1078,25 @@ export function StudioPage({
                     <button
                       type="button"
                       className="sr-track-remove"
+                      data-armed={confirmDelete === track.id || undefined}
                       aria-label={`删除 ${track.name}`}
-                      title="删除轨道"
-                      onClick={() =>
+                      title={confirmDelete === track.id ? "再点一次就删除（3 秒后自动取消）" : "删除轨道"}
+                      onClick={() => {
+                        // No system dialog: the first click arms, the second deletes, and it disarms
+                        // itself after three seconds — undo brings the whole track back either way.
+                        if (confirmDelete !== track.id) {
+                          setConfirmDelete(track.id);
+                          window.setTimeout(() => setConfirmDelete((current) => (current === track.id ? null : current)), 3000);
+                          return;
+                        }
+                        setConfirmDelete(null);
                         onChange((current) => ({
                           ...current,
                           tracks: current.tracks.filter((entry) => entry.id !== track.id),
-                        }))
-                      }
+                        }));
+                      }}
                     >
-                      ×
+                      {confirmDelete === track.id ? "确认删除" : "×"}
                     </button>
                   </div>
                   <div className="sr-meter" aria-hidden="true">
@@ -1020,18 +1172,33 @@ export function StudioPage({
                 aria-hidden="true"
               />
             ))}
-            {project.tracks.map((track) => (
+            {project.tracks.map((track, laneIndex) => (
               <div
                 key={track.id}
                 className="sr-studio-lane"
                 data-track-id={track.id}
                 data-muted={!(audible(track)) || undefined}
+                style={{ ["--sr-track-color" as string]: trackColor(track, laneIndex) }}
                 onDoubleClick={(event) => {
                   const box = event.currentTarget.getBoundingClientRect();
                   addClip(track.id, (event.clientX - box.left) / barPx);
                 }}
               >
-                {track.clips.map((clip) => (
+                {track.clips.map((clip) => {
+                  /**
+                   * Whether the editor opens is a property of the *clip*, not the track: an audio
+                   * file has nothing to edit, but the same clip can gain notes through 转 MIDI —
+                   * and after that it is editable wherever it lives. So: notes → editor, no notes →
+                   * one sentence saying what to do instead.
+                   */
+                  const hasNotes = (clip.notes?.length ?? 0) > 0;
+                  const isDrums = trackTypeOf(track) === "drums";
+                  /**
+                   * A drum track's empty clip opens too: the roll already knows the five voices, so
+                   * "make me a beat by hand" works on a track that has no notes yet.
+                   */
+                  const editable = hasNotes || isDrums;
+                  return (
                   <Clip
                     key={clip.id}
                     clip={clip}
@@ -1056,7 +1223,17 @@ export function StudioPage({
                     onBeginEdit={() => onBeginEdit?.()}
                     onDelete={() => removeClip(track.id, clip.id)}
                     onMenu={(x, y) => setMenu({ trackId: track.id, clipId: clip.id, x, y })}
-                    onOpenNotes={() => openNotes(track.id, clip.id)}
+                    onOpenNotes={editable ? () => openNotes(track.id, clip.id) : undefined}
+                    onAudioHint={
+                      editable
+                        ? undefined
+                        : () =>
+                            say(
+                              trackTypeOf(track) === "audio"
+                                ? "这个音频片段里没有音符：右键 → 转 MIDI（或让 AI 把这段旋律转成 MIDI），之后就能在钢琴卷帘里编辑。"
+                                : "这个片段还没有音符：先让 AI 写一段旋律，或右键 → 转 MIDI。",
+                            )
+                    }
                     rendering={rendering.includes(clip.id)}
                     onDuplicate={() => {
                       const copy = { ...clip, id: `${clip.id}-copy-${Date.now().toString(36)}` };
@@ -1064,7 +1241,8 @@ export function StudioPage({
                     }}
                     splitting={splitting.includes(clip.id)}
                   />
-                ))}
+                  );
+                })}
               </div>
             ))}
             <div className="sr-playhead" style={{ left: playhead * barPx }} aria-hidden="true" />
@@ -1086,11 +1264,15 @@ export function StudioPage({
         (() => {
           const track = project.tracks.find((entry) => entry.id === editing.trackId);
           const clip = track?.clips.find((entry) => entry.id === editing.clipId);
-          if (clip === undefined || (clip.notes?.length ?? 0) === 0) return null;
+          /* A drum clip opens even with no notes: the five voices are the whole point of the drum
+             roll, and "write a beat by hand" starts from an empty clip. */
+          const drums = track !== undefined && trackTypeOf(track) === "drums";
+          if (clip === undefined || ((clip.notes?.length ?? 0) === 0 && !drums)) return null;
           return (
             <PianoRoll
               clipName={clip.name}
               bpm={project.bpm}
+              drumKit={drums}
               lengthMs={(clip.length * 60_000) / project.bpm}
               notes={clip.notes ?? []}
               onChange={setNotes}
@@ -1106,8 +1288,55 @@ export function StudioPage({
       {anySoloTrack !== undefined && (
         <p className="sr-studio-hint sr-mono">独奏中：{anySoloTrack.name}</p>
       )}
+      {flash !== null && (
+        <p className="sr-studio-flash" role="status">
+          {flash}
+        </p>
+      )}
 
       {/* Right-click actions on a clip. */}
+      {/*
+        "＋ 音轨" asks one question — what kind — and nothing else: an instrument's sound is the
+        agent's job, so a sound picker here would be a menu of choices a beginner cannot make yet.
+      */}
+      {trackMenu !== null && (
+        <>
+          <div className="sr-menu-backdrop" onPointerDown={() => setTrackMenu(null)} />
+          <div
+            className="sr-menu sr-track-menu"
+            style={{ left: trackMenu.x, top: trackMenu.y }}
+            role="menu"
+            aria-label="加音轨"
+          >
+            <p className="sr-menu-title sr-mono">加一条什么音轨？</p>
+            {(
+              [
+                { type: "instrument", label: "乐器", hint: "写旋律、和弦；打开是钢琴键盘" },
+                { type: "audio", label: "音频", hint: "放导入或录音的文件；没有音符可编辑" },
+                { type: "drums", label: "鼓", hint: "打开钢琴卷帘时显示 Kick / Snare / Hi-hat" },
+              ] as const
+            ).map((entry) => (
+              <button
+                key={entry.type}
+                type="button"
+                role="menuitem"
+                className="sr-menu-item"
+                onClick={() => {
+                  onChange((current) => ({
+                    ...current,
+                    tracks: [...current.tracks, trackOfType(current.tracks, entry.type)],
+                  }));
+                  setTrackMenu(null);
+                }}
+              >
+                <span className="sr-menu-label">{entry.label}</span>
+                <span className="sr-menu-hint sr-mono">{entry.hint}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       {structureMenu !== null && (
         <>
           <div className="sr-menu-backdrop" onPointerDown={() => setStructureMenu(null)} />
@@ -1290,14 +1519,19 @@ export function StudioPage({
                 >
                   <span className="sr-menu-label">{converting ? "识别中…" : "转 MIDI"}</span>
                   <span className="sr-menu-hint sr-mono">
-                    {isPlayable(clip.source) ? `${clip.notes?.length ?? 0} 个音符` : "只有音频片段能转"}
+                    {!isPlayable(clip.source)
+                      ? "只有音频片段能转"
+                      : (clip.notes?.length ?? 0) === 0
+                        ? "把这段音频认成音符（哼唱、旋律都能试）"
+                        : `重新识别 · 现在有 ${clip.notes?.length ?? 0} 个音符`}
                   </span>
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   className="sr-menu-item"
-                  disabled={(clip.notes?.length ?? 0) === 0}
+                  /* A drum track can be written from scratch — its roll opens on the five voices. */
+                  disabled={(clip.notes?.length ?? 0) === 0 && trackTypeOf(track) !== "drums"}
                   onClick={() => {
                     openNotes(track.id, clip.id);
                     close();
@@ -1305,7 +1539,11 @@ export function StudioPage({
                 >
                   <span className="sr-menu-label">编辑音符</span>
                   <span className="sr-menu-hint sr-mono">
-                    {(clip.notes?.length ?? 0) === 0 ? "先用「转 MIDI」得到音符" : `${clip.notes?.length} 个音符 · 钢琴卷帘`}
+                    {(clip.notes?.length ?? 0) === 0
+                      ? trackTypeOf(track) === "drums"
+                        ? "空鼓轨 · 直接在鼓件上点音符"
+                        : "先用「转 MIDI」得到音符"
+                      : `${clip.notes?.length} 个音符 · 钢琴卷帘`}
                   </span>
                 </button>
                 <button
@@ -1371,6 +1609,7 @@ function Clip({
   onMenu,
   onBeginEdit,
   onOpenNotes,
+  onAudioHint,
   onDuplicate,
   splitting,
   rendering,
@@ -1388,6 +1627,8 @@ function Clip({
   onBeginEdit: () => void;
   /** Double-clicking a notated clip opens it in the piano roll. */
   onOpenNotes?: () => void;
+  /** ...and double-clicking an audio clip says why it does not. */
+  onAudioHint?: () => void;
   /** Alt-drag copies: the caller leaves this clip alone and starts dragging a duplicate. */
   onDuplicate?: () => void;
   /** A separation is running for this clip right now. */
@@ -1477,7 +1718,15 @@ function Clip({
         onMenu(event.clientX, event.clientY);
       }}
       onDoubleClick={(event) => {
-        if ((clip.notes?.length ?? 0) === 0 || onOpenNotes === undefined) return;
+        if (onAudioHint !== undefined) {
+          event.stopPropagation();
+          onAudioHint();
+          return;
+        }
+        /* `onOpenNotes` is only passed when there is something to edit (notes, or a drum kit that
+           can be written from scratch) — re-checking for notes here closed the roll on an empty
+           drum clip, which is exactly the case where you want to draw a beat by hand. */
+        if (onOpenNotes === undefined) return;
         event.stopPropagation();
         onOpenNotes();
       }}

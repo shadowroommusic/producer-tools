@@ -983,6 +983,35 @@
   font-size: 10px;
 }
 
+/* One sentence about something that just happened (an audio track has no notes to edit, the track
+   limit came back). It sits where the solo hint sits and fades on its own. */
+.sr-studio-flash {
+  margin: 0;
+  padding: 4px 16px 6px;
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+}
+
+/* A separation may push a project past the manual track limit. This bar is the only place that
+   says so — and the only thing that disappears when the extra tracks are deleted. */
+.sr-studio-overflow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 6px 8px 6px 10px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-left: 3px solid var(--sr-warn, var(--sr-accent));
+  border-radius: var(--sr-radius-sm, 6px);
+  background: var(--sr-surface-2);
+}
+
+.sr-studio-overflow-text {
+  flex: 1;
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+}
+
 .sr-studio-body {
   position: relative;
   display: flex;
@@ -1043,6 +1072,49 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* A 4px bar of the track's colour: the only染色 on the header, so nothing shouts. */
+.sr-track-colour {
+  display: block;
+  flex: none;
+  width: 4px;
+  align-self: stretch;
+  margin: 2px 6px 2px 0;
+  border-radius: 2px;
+  background: var(--sr-track-color, var(--sr-border-strong));
+}
+
+.sr-track-head {
+  position: relative;
+}
+
+.sr-track-head[data-dragging] {
+  opacity: 0.7;
+}
+
+/* The row being dragged is dimmed; the others settle into their new places once it lands, so the
+   move reads as a move rather than as a flicker. */
+.sr-track-head,
+.sr-studio-lane {
+  transition: transform var(--sr-dur-fast, 120ms) var(--sr-ease, ease);
+}
+
+.sr-track-name {
+  cursor: grab;
+}
+
+.sr-track-name:active {
+  cursor: grabbing;
+}
+
+.sr-track-remove[data-armed] {
+  width: auto;
+  padding: 0 6px;
+  border-radius: var(--sr-radius-pill);
+  background: color-mix(in srgb, var(--sr-danger) 20%, transparent);
+  color: var(--sr-danger);
+  font-size: 10px;
 }
 
 .sr-track-toggle {
@@ -1222,7 +1294,13 @@
   justify-content: space-between;
   height: 60px;
   padding: 8px 10px;
+  /**
+   * The clip wears its track's colour on the left edge and nowhere else. The order matters: the
+   * `border` shorthand resets every side, so the 3px colour edge has to be declared *after* it
+   * (declared before, it was silently wiped out and every clip looked the same grey).
+   */
   border: 0.5px solid var(--sr-border-strong);
+  border-left: 3px solid var(--sr-track-color, var(--sr-border-strong));
   border-radius: var(--sr-radius-sm);
   background: var(--sr-surface-2);
   color: var(--sr-label-primary);
@@ -1232,12 +1310,15 @@
 }
 
 .sr-clip:hover {
-  border-color: var(--sr-border-strong);
   background: var(--sr-hover-solid);
 }
 
 .sr-clip[data-selected] {
-  border-color: var(--sr-accent);
+  /* Selection brightens three sides and keeps the colour edge on the left, so the clip still says
+     which track it belongs to while you are working on it. */
+  border-top-color: var(--sr-accent);
+  border-right-color: var(--sr-accent);
+  border-bottom-color: var(--sr-accent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sr-accent) 45%, transparent);
 }
 
@@ -1353,6 +1434,34 @@
   background: var(--sr-bg-base);
 }
 
+/* On a drum track the rows are Kick / Snare / Hi-hat rather than C1 / D1: same editor, and the row
+   is only named when the pitch really is one of the kit's five voices. */
+.sr-roll-key[data-voice] {
+  justify-content: flex-start;
+  color: var(--sr-label-primary);
+  font-weight: 500;
+}
+
+/* 底鼓 (Kick) is wider than "C1", so the keyboard column opens up on a drum track. */
+.sr-roll-body[data-kit] .sr-roll-keys {
+  width: 96px;
+  flex: none;
+}
+
+.sr-roll-key[data-voice] .sr-roll-key-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-roll-tag {
+  padding: 1px 6px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover);
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
 .sr-roll-surface {
   position: relative;
   flex: none;
@@ -1439,7 +1548,8 @@
 }
 
 /* Specificity beats the shared `.sr-menu` rule in conversation.css, which is imported later. */
-.sr-studio .sr-clip-menu {
+.sr-studio .sr-clip-menu,
+.sr-studio .sr-track-menu {
   position: fixed;
   z-index: 41;
   width: 240px;
