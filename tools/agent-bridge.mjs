@@ -138,6 +138,240 @@ function wavDurationMs(buffer) {
 }
 
 
+
+/**
+ * 供应商的「媒体协议」适配层 —— 从用户自己的 Shadow 搬过来的请求形状
+ * （`~/Desktop/shadow/shadow/src/adapters/tool/media-gen-speech-clients.ts`）。
+ *
+ * 为什么需要它：每家语音/音乐 API 的路径、请求体、返回编码都不一样。MiniMax 是
+ * `POST {base}/v1/t2a_v2`（TTS）与 `POST {base}/v1/music_generation`（音乐），返回 **hex** 音频；
+ * OpenAI 是 `/audio/speech` 返回裸字节。之前只实现了后者，所以 MiniMax 一律 404 —— 通话没声音的根因。
+ */
+const MCP_BRIDGE_URL = process.env.SHADOWROOM_MCP_URL ?? "http://127.0.0.1:8787";
+/** 适配器内部执行过的媒体工具调用（Studio 轮询它来落地轨道）。 */
+const MEDIA_EVENTS = [];
+
+const MEDIA_PROTOCOLS = {
+  "minimax-t2a": {
+    kind: "tts",
+    path: "/v1/t2a_v2",
+    build: (input) => ({
+      model: input.model,
+      text: input.text,
+      output_format: "hex",
+      voice_setting: { voice_id: input.voice || "male-qn-qingse", speed: 1, vol: 1, pitch: 0 },
+      audio_setting: { format: input.format || "mp3", sample_rate: (input.format || "mp3") === "mp3" ? 32_000 : 44_100, bitrate: 128_000, channel: 1 },
+    }),
+    pick: (payload) => {
+      const audio = payload?.data?.audio;
+      if (typeof audio !== "string" || audio === "") {
+        const detail = payload?.base_resp?.status_msg ?? "返回里没有音频";
+        throw new Error(detail);
+      }
+      return Buffer.from(audio, "hex");
+    },
+  },
+  "minimax-music": {
+    kind: "music",
+    path: "/v1/music_generation",
+    build: (input) => ({
+      model: input.model,
+      ...(input.prompt ? { prompt: input.prompt } : {}),
+      ...(input.lyrics ? { lyrics: input.lyrics } : {}),
+      output_format: "hex",
+      audio_setting: { format: input.format || "mp3", sample_rate: 44_100, bitrate: 256_000 },
+      lyrics_optimizer: input.lyrics ? false : true,
+      ...(input.instrumental === undefined ? {} : { is_instrumental: input.instrumental }),
+    }),
+    pick: (payload) => {
+      const audio = payload?.data?.audio;
+      if (typeof audio !== "string" || audio === "") {
+        const detail = payload?.base_resp?.status_msg ?? "返回里没有音频";
+        throw new Error(detail);
+      }
+      return Buffer.from(audio, "hex");
+    },
+  },
+  "openai-audio-speech": {
+    kind: "tts",
+    path: "/audio/speech",
+    build: (input) => ({
+      model: input.model,
+      input: input.text,
+      voice: input.voice || "alloy",
+      response_format: input.format || "mp3",
+    }),
+    pick: null, // 裸字节，不解析
+  },
+  "elevenlabs-tts": {
+    kind: "tts",
+    path: "/text-to-speech/{voice}",
+    build: (input) => ({ text: input.text, model_id: input.model }),
+    pick: null,
+  },
+};
+
+
+/** 一轮 chat 请求：把文本与工具调用都收齐（文本仍然按流式解析）。 */
+async function runChatRound({ base, headers, model, messages, tools, temperature }) {
+  const response = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: true,
+      ...(tools === undefined || tools.length === 0 ? {} : { tools }),
+      ...(temperature === undefined ? {} : { temperature }),
+    }),
+  });
+  if (!response.ok) throw new Error(await providerFailure(response));
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  const toolCalls = new Map();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "" || payload === "[DONE]") continue;
+      let chunk;
+      try {
+        chunk = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      const delta = chunk?.choices?.[0]?.delta ?? {};
+      if (typeof delta.content === "string") text += delta.content;
+      for (const call of delta.tool_calls ?? []) {
+        const index = call.index ?? 0;
+        const current = toolCalls.get(index) ?? { id: call.id ?? `call-${index}`, name: "", arguments: "" };
+        if (typeof call.id === "string" && call.id !== "") current.id = call.id;
+        if (typeof call.function?.name === "string" && call.function.name !== "") current.name = call.function.name;
+        if (typeof call.function?.arguments === "string") current.arguments += call.function.arguments;
+        toolCalls.set(index, current);
+      }
+    }
+  }
+  return { text, toolCalls: [...toolCalls.values()].filter((call) => call.name !== "") };
+}
+
+/**
+ * 插件在 mcp-bridge 里的短 id（`generator`）与 Codex 配置里的仓库名（`shadow-music-generator`）不是一回事，
+ * `/api/call` 只认前者——第一版直接拿仓库名去调，桥返回 404「unknown server」。
+ */
+let serverIdCache = null;
+async function pluginServerId(name) {
+  try {
+    if (serverIdCache === null) {
+      const listed = await fetch(`${MCP_BRIDGE_URL}/api/servers`).then((response) => response.json());
+      serverIdCache = new Map((listed?.servers ?? []).map((server) => [String(server.repo ?? server.id), String(server.id)]));
+    }
+    return serverIdCache.get(String(name)) ?? String(name);
+  } catch {
+    return String(name);
+  }
+}
+
+/** 通过 mcp-bridge 执行一个插件工具。 */
+async function callPluginTool(target, rawArguments) {
+  if (target === undefined) return { ok: false, text: `未知工具` };
+  let args = {};
+  try {
+    args = JSON.parse(rawArguments === "" ? "{}" : rawArguments);
+  } catch {
+    return { ok: false, text: `${target.tool} 的参数不是合法 JSON` };
+  }
+  try {
+    const response = await fetch(`${MCP_BRIDGE_URL}/api/call`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ server: await pluginServerId(target.server), tool: target.tool, arguments: args }),
+    });
+    const payload = await response.json();
+    /**
+     * 只有拿到 `result` 才算成功：第一版把「桥返回了错误对象」也当成 ok，模型于是看到一段
+     * 错误 JSON 却以为工具跑过了。
+     */
+    const ok = response.ok && typeof payload?.result === "string" && payload.isError !== true;
+    const text = typeof payload?.result === "string" ? payload.result : `调用失败（HTTP ${response.status}）：${JSON.stringify(payload).slice(0, 500)}`;
+    console.log(`[adapter] ${target.server}.${target.tool} ${ok ? "ok" : "failed"} (${payload?.ms ?? "?"}ms)`);
+    return { ok, text };
+  } catch (cause) {
+    return { ok: false, text: `调用 ${target.server}.${target.tool} 失败：${cause instanceof Error ? cause.message : String(cause)}` };
+  }
+}
+
+/**
+ * 插件里跑出来的媒体（音乐、分轨…）记一条事件，供 Studio 吸收成轨道。
+ *
+ * 这些调用发生在适配器内部，Codex 看不到，所以「生成的东西出现在时间线上」得靠这条通道。
+ */
+function noteMediaEvent(entry) {
+  if (!/render_song|render_part|separate_stems|generate_music/.test(entry.name ?? "")) return;
+  MEDIA_EVENTS.push({ id: MEDIA_EVENTS.length + 1, at: Date.now(), ...entry });
+  if (MEDIA_EVENTS.length > 50) MEDIA_EVENTS.shift();
+}
+
+/** 这条能力用哪个适配器（没有就按「裸字节」处理，兼容最简单的自建服务）。 */
+function mediaAdapter(protocol) {
+  return MEDIA_PROTOCOLS[String(protocol ?? "")] ?? null;
+}
+
+/** 调用一家供应商的媒体接口，返回音频字节与内容类型。 */
+async function callMedia(provider, protocol, input) {
+  const adapter = mediaAdapter(protocol);
+  const path = (adapter?.path ?? "/audio/speech").replace("{voice}", encodeURIComponent(input.voice || "default"));
+  const body = adapter?.build(input) ?? { model: input.model, input: input.text, voice: input.voice, response_format: input.format };
+  const { response, credential } = await callProvider({ ...provider, protocol: provider.authProtocol ?? "openai" }, path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await providerFailure(response));
+  const contentType = response.headers.get("content-type") ?? "";
+  let audio;
+  if (adapter?.pick) {
+    const payload = await response.json().catch(() => ({}));
+    audio = adapter.pick(payload);
+  } else if (contentType.includes("application/json")) {
+    const payload = await response.json();
+    const base64 = payload?.data?.audio ?? payload?.audio ?? (typeof payload?.data === "string" ? payload.data : undefined);
+    if (typeof base64 !== "string" || base64 === "") throw new Error("返回里没有音频");
+    audio = Buffer.from(base64, "base64");
+  } else {
+    audio = Buffer.from(await response.arrayBuffer());
+  }
+  if (audio.length < 512) throw new Error(`音频太短（${audio.length} 字节），可能不是音频`);
+  return { audio, contentType: contentType.includes("json") ? "audio/mpeg" : contentType, credential };
+}
+
+/** 把一段音频写到 recordings/，并把真实时长量出来（WAV 读 header，其它交给 ffmpeg 探测）。 */
+function saveMedia(audio, name, format) {
+  mkdirSync(RECORDINGS_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const base = safeFileName(name) || `media-${stamp}`;
+  const target = uniqueName(RECORDINGS_DIR, `${base}.${format}`);
+  const targetPath = join(RECORDINGS_DIR, target);
+  writeFileSync(targetPath, audio);
+  let durationMs = wavDurationMs(audio);
+  if (durationMs === 0) {
+    const ffmpeg = findFfmpeg();
+    if (ffmpeg !== null) {
+      const probed = spawnSync(ffmpeg, ["-v", "error", "-i", targetPath, "-f", "null", "-"], { encoding: "utf8", timeout: 60_000 });
+      const match = /time=(\d+):(\d+):(\d+\.\d+)/.exec(probed.stderr ?? "");
+      if (match !== null) durationMs = Math.round((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000);
+    }
+  }
+  return { path: targetPath, name: target, duration_ms: durationMs, bytes: audio.length };
+}
+
 /**
  * A local Responses→Chat adapter.
  *
@@ -172,7 +406,19 @@ async function startChatAdapter(provider, credential) {
        * "stream disconnected" and retried five times, which is why the adapter looked unreachable.
        */
       const body = await readJsonBody(request, 8 * 1024 * 1024);
-      console.log(`[adapter] ← ${body.model} · input=${Array.isArray(body.input) ? body.input.length : 0} · tools=${body.tools?.length ?? 0} · stream=${body.stream}`);
+      for (const item of Array.isArray(body.input) ? body.input : []) {
+        if (item?.type === "function_call_output") {
+          console.log(`[adapter] tool result ← ${String(item.output ?? "").slice(0, 300)}`);
+        }
+        if (item?.type === "function_call") {
+          console.log(`[adapter] tool call → ${item.name} ${String(item.arguments ?? "").slice(0, 200)}`);
+        }
+      }
+      const toolNames = (body.tools ?? []).map((tool) => tool.name).filter(Boolean);
+      console.log(`[adapter] ← ${body.model} · input=${Array.isArray(body.input) ? body.input.length : 0} · tools=${toolNames.length} · stream=${body.stream}`);
+      console.log(`[adapter] tools: ${toolNames.join(", ").slice(0, 400)}`);
+      const sample = (body.tools ?? []).find((tool) => String(tool.name ?? "").startsWith("mcp__"));
+      if (sample !== undefined) console.log(`[adapter] raw mcp tool: ${JSON.stringify(sample).slice(0, 1200)}`);
       /** Responses `input` items → chat messages. */
       const input = Array.isArray(body.input) ? body.input : [];
       const messages = [];
@@ -190,89 +436,128 @@ async function startChatAdapter(provider, credential) {
         }
         messages.push({ role: item?.role === "assistant" ? "assistant" : "user", content: text });
       }
-      const tools = Array.isArray(body.tools)
-        ? body.tools
-            .filter((tool) => tool?.type === "function")
-            .map((tool) => ({
+      /**
+       * MCP 工具是**命名空间**（`type: "namespace"` + 嵌套 `tools`），普通工具是 `type: "function"`。
+       *
+       * 第一版只透传 function，于是所有插件工具在发给模型前就被丢掉了 —— 模型看不到 `detect_tempo`、
+       * `render_song`，只能以为「MCP 没起来」。Codex 的 `ToolName` 是 namespace 与 name **拼起来**的
+       * （`protocol/src/tool_name.rs` 的 `Display`），所以这里把命名空间展开成具体工具，
+       * 名字写成 `mcp__服务器__工具`。
+       */
+      const flattened = [];
+      /** 拼名 → Codex 期望的 (namespace, name)：回传调用时必须拆回去（见下面的 function_call）。 */
+      const nameMap = new Map();
+      for (const tool of Array.isArray(body.tools) ? body.tools : []) {
+        if (tool?.type === "function") {
+          flattened.push({
+            type: "function",
+            function: { name: tool.name, description: tool.description ?? "", parameters: tool.parameters ?? { type: "object", properties: {} } },
+          });
+          continue;
+        }
+        if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
+          for (const sub of tool.tools) {
+            if (sub?.type !== "function") continue;
+            const flat = `${tool.name}__${sub.name}`;
+            /**
+             * 这个 Codex 对「命名空间工具」的 router 不认来自 chat 模型的任何调用形状（拼名、拆成
+             * namespace+name、裸名都试过，一律 `unsupported call`）。所以对 chat-only 供应商，
+             * 适配器**自己执行**这些插件工具：通过 mcp-bridge 的 `/api/call`，把结果作为 tool 消息
+             * 喂回模型，Codex 那边只看到一个普通回答。
+             */
+            const serverName = String(tool.name).replace(/^mcp__/, "");
+            nameMap.set(flat, { server: serverName, tool: sub.name });
+            flattened.push({
               type: "function",
-              function: { name: tool.name, description: tool.description ?? "", parameters: tool.parameters ?? { type: "object", properties: {} } },
-            }))
-        : undefined;
-      const chat = await fetch(`${base}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: body.model,
-          messages,
-          stream: true,
-          ...(tools === undefined || tools.length === 0 ? {} : { tools }),
-          ...(body.temperature === undefined ? {} : { temperature: body.temperature }),
-        }),
-      });
-      if (!chat.ok) {
-        const detail = await chat.text();
-        console.log(`[adapter] provider said ${chat.status}: ${detail.slice(0, 200)}`);
-        send(chat.status, detail);
-        return;
+              function: {
+                name: flat,
+                description: sub.description ?? tool.description ?? "",
+                parameters: sub.parameters ?? { type: "object", properties: {} },
+              },
+            });
+          }
+        }
       }
-      console.log(`[adapter] provider ${chat.status} · streaming`);
+      const tools = flattened;
+      /**
+       * 工具循环：模型要工具 → 我们执行 → 结果喂回去 → 直到它给出最终回答。
+       *
+       * 对 chat-only 供应商（MiniMax、DeepSeek…）这是唯一能真正用上插件的方式；上限 8 轮避免打转。
+       */
+      const executed = [];
+      let messagesForRound = messages;
+      let finalText = "";
+      let round = 0;
+      for (; round < 8; round += 1) {
+        const outcome = await runChatRound({
+          base,
+          headers,
+          model: body.model,
+          messages: messagesForRound,
+          tools,
+          temperature: body.temperature,
+        });
+        if (outcome.toolCalls.length === 0) {
+          finalText = outcome.text;
+          break;
+        }
+        for (const call of outcome.toolCalls) {
+          const target = nameMap.get(call.name);
+          const result = await callPluginTool(target, call.arguments);
+          executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, preview: result.text.slice(0, 200) });
+          messagesForRound = [
+            ...messagesForRound,
+            { role: "assistant", content: null, tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] },
+            { role: "tool", tool_call_id: call.id, content: result.text },
+          ];
+        }
+      }
+      if (finalText === "" && executed.length > 0) finalText = "（工具执行完了，但模型没有给出总结。）";
+      for (const entry of executed) noteMediaEvent(entry);
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
       const emit = (type, payload) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
       const id = `resp-${Date.now().toString(36)}`;
       emit("response.created", { response: { id, model: body.model ?? "", status: "in_progress", output: [] } });
       let opened = false;
-      let text = "";
+      let text = finalText;
       const calls = new Map();
-      const reader = chat.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "" || payload === "[DONE]") continue;
-          let chunk;
-          try {
-            chunk = JSON.parse(payload);
-          } catch {
-            continue;
-          }
-          const delta = chunk?.choices?.[0]?.delta ?? {};
-          if (typeof delta.content === "string" && delta.content !== "") {
-            if (!opened) {
-              opened = true;
-              emit("response.output_item.added", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "in_progress", content: [] } });
-            }
-            text += delta.content;
-            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: delta.content });
-          }
-          for (const call of delta.tool_calls ?? []) {
-            const index = call.index ?? 0;
-            if (!calls.has(index)) {
-              calls.set(index, { id: call.id ?? `call-${index}`, name: call.function?.name ?? "", arguments: "" });
-              emit("response.output_item.added", { output_index: index + (opened ? 1 : 0), item: { id: call.id ?? `call-${index}`, type: "function_call", call_id: call.id ?? `call-${index}`, name: call.function?.name ?? "", arguments: "" } });
-            }
-            const state = calls.get(index);
-            if (typeof call.function?.arguments === "string") {
-              state.arguments += call.function.arguments;
-              emit("response.function_call_arguments.delta", { item_id: state.id, output_index: index + (opened ? 1 : 0), delta: call.function.arguments });
-            }
-          }
-        }
+      if (text !== "") {
+        opened = true;
+        emit("response.output_item.added", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "in_progress", content: [] } });
+        emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: text });
       }
+      console.log(`[adapter] → done · rounds=${round + 1} · tools=${executed.length} · text=${JSON.stringify(text.slice(0, 40))}`);
+
+      /**
+       * The completed payload must carry the turn's `output` items — including the function calls.
+       *
+       * Without them Codex had nothing to execute: the model asked for a tool, never got a result, and
+       * asked again (measured: six rounds of MiniMax-M3 curling the bridge by hand instead of calling
+       * `detect_tempo`).
+       */
+      const output = [];
       if (opened) {
+        const message = { id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
         emit("response.output_text.done", { item_id: "msg-1", output_index: 0, content_index: 0, text });
-        emit("response.output_item.done", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] } });
+        emit("response.output_item.done", { output_index: 0, item: message });
+        output.push(message);
       }
       for (const [index, call] of calls) {
-        emit("response.output_item.done", { output_index: index + (opened ? 1 : 0), item: { id: call.id, type: "function_call", call_id: call.id, name: call.name, arguments: call.arguments } });
+        const item = {
+          id: call.id,
+          type: "function_call",
+          call_id: call.id,
+          name: call.name,
+          ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
+          arguments: call.arguments,
+          status: "completed",
+        };
+        emit("response.output_item.done", { output_index: index + (opened ? 1 : 0), item });
+        output.push(item);
       }
-      emit("response.completed", { response: { id, model: body.model ?? "", status: "completed", output: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } });
+      emit("response.completed", {
+        response: { id, model: body.model ?? "", status: "completed", output, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
+      });
       console.log(`[adapter] → done · text=${JSON.stringify(text.slice(0, 40))} · calls=${calls.size}`);
       response.end();
     } catch (error) {
@@ -422,6 +707,7 @@ const DEVELOPER_INSTRUCTIONS = [
   "用户要把一首歌/一段成品拆开时（\"把这首歌分轨 / 拆出人声 / 只要鼓\"）：调用 stem-splitter 的 separate_stems（path 用那条音频路径），它立刻返回 job_id，然后每隔几秒用 stem_job_status 看一次（stage 会从 decode 走到 separate 再到 collect），拿到 status=ok 再回复。四条分轨（人声/鼓/贝斯/其它）会自动落到 Studio 的新轨道上，你不用自己写文件；一次分离在 CPU 上要几分钟，先告诉用户开始了。",
   "需要知道这台机器能不能分轨，用 stem_backends：它说没有后端时，把启用方法原样告诉用户（装 demucs 到 _venvs/stem-splitter，或设 STEM_SPLIT_COMMAND）。",
   "导出同样可以让我做：mix_arrangement 导出整首（out_path/.bpm/.bars/sample_rate/bit_depth/container + tracks），export_stems 导出分轨（out_dir + name），export_midi 导出 MIDI（out_path；音符来自 clip.notes，或指向 .mid 的 clip）。它们的 tracks 结构一致：{name, gain, clips:[{path, start(小节), bars, gain, notes?}]}。",
+  "做音乐/音频一律用 MCP 工具（render_song、render_part、transform_notes、separate_stems、detect_tempo 等）。**不要**为了绕过工具去 shell 里手动跑 Python 脚本：那既慢又要用户反复批准。如果工具调用失败并提示连不上 bridge，就直说一句「MCP bridge 没起来，请在终端跑 pnpm serve」，然后停下等用户——不要自己想办法绕过。",
   "用户要这首歌的 MIDI 时，最省事的是渲染时就带上 midi_path（render_song 的另一个参数，例如 ~/Documents/ShadowRoom/recordings/<歌名>.mid）：它写出的不是从音频里猜出来的音符，而是刚才实际演奏的那份编曲（鼓在 MIDI 的鼓通道上），Studio 里会多出一条 MIDI 轨，导出对话框的 MIDI 也读它。",
   "一个可用的例子：{\"out_path\":\"~/Documents/ShadowRoom/recordings/night-drive.wav\",\"bpm\":124,\"bars\":8,\"parts\":[{\"part\":\"drums\",\"pattern\":{\"kick\":\"x...x...x...x...\",\"clap\":\"....x.......x...\",\"hat\":\"..x...x...x...x.\"}},{\"part\":\"bass\",\"wave\":\"saw\",\"cutoff\":0.32,\"notes\":[{\"midi\":33,\"start\":0,\"length\":0.75},{\"midi\":33,\"start\":1.5,\"length\":0.5},{\"midi\":36,\"start\":3,\"length\":1}]}]}",
   "带结构的例子（32 小节 tech house）：{\"out_path\":\"~/Documents/ShadowRoom/recordings/drive.wav\",\"bpm\":126,\"sections\":[{\"name\":\"intro\",\"bars\":8},{\"name\":\"drop\",\"bars\":16},{\"name\":\"outro\",\"bars\":8}],\"parts\":[{\"part\":\"drums\",\"swing\":0.14,\"humanize_ms\":16,\"segments\":[{\"bars\":8,\"pattern\":{\"hat\":\"..x...x...x...x.\"}},{\"bars\":16,\"pattern\":{\"kick\":\"x...x...x...x...\",\"clap\":\"....x.......x...\",\"hat\":\"..x...x...x...x.\"}},{\"bars\":8,\"pattern\":{\"kick\":\"x...x...x...x...\",\"hat\":\"..x...x...x...x.\"}}]},{\"part\":\"bass\",\"wave\":\"saw\",\"cutoff\":0.32,\"pan\":0,\"repeat\":true,\"segments\":[{\"bars\":8,\"gain\":0},{\"bars\":16,\"notes\":[{\"midi\":33,\"start\":0,\"length\":0.75},{\"midi\":33,\"start\":1.5,\"length\":0.5},{\"midi\":36,\"start\":3,\"length\":0.75}]},{\"bars\":8,\"gain\":0}]},{\"part\":\"chords\",\"wave\":\"triangle\",\"pan\":-0.3,\"reverb\":0.18,\"repeat\":true,\"segments\":[{\"bars\":8,\"gain\":0.4,\"notes\":[{\"midi\":57,\"start\":0,\"length\":4},{\"midi\":60,\"start\":0,\"length\":4},{\"midi\":64,\"start\":0,\"length\":4}]},{\"bars\":16,\"notes\":[{\"midi\":57,\"start\":0,\"length\":4},{\"midi\":60,\"start\":0,\"length\":4},{\"midi\":64,\"start\":0,\"length\":4}]},{\"bars\":8,\"gain\":0.4,\"notes\":[{\"midi\":57,\"start\":0,\"length\":4},{\"midi\":60,\"start\":0,\"length\":4},{\"midi\":64,\"start\":0,\"length\":4}]}]}]}",
@@ -508,6 +794,33 @@ class Agent {
        */
       const adapter = await startChatAdapter(provider, credential);
       this.adapter = adapter;
+      /**
+       * 关键：这份配置必须带上 MCP 插件。
+       *
+       * 第一版只写了模型与 provider，切过去之后 agent **一个工具都没有**（它只能去 shell 里自己折腾，
+       * 用户实测那次「生成音乐」花 153 秒、几十次要审批，就是这么来的）。所以这里按和默认配置同样的
+       * 方式把插件写进 `[mcp_servers.*]`。
+       */
+      /**
+       * 每个插件只写一次表头：TOML 里 `[table]` 重复出现是语法错误（第一版按每个环境变量写一次，
+       * 264 个重复表头直接把内核启动打挂）。环境变量也不整份倒进来——进程本来就继承我们的 env，
+       * 这里只补插件真正需要的那一个：PATH（让插件能找到工作区的 ffmpeg）。
+       */
+      const pluginLines = [];
+      for (const [name, server] of Object.entries(mcpServers())) {
+        pluginLines.push(`[mcp_servers.${JSON.stringify(name)}]`);
+        if (typeof server.command === "string") pluginLines.push(`command = ${JSON.stringify(server.command)}`);
+        if (Array.isArray(server.args)) pluginLines.push(`args = ${JSON.stringify(server.args)}`);
+        // 插件的 `mcp_server.py` 是**相对路径**：没有 cwd 就找不到文件，插件起不来（第一版漏了它，
+        // 结果切到自定义模型后工具全没了，模型只能以为「bridge 没起来」）。
+        if (typeof server.cwd === "string") pluginLines.push(`cwd = ${JSON.stringify(server.cwd)}`);
+        if (typeof server.default_tools_approval_mode === "string") {
+          pluginLines.push(`default_tools_approval_mode = ${JSON.stringify(server.default_tools_approval_mode)}`);
+        }
+        pluginLines.push(`[mcp_servers.${JSON.stringify(name)}.env]`);
+        pluginLines.push(`PATH = ${JSON.stringify(server.env?.PATH ?? process.env.PATH ?? "")}`);
+        pluginLines.push("");
+      }
       const lines = [
         `model = ${JSON.stringify(provider.model ?? "")}`,
         `model_provider = ${JSON.stringify(id)}`,
@@ -520,6 +833,7 @@ class Agent {
         `wire_api = "responses"`,
         `env_key = ${JSON.stringify(envKey)}`,
         "",
+        ...pluginLines,
       ];
       writeFileSync(join(home, "config.toml"), lines.join("\n"), { mode: 0o600 });
       this.codexHome = home;
@@ -554,14 +868,23 @@ class Agent {
     this.stderr = [];
 
     child.on("exit", () => {
+      /**
+       * Only the *current* child's exit matters. A deliberate restart kills the old core; without this
+       * guard its (late) exit event cleared the new core's state and rejected its `initialize`, which is
+       * why every provider switch reported "agent core exited" while a turn still ran.
+       */
+      if (this.child !== child) return;
       this.child = null;
       for (const pending of this.pending.values()) pending.reject(new Error("agent core exited"));
       this.pending.clear();
     });
     child.stderr.setEncoding("utf-8");
     child.stderr.on("data", (chunk) => {
-      this.stderr.push(String(chunk));
+      const text = String(chunk);
+      this.stderr.push(text);
       if (this.stderr.length > 40) this.stderr.shift();
+      // 插件/MCP 的启动失败只在核心的 stderr 里，必须能看见（否则只会表现成「工具不存在」）。
+      if (/mcp|plugin|error|failed/i.test(text)) console.log(`[core] ${text.trim().slice(0, 300)}`);
     });
 
     const lines = createInterface({ input: child.stdout });
@@ -1084,44 +1407,57 @@ const http = createServer(async (request, response) => {
         json(response, 400, { error: "缺少文本、端点或模型" });
         return;
       }
-      const path = typeof body.endpointPath === "string" && body.endpointPath !== "" ? body.endpointPath : "/audio/speech";
-      const voice = typeof body.voice === "string" && body.voice !== "" ? body.voice : "alloy";
-      const format = typeof body.format === "string" && body.format !== "" ? body.format : "mp3";
       try {
-        const { response: answer } = await callProvider(provider, path, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(
-            provider.protocol === "elevenlabs"
-              ? { text, model_id: model, ...(body.options ?? {}) }
-              : { model, input: text, voice, response_format: format, ...(body.options ?? {}) },
-          ),
-        });
-        if (!answer.ok) {
-          json(response, 200, { error: await providerFailure(answer) });
-          return;
-        }
-        const bytes = Buffer.from(await answer.arrayBuffer());
-        /**
-         * Some endpoints answer JSON with base64 audio instead of raw bytes (MiniMax does); unwrap it
-         * here so the caller always gets audio, whatever the provider's shape.
-         */
-        let audio = bytes;
-        const contentType = answer.headers.get("content-type") ?? "";
-        if (contentType.includes("application/json")) {
-          const payload = JSON.parse(bytes.toString("utf8"));
-          const base64 =
-            payload?.data?.audio ?? payload?.audio ?? payload?.data?.audio_file ?? payload?.audio_file ?? (typeof payload?.data === "string" ? payload.data : undefined);
-          if (typeof base64 !== "string" || base64 === "") {
-            json(response, 200, { error: `返回里没有音频：${JSON.stringify(payload).slice(0, 200)}` });
-            return;
-          }
-          audio = Buffer.from(base64, "base64");
-        }
+        const { audio, contentType } = await callMedia(
+          { baseUrl: provider.baseUrl, reference: provider.reference },
+          typeof body.protocolName === "string" ? body.protocolName : provider.protocol,
+          { model, text, voice: typeof body.voice === "string" ? body.voice : "", format: typeof body.format === "string" ? body.format : "mp3" },
+        );
         console.log(`[agent] tts ${model} → ${audio.length} bytes`);
-        json(response, 200, { audio: audio.toString("base64"), contentType: contentType.includes("json") ? "audio/mpeg" : contentType, bytes: audio.length });
+        json(response, 200, { audio: audio.toString("base64"), contentType, bytes: audio.length });
       } catch (cause) {
         json(response, 200, { error: `合成失败：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
+      return;
+    }
+
+    /**
+     * 音乐生成：把一段描述交给供应商的音乐模型，落盘后把路径交回调用方。
+     *
+     * MiniMax 的 `/v1/music_generation` 会跑几十秒（编曲 + 渲染），所以这是**同步长请求**：
+     * 调用方（agent 工具 / 前端）负责先告诉用户「在做」，这里只负责把音频拿回来。
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/providers/music") {
+      const body = await readJsonBody(request, 256 * 1024);
+      const prompt = String(body.prompt ?? "").trim();
+      const model = String(body.model ?? "").trim();
+      const provider = {
+        baseUrl: String(body.baseUrl ?? "").trim(),
+        reference: body.credentialRef ?? null,
+        authProtocol: body.authProtocol === "elevenlabs" ? "elevenlabs" : "openai",
+      };
+      if (provider.baseUrl === "" || model === "") {
+        json(response, 400, { error: "先选好供应商和音乐模型" });
+        return;
+      }
+      if (prompt === "" && String(body.lyrics ?? "").trim() === "") {
+        json(response, 400, { error: "给一句描述（prompt）或歌词（lyrics）" });
+        return;
+      }
+      const started = Date.now();
+      try {
+        const { audio, contentType } = await callMedia(provider, typeof body.protocolName === "string" ? body.protocolName : "custom", {
+          model,
+          prompt,
+          lyrics: typeof body.lyrics === "string" ? body.lyrics : "",
+          instrumental: body.instrumental === true,
+          format: typeof body.format === "string" ? body.format : "mp3",
+        });
+        const saved = saveMedia(audio, String(body.name ?? prompt.slice(0, 24)) || "music", typeof body.format === "string" ? body.format : "mp3");
+        console.log(`[agent] music ${model} → ${saved.name} (${(saved.duration_ms / 1000).toFixed(1)}s, ${saved.bytes} bytes, ${Date.now() - started} ms)`);
+        json(response, 200, { ...saved, model, ms: Date.now() - started, contentType });
+      } catch (cause) {
+        json(response, 200, { error: `音乐生成失败：${cause instanceof Error ? cause.message : String(cause)}` });
       }
       return;
     }

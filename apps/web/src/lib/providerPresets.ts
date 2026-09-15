@@ -116,6 +116,8 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
     baseUrl: "https://zenmux.ai/api/v1",
     models: [],
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+    needsVerification: true,
+    note: "国内 key（sk-cp-…）走 api.minimaxi.com：实测 OpenAI 兼容端点是 https://api.minimaxi.com/v1（857ms 回复），同一把 key 在 api.minimax.io 会报 invalid api key；shadow 预设里的 /anthropic 是 Anthropic 协议，我们的适配器不会说，所以这里改成了 /v1。国际版把 Base URL 与各能力端点换成 api.minimax.io。另外 MiniMax 的 music API 已对新用户关闭（HTTP 410 / 2153），音乐请用本地合成器。",
   },
   {
     id: "moonshot-cn",
@@ -145,12 +147,12 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
   {
     id: "minimax",
     label: "MiniMax",
-    baseUrl: "https://api.minimaxi.com/anthropic",
+    baseUrl: "https://api.minimaxi.com/v1",
     models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2"],
     capabilities: {
       image: { protocol: "minimax-image", baseUrl: "https://api.minimaxi.com", models: ["image-01", "image-01-live"] },
-      textToSpeech: { protocol: "minimax-t2a", baseUrl: "https://api.minimax.io", models: ["speech-2.8-hd", "speech-2.8-turbo"] },
-      music: { protocol: "minimax-music", baseUrl: "https://api.minimax.io", models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"] },
+      textToSpeech: { protocol: "minimax-t2a", baseUrl: "https://api.minimaxi.com", models: ["speech-2.8-hd", "speech-2.8-turbo"] },
+      music: { protocol: "minimax-music", baseUrl: "https://api.minimaxi.com", models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
   },
