@@ -21,6 +21,19 @@ export type StudioClip = {
   analysis?: StudioAnalysis;
   /** Where a separation job put this clip's stems — marks the clip as already split. */
   stemsDir?: string;
+  /**
+   * How this clip's audio was made: the part spec the synth rendered it from.
+   *
+   * Kept on the clip (not in the agent's memory) because "make the drums heavier" has to change *one*
+   * knob of the thing that already exists — without the plan, a re-render would be a new song.
+   */
+  render?: {
+    bpm: number;
+    bars: number;
+    part: Record<string, unknown>;
+    sections?: unknown[];
+    seed?: number;
+  };
 };
 
 /**

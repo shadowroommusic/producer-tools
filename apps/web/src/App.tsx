@@ -137,6 +137,7 @@ export function App() {
     clipName: string;
     notes: StudioNote[];
     revision: string;
+    render?: Record<string, unknown>;
   } | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking">("listening");
@@ -376,9 +377,16 @@ export function App() {
             `clip_id: ${noteContext.clipId}`,
             `clip_name: ${noteContext.clipName}`,
             `revision: ${noteContext.revision}`,
-            `notes: ${JSON.stringify(noteContext.notes.map(({ id, midi, start_ms, end_ms, velocity }) => ({ id, pitch: midi, start_ms, end_ms, velocity: velocity ?? 100 })))}`,
+            ...(noteContext.notes.length === 0
+              ? []
+              : [
+                  `notes: ${JSON.stringify(noteContext.notes.map(({ id, midi, start_ms, end_ms, velocity }) => ({ id, pitch: midi, start_ms, end_ms, velocity: velocity ?? 100 })))}`,
+                ]),
+            ...(noteContext.render === undefined
+              ? []
+              : [`render_spec: ${JSON.stringify(noteContext.render)}`]),
             "[/clip_context]",
-            "（用户在钢琴卷帘里打开了这个片段；改音符请用 shadow-music-generator 的 transform_notes，把上面的 notes 原样传进去。）",
+            "（这一段是用户在 Studio 里选中的片段。改音符用 transform_notes；想让这一轨的声音变一点（比如鼓更重、bass 更暗、换波形）就调 regenerate_part：把上面的 render_spec 原样放进 part（并带上 bpm/bars/sections）、用 patch 描述改动、out_path 用 ~/Documents/ShadowRoom/recordings/<名字>-v<时间戳>.wav、clip_id 回传上面的 clip_id。不要自己写整份 spec。）",
           ].join("\n");
 
     void sendTurn(
@@ -863,6 +871,77 @@ export function App() {
    * the rendered stem. No button, no second step — the song grows out of the same sentence.
    */
   /**
+   * Swap in a freshly rendered part.
+   * The clip keeps its place on the timeline (start, length) and gains a new source file plus the
+   * updated plan; one undo step, and the summary the renderer wrote is what the user reads.
+   */
+  const applyRegeneratedPart = useCallback(
+    (call: ToolCall) => {
+      const notice = (title: string, text: string) =>
+        withActiveSession((current) => ({
+          ...current,
+          messages: [...current.messages, { id: `rp-${Date.now()}`, role: "notice", title, text, at: Date.now() }],
+        }));
+      try {
+        const wrapper = JSON.parse(call.detail ?? "{}") as { result?: { content?: Array<{ text?: string }> } };
+        const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
+          clip_id?: string;
+          path?: string;
+          spec?: Record<string, unknown>;
+          bpm?: number;
+          bars?: number;
+          diff_summary?: string;
+        };
+        if (parsed.clip_id === undefined || parsed.path === undefined) {
+          throw new Error("结果里没有片段或文件");
+        }
+        let applied = false;
+        updateProjectRef.current((project) => {
+          const track = project.tracks.find((entry) => entry.clips.some((clip) => clip.id === parsed.clip_id));
+          if (track === undefined) return project;
+          applied = true;
+          return {
+            ...project,
+            tracks: project.tracks.map((entry) =>
+              entry.id === track.id
+                ? {
+                    ...entry,
+                    clips: entry.clips.map((clip) =>
+                      clip.id === parsed.clip_id
+                        ? {
+                            ...clip,
+                            source: parsed.path as string,
+                            ...(parsed.spec === undefined
+                              ? {}
+                              : {
+                                  render: {
+                                    bpm: parsed.bpm ?? clip.render?.bpm ?? project.bpm,
+                                    bars: parsed.bars ?? clip.render?.bars ?? clip.length,
+                                    part: parsed.spec,
+                                    ...(clip.render?.sections === undefined ? {} : { sections: clip.render.sections }),
+                                    ...(clip.render?.seed === undefined ? {} : { seed: clip.render.seed }),
+                                  },
+                                }),
+                          }
+                        : clip,
+                    ),
+                  }
+                : entry,
+            ),
+          };
+        });
+        if (applied) {
+          notice("这一轨重渲染好了", `${parsed.diff_summary ?? "已更新"}（⌘Z 可撤销，旧文件还在）`);
+        }
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        notice("重渲染没成功", message);
+      }
+    },
+    [withActiveSession],
+  );
+
+  /**
    * Apply a `transform_notes` result to the clip it names.
    *
    * The agent's edit only lands if the revision it was given still matches the clip: if the user
@@ -953,6 +1032,10 @@ export function App() {
         applyNoteEdit(call);
         return;
       }
+      if (call.name === "regenerate_part") {
+        applyRegeneratedPart(call);
+        return;
+      }
       if (!["hum_to_midi", "render_song", "render_part"].includes(call.name)) return;
       try {
         const wrapper = JSON.parse(call.detail ?? "{}") as {
@@ -963,7 +1046,7 @@ export function App() {
           path?: string;
           bpm?: number;
           bars?: number;
-          parts?: Array<{ part?: string; path?: string; duration_ms?: number }>;
+          parts?: Array<{ part?: string; path?: string; duration_ms?: number; spec?: Record<string, unknown> }>;
           sections?: Array<{ name?: string; bars?: number; start_bar?: number }>;
           midi_path?: string;
           notes?: Array<{ start_ms: number; end_ms: number; midi: number; name?: string }>;
@@ -1002,6 +1085,17 @@ export function App() {
                   index = next.length - 1;
                 }
                 const clip = newClip(label, 0, Math.max(1, Math.round(bars)), entry.path);
+                // The plan travels with the clip, so a later "重一点" is a patch, not a rewrite.
+                const spec = (entry as { spec?: Record<string, unknown> }).spec;
+                if (spec !== undefined) {
+                  clip.render = {
+                    bpm,
+                    bars,
+                    part: spec,
+                    ...(parsed.sections === undefined ? {} : { sections: parsed.sections }),
+                    ...(typeof spec.seed === "number" ? { seed: spec.seed } : {}),
+                  };
+                }
                 next = next.map((track, position) =>
                   position === index
                     ? {

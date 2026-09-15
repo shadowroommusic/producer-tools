@@ -94,7 +94,16 @@ export function StudioPage({
    * The clip the piano roll has open, or null when it is closed. The App attaches it to the next
    * message so the agent can edit those notes without guessing at state it cannot see.
    */
-  onNoteContextChange?: (context: { clipId: string; clipName: string; notes: StudioNote[]; revision: string } | null) => void;
+  onNoteContextChange?: (
+    context: {
+      clipId: string;
+      clipName: string;
+      notes: StudioNote[];
+      revision: string;
+      /** The plan this clip's audio was rendered from, when it has one. */
+      render?: Record<string, unknown>;
+    } | null,
+  ) => void;
   /**
    * Separate one clip into vocals / drums / bass / other (the stem-splitter plugin). Resolves when
    * the job has finished; the stems land on their own tracks through the App's absorber.
@@ -284,17 +293,18 @@ export function StudioPage({
     [],
   );
 
-  // Tell the App which notes the piano roll is showing, so a message can carry them.
+  // Tell the App which clip the work is on — the piano roll's clip if it is open, otherwise the
+  // selection — so the next message can carry its notes and the plan its audio came from.
   useEffect(() => {
     if (onNoteContextChange === undefined) return;
-    if (editing === null) {
-      onNoteContextChange(null);
-      return;
-    }
-    const clip = project.tracks
-      .find((track) => track.id === editing.trackId)
-      ?.clips.find((entry) => entry.id === editing.clipId);
-    if (clip === undefined || (clip.notes?.length ?? 0) === 0) {
+    const target = editing ?? selected;
+    const clip =
+      target === null
+        ? undefined
+        : project.tracks
+            .find((track) => track.id === target.trackId)
+            ?.clips.find((entry) => entry.id === target.clipId);
+    if (clip === undefined) {
       onNoteContextChange(null);
       return;
     }
@@ -303,8 +313,9 @@ export function StudioPage({
       clipName: clip.name,
       notes: clip.notes ?? [],
       revision: notesRevision(clip.notes ?? []),
+      ...(clip.render === undefined ? {} : { render: clip.render as unknown as Record<string, unknown> }),
     });
-  }, [editing, onNoteContextChange, project.tracks]);
+  }, [editing, onNoteContextChange, project.tracks, selected]);
 
   /** Play one note through the same synth the transport uses, so editing has a sound. */
   const audition = useCallback((midi: number, durationMs: number) => {
