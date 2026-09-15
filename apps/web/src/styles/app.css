@@ -1097,7 +1097,14 @@
 }
 
 .sr-voice-picker .sr-input {
-  min-width: 260px;
+  /* The select takes the room, the button keeps its two characters on one line. */
+  flex: 1;
+  min-width: 200px;
+}
+
+.sr-voice-picker .sr-btn {
+  flex: none;
+  white-space: nowrap;
 }
 
 .sr-studio-record {

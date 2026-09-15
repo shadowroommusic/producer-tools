@@ -1478,7 +1478,16 @@ export function App() {
   const openProject = projects.find((project) => project.id === openProjectId);
   /** The chat dock is available on every page. On 工作台 the main column shows the overview instead,
       so the same transcript is never drawn twice. */
-  const chatInDock = dockOpen;
+  /**
+   * Which pages the conversation belongs to.
+   *
+   * 工作台 and Studio are places where you work *with* the agent, so the chat can sit beside them.
+   * 设置 and 插件 are places where you are changing the app itself — a transcript next to a settings
+   * form is noise, and a chat beside the plugin list is a second conversation nobody asked for. On
+   * those pages the dock stays put away (the rail can still take you to the conversation).
+   */
+  const viewShowsDock = mainView === "workbench" || mainView === "studio";
+  const chatInDock = dockOpen && viewShowsDock;
   /** Bounce the arrangement through the generator plugin and record the call in the transcript. */
   const exportArrangement = useCallback(
     async (spec: Record<string, unknown>) => {
@@ -2126,10 +2135,14 @@ export function App() {
           <button
             type="button"
             className="sr-dock-rail-btn"
-            title={running ? "对话 · 正在运行" : "展开对话"}
-            aria-label="展开对话"
+            title={viewShowsDock ? (running ? "对话 · 正在运行" : "展开对话") : "去对话"}
+            aria-label={viewShowsDock ? "展开对话" : "去对话"}
             data-busy={running || voiceMode || undefined}
-            onClick={() => setDockOpen(true)}
+            onClick={() => {
+              // On a page that has no dock, the button takes you to the conversation itself.
+              if (viewShowsDock) setDockOpen(true);
+              else setMainView("conversation");
+            }}
           >
             <IconChat size={18} />
           </button>
