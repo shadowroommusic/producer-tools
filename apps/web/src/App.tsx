@@ -131,6 +131,10 @@ export function App() {
     past: [],
     future: [],
   });
+  /** Clips an agent is re-rendering right now — the workbench shows a badge while it happens. */
+  const [rendering, setRendering] = useState<string[]>([]);
+  /** When each of those renders started, so a very fast one still shows its badge for a moment. */
+  const renderingSince = useRef(new Map<string, number>());
   /** The clip the piano roll has open: notes the next message should carry as context. */
   const [noteContext, setNoteContext] = useState<{
     clipId: string;
@@ -434,6 +438,26 @@ export function App() {
           }
           const call = toolCallFromItem(event.item, event.phase);
           if (call === null) return;
+          if (call.name === "regenerate_part") {
+            // A render can be over in a fifth of a second, and a badge that flickers is worse than
+            // none: hold it for at least 700 ms so the user sees that the track was rebuilt.
+            const args = (event.item.arguments ?? {}) as { clip_id?: string };
+            if (typeof args.clip_id === "string") {
+              const clipId = args.clip_id;
+              if (event.phase === "completed") {
+                const startedAt = renderingSince.current.get(clipId) ?? Date.now();
+                renderingSince.current.delete(clipId);
+                const wait = Math.max(0, 700 - (Date.now() - startedAt));
+                window.setTimeout(
+                  () => setRendering((current) => current.filter((id) => id !== clipId)),
+                  wait,
+                );
+              } else {
+                renderingSince.current.set(clipId, Date.now());
+                setRendering((current) => [...new Set([...current, clipId])]);
+              }
+            }
+          }
           if (event.phase === "completed") absorbRef.current(call);
           setStore((current) =>
             patchSession(current, sessionId, (session) => {
@@ -1721,6 +1745,7 @@ export function App() {
               onExportFormats={exportFormats}
               onSplitStems={splitStems}
               onNoteContextChange={setNoteContext}
+              rendering={rendering}
               composer={chatInDock ? null : composerFor()}
               onClose={() => {
                 setOpenProjectId(undefined);

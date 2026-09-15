@@ -66,6 +66,7 @@ export function StudioPage({
   onExportFormats,
   onSplitStems,
   onNoteContextChange,
+  rendering = [],
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
@@ -94,6 +95,8 @@ export function StudioPage({
    * The clip the piano roll has open, or null when it is closed. The App attaches it to the next
    * message so the agent can edit those notes without guessing at state it cannot see.
    */
+  /** Clips an agent is re-rendering right now. */
+  rendering?: string[];
   onNoteContextChange?: (
     context: {
       clipId: string;
@@ -1027,6 +1030,7 @@ export function StudioPage({
                     onDelete={() => removeClip(track.id, clip.id)}
                     onMenu={(x, y) => setMenu({ trackId: track.id, clipId: clip.id, x, y })}
                     onOpenNotes={() => openNotes(track.id, clip.id)}
+                    rendering={rendering.includes(clip.id)}
                     onDuplicate={() => {
                       const copy = { ...clip, id: `${clip.id}-copy-${Date.now().toString(36)}` };
                       updateTrack(track.id, (current) => ({ ...current, clips: [...current.clips, copy] }));
@@ -1270,6 +1274,7 @@ function Clip({
   onOpenNotes,
   onDuplicate,
   splitting,
+  rendering,
 }: {
   clip: StudioClip;
   barPx: number;
@@ -1288,6 +1293,8 @@ function Clip({
   onDuplicate?: () => void;
   /** A separation is running for this clip right now. */
   splitting?: boolean;
+  /** The agent is re-rendering this clip's audio right now. */
+  rendering?: boolean;
 }) {
   const badge = analysisBadge(clip.analysis);
   const drag = useRef<{
@@ -1394,6 +1401,7 @@ function Clip({
         {Number(clip.length.toFixed(2))} 小节
         {badge !== "" && <span className="sr-clip-badge"> · {badge}</span>}
         {splitting && <span className="sr-clip-badge"> · 分轨中…</span>}
+        {rendering && <span className="sr-clip-badge"> · 重渲染中…</span>}
         {clip.stemsDir !== undefined && <span className="sr-clip-badge sr-clip-badge--stems"> · 已分轨</span>}
       </span>
       <span
