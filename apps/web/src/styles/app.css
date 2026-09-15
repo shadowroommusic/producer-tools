@@ -868,6 +868,38 @@
   font-size: 10px;
 }
 
+/* 录音: a dot that lights up while a take is running, and the two click-track toggles beside it. */
+.sr-studio-record {
+  gap: 6px;
+}
+
+.sr-rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sr-danger, #f87171);
+  transition: box-shadow var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-studio-record[data-recording] {
+  border-color: var(--sr-danger, #f87171);
+  color: var(--sr-danger, #f87171);
+}
+
+.sr-studio-record[data-recording] .sr-rec-dot {
+  animation: sr-rec-pulse 1s var(--sr-ease) infinite;
+}
+
+@keyframes sr-rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sr-danger, #f87171) 55%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--sr-danger, #f87171) 0%, transparent); }
+}
+
+.sr-studio-click[data-on] {
+  border-color: var(--sr-accent);
+  color: var(--sr-accent);
+}
+
 /* 音轨 / 导入音频 / 导出音频 are one block: they wrap together or not at all. */
 .sr-transport-actions {
   display: flex;

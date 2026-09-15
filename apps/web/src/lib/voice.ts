@@ -6,6 +6,12 @@
  * the transcript stays the only way to talk to the agent.
  */
 
+/**
+ * The extension is spelled out because this file is also run by `node --test` (which strips types
+ * instead of bundling, and resolves nothing implicitly). Vite is happy either way.
+ */
+import { acquireMicrophone, releaseMicrophone } from "./mic.ts";
+
 type RecognitionResult = {
   isFinal: boolean;
   0: { transcript: string };
@@ -300,9 +306,12 @@ export type VoiceCapture = {
 
 export async function startCapture(): Promise<VoiceCapture | null> {
   if (navigator.mediaDevices?.getUserMedia === undefined) return null;
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true },
-  });
+  /**
+   * The voice mode and the 录音 button share one microphone (see `lib/mic.ts`): asking twice would
+   * show two "is recording" indicators and let one of them stop a track the other is still reading.
+   * The first asker's constraints win, which is why they are the ones a voice call wants.
+   */
+  const stream = await acquireMicrophone({ audio: { echoCancellation: true, noiseSuppression: true } });
   const context = new AudioContext();
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
@@ -348,7 +357,7 @@ export async function startCapture(): Promise<VoiceCapture | null> {
       processor.disconnect();
       source.disconnect();
       void context.close();
-      for (const track of stream.getTracks()) track.stop();
+      releaseMicrophone();
     },
   };
 }

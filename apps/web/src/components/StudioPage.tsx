@@ -47,6 +47,8 @@ import {
 import { midiLengthMs, parseMidiSong } from "../lib/midi";
 import { createNotePlayer } from "../lib/synth";
 import { peaksFor } from "../lib/waveform";
+import { createMetronome } from "../lib/metronome";
+import { acquireMicrophone, releaseMicrophone } from "../lib/mic";
 import { PianoRoll } from "./PianoRoll";
 
 /** Pixels per bar at zoom 1. */
@@ -76,6 +78,7 @@ export function StudioPage({
   onExport,
   onConvertToMidi,
   onUploadImport,
+  onSaveRecording,
   onPickImport,
   onAnalyze,
   onExportFormats,
@@ -100,6 +103,8 @@ export function StudioPage({
   onConvertToMidi?: (path: string) => Promise<{ midi_path?: string; notes?: StudioNote[] } | null>;
   /** Copy dropped/picked files into the workspace; resolves with where they landed. */
   onUploadImport?: (files: File[]) => Promise<string[]>;
+  /** A finished take: hand the bytes to the bridge, get back a WAV path and its real length. */
+  onSaveRecording?: (blob: Blob, name: string) => Promise<{ path: string; durationMs: number } | null>;
   /** A native "choose file…" dialog on the machine; resolves with paths to reference in place. */
   onPickImport?: () => Promise<string[]>;
   /** Tempo/key detection for one file (the analysis plugin); `null` when it could not listen. */
@@ -135,6 +140,22 @@ export function StudioPage({
   const [importOpen, setImportOpen] = useState(false);
   const [importPath, setImportPath] = useState("");
   const [importing, setImporting] = useState(false);
+  /**
+   * Say one sentence and let it fade. Used where a control exists but cannot do anything here —
+   * silencing it (the way a disabled button does) would leave the user guessing why.
+   */
+  const say = useCallback((text: string) => {
+    setFlash(text);
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(null), 4500);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    },
+    [],
+  );
   /** Clips whose separation is running right now. */
   const [splitting, setSplitting] = useState<string[]>([]);
   /**
@@ -160,6 +181,12 @@ export function StudioPage({
   const flashTimer = useRef<number | null>(null);
   /** The overflow banner can be put away; the extra tracks stay until they are deleted. */
   const [overflowHidden, setOverflowHidden] = useState(false);
+  /** A recording in progress: when it started, and how long it has been running. */
+  const [recording, setRecording] = useState<{ startedAt: number; metronome: boolean } | null>(null);
+  const [recordingMs, setRecordingMs] = useState(0);
+  /** Click track and one-bar count-in, remembered between sessions (a studio habit, not project data). */
+  const [metronomeOn, setMetronomeOn] = useState(() => window.localStorage.getItem("shadowroom.metronome") === "on");
+  const [countIn, setCountIn] = useState(() => window.localStorage.getItem("shadowroom.countin") !== "off");
   const [dragging, setDragging] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -599,6 +626,139 @@ export function StudioPage({
     [importFiles, onUploadImport],
   );
 
+  /**
+   * Record the microphone into a new take.
+   *
+   * The flow is the one every DAW has: optional one-bar count-in, clicks if you asked for them, then
+   * the take lands at the playhead. The clicks are synthesised on their own audio clock and are *not*
+   * part of the recording — they reach the microphone only through the room, which is why a take made
+   * with speakers instead of headphones is the user's choice to make.
+   */
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const pendingStartRef = useRef<number | null>(null);
+
+  const startRecording = useCallback(async () => {
+    if (recording !== null || onSaveRecording === undefined) return;
+    try {
+      const stream = await acquireMicrophone();
+      const context = audioContextRef.current ?? new AudioContext();
+      audioContextRef.current = context;
+      if (context.state === "suspended") await context.resume();
+
+      const beatSeconds = 60 / Math.max(1, project.bpm);
+      const clicks = metronomeOn || countIn;
+      const metronome = createMetronome({ context, destination: context.destination, bpm: project.bpm });
+      const t0 = clicks ? metronome.start() : context.currentTime;
+      const beginsAt = countIn ? t0 + beatSeconds * 4 : t0;
+      const delayMs = Math.max(0, (beginsAt - context.currentTime) * 1000);
+
+      setRecording({ startedAt: Date.now() + delayMs, metronome: clicks });
+      setRecordingMs(0);
+      say(countIn ? "预备拍：4 拍之后开始录。" : "开始录音。");
+
+      pendingStartRef.current = window.setTimeout(() => {
+        pendingStartRef.current = null;
+        const supported = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+        const mimeType = supported.find((type) => MediaRecorder.isTypeSupported(type));
+        const recorder = new MediaRecorder(stream, mimeType === undefined ? undefined : { mimeType });
+        chunksRef.current = [];
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) chunksRef.current.push(event.data);
+        };
+        recorder.onstop = () => {
+          metronome.stop();
+          releaseMicrophone();
+          const blob = new Blob(chunksRef.current, { type: recorder.mimeType === "" ? "audio/webm" : recorder.mimeType });
+          const clock = new Date().toISOString().slice(11, 19).replace(/:/g, "-");
+          void onSaveRecording(blob, `录音 ${clock}`).then((saved) => {
+            if (saved === null || saved.durationMs <= 0) return;
+            const bar = playhead;
+            const length = barsFromMilliseconds(saved.durationMs, project.bpm);
+            const target =
+              selected === null ? undefined : project.tracks.find((track) => track.id === selected.trackId);
+            onChange((current) => {
+              const clip = newClip(`录音 ${clock}`, bar, length, saved.path);
+              const onAudioTrack =
+                target === undefined
+                  ? undefined
+                  : current.tracks.find((track) => track.id === target.id && trackTypeOf(track) === "audio");
+              if (onAudioTrack !== undefined) {
+                return {
+                  ...current,
+                  tracks: current.tracks.map((track) =>
+                    track.id === onAudioTrack.id ? { ...track, clips: [...track.clips, clip] } : track,
+                  ),
+                };
+              }
+              let name = "录音 1";
+              for (let index = 2; current.tracks.some((track) => track.name === name) && index < 100; index += 1) {
+                name = `录音 ${index}`;
+              }
+              return {
+                ...current,
+                tracks: [
+                  ...current.tracks,
+                  { ...newTrack(name), type: "audio", color: nextTrackColor(current.tracks), clips: [clip] },
+                ],
+              };
+            });
+            say(`录了 ${(saved.durationMs / 1000).toFixed(1)} 秒，落在第 ${Math.floor(bar) + 1} 小节。`);
+          });
+        };
+        recorderRef.current = recorder;
+        recorder.start();
+      }, delayMs);
+    } catch (cause) {
+      releaseMicrophone();
+      say(`麦克风没打开：${cause instanceof Error ? cause.message : String(cause)}`);
+      setRecording(null);
+    }
+  }, [countIn, metronomeOn, onChange, onSaveRecording, playhead, project.bpm, project.tracks, recording, say, selected]);
+
+  const stopRecording = useCallback(() => {
+    if (pendingStartRef.current !== null) {
+      window.clearTimeout(pendingStartRef.current);
+      pendingStartRef.current = null;
+      releaseMicrophone();
+      setRecording(null);
+      say("已取消录音（还在预备拍里）。");
+      return;
+    }
+    const recorder = recorderRef.current;
+    setRecording(null);
+    if (recorder === null || recorder.state === "inactive") return;
+    recorder.stop();
+  }, [say]);
+
+  /** The seconds counter next to the button, so "am I still recording?" is never a guess. */
+  useEffect(() => {
+    if (recording === null) return;
+    const id = window.setInterval(() => setRecordingMs(Math.max(0, Date.now() - recording.startedAt)), 200);
+    return () => window.clearInterval(id);
+  }, [recording]);
+
+  useEffect(() => {
+    window.localStorage.setItem("shadowroom.metronome", metronomeOn ? "on" : "off");
+  }, [metronomeOn]);
+  useEffect(() => {
+    window.localStorage.setItem("shadowroom.countin", countIn ? "on" : "off");
+  }, [countIn]);
+
+  /** Leaving the page mid-take must not leave the device open or a click track running. */
+  useEffect(
+    () => () => {
+      if (pendingStartRef.current !== null) window.clearTimeout(pendingStartRef.current);
+      const recorder = recorderRef.current;
+      if (recorder !== null && recorder.state !== "inactive") recorder.stop();
+      releaseMicrophone();
+      void audioContextRef.current?.close();
+      audioContextRef.current = null;
+    },
+    [],
+  );
+
   /** Reference files in place through the machine's own file dialog. */
   const pickAndImport = useCallback(async () => {
     if (onPickImport === undefined) return;
@@ -620,23 +780,6 @@ export function StudioPage({
 
   const anySoloTrack = project.tracks.find((track) => track.soloed);
   const overflow = overflowNotice(project.tracks);
-
-  /**
-   * Say one sentence and let it fade. Used where a control exists but cannot do anything here —
-   * silencing it (the way a disabled button does) would leave the user guessing why.
-   */
-  const say = useCallback((text: string) => {
-    setFlash(text);
-    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
-    flashTimer.current = window.setTimeout(() => setFlash(null), 4500);
-  }, []);
-
-  useEffect(
-    () => () => {
-      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
-    },
-    [],
-  );
 
   /**
    * The overflow banner stops being true the moment the count is back inside the limit — and the
@@ -797,6 +940,28 @@ export function StudioPage({
             title="选择文件（可多选）——也可以直接把文件拖进窗口"
           >
             {importing ? "导入中…" : "导入音频"}
+          </button>
+          {/*
+            Recording lives next to importing because that is where "audio comes from" in this
+            transport. The click track and count-in are settings, not project data, so they live in
+            the ⋯ menu — put in this row they pushed 导出音频 off the edge at 1240px (measured).
+          */}
+          <button
+            type="button"
+            className="sr-btn sr-studio-record"
+            data-recording={recording !== null || undefined}
+            disabled={onSaveRecording === undefined}
+            onClick={() => (recording === null ? void startRecording() : stopRecording())}
+            title={
+              onSaveRecording === undefined
+                ? "录音需要 agent bridge（pnpm serve:agent）"
+                : recording === null
+                  ? "用麦克风录一段，落在播放头"
+                  : "停止录音"
+            }
+          >
+            <span className="sr-rec-dot" aria-hidden="true" />
+            {recording === null ? "录音" : `停止 ${(recordingMs / 1000).toFixed(1)}s`}
           </button>
           {/* The other two ways in: reference a path, or the machine's own file dialog. */}
           <button
@@ -992,6 +1157,27 @@ export function StudioPage({
             从磁盘选取…
           </button>
           <span className="sr-field-label sr-mono">每个文件会新建一条同名音轨</span>
+          {/* Recording settings, kept out of the transport row so the row stays one line. */}
+          <button
+            type="button"
+            className="sr-btn sr-studio-click"
+            aria-pressed={metronomeOn}
+            data-on={metronomeOn || undefined}
+            onClick={() => setMetronomeOn((on) => !on)}
+            title="节拍器：录音时按 BPM 打点（click 走音频时钟，不会被录进麦克风）"
+          >
+            ♩ 节拍器 {metronomeOn ? "开" : "关"}
+          </button>
+          <button
+            type="button"
+            className="sr-btn sr-studio-click"
+            aria-pressed={countIn}
+            data-on={countIn || undefined}
+            onClick={() => setCountIn((on) => !on)}
+            title="预备拍：按录音后先打 4 拍再开始，避免第一拍被切掉"
+          >
+            预备拍 {countIn ? "开" : "关"}
+          </button>
         </div>
       )}
 

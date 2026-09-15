@@ -1550,6 +1550,42 @@ export function App() {
 
   /** Studio edits arrive as updaters, so the page never has to hold a snapshot. */
   /**
+   * Hand a finished recording to the bridge, which turns it into a WAV.
+   *
+   * MediaRecorder gives us webm/opus (Safari: mp4), so the bytes go up as base64 and come back as a
+   * path plus the length the file really has — measured from the WAV header, not from our stopwatch.
+   */
+  const uploadRecording = useCallback(async (blob: Blob, name: string): Promise<{ path: string; durationMs: number } | null> => {
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("读取录音失败"));
+      reader.onload = () => {
+        const result = String(reader.result);
+        resolve(result.slice(result.indexOf(",") + 1));
+      };
+      reader.readAsDataURL(blob);
+    });
+    const extension = (blob.type.split("/")[1] ?? "webm").split(";")[0].toLowerCase();
+    try {
+      const response = await fetch("/api/agent/record", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data, name, extension }),
+      });
+      const body = (await response.json()) as { path?: string; duration_ms?: number; error?: string };
+      if (!response.ok || body.path === undefined) throw new Error(body.error ?? "录音没有保存成功");
+      return { path: body.path, durationMs: body.duration_ms ?? 0 };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      withActiveSession((current) => ({
+        ...current,
+        messages: [...current.messages, { id: `nt-${Date.now()}`, role: "notice", title: "录音没有保存", text: message, at: Date.now() }],
+      }));
+      return null;
+    }
+  }, [withActiveSession]);
+
+  /**
    * Copy the files the user dropped (or picked in the browser) into the workspace.
    *
    * A `File` has no path, so the bytes go through `POST /api/agent/import` and come back as a real
@@ -1931,6 +1967,7 @@ export function App() {
               onAnalyze={analyzeImport}
               onExportFormats={exportFormats}
               onSplitStems={splitStems}
+              onSaveRecording={uploadRecording}
               onNoteContextChange={setNoteContext}
               rendering={rendering}
               composer={chatInDock ? null : composerFor()}

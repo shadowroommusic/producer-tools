@@ -21,8 +21,8 @@
  *   SHADOWROOM_AGENT_APPROVAL  untrusted | on-request | never (default never)
  *   SHADOWROOM_AGENT_PORT      default 8788
  */
-import { spawn } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -75,6 +75,27 @@ const IMPORTS_DIR = process.env.SHADOWROOM_IMPORTS_DIR ?? join(WORKSPACES, "impo
 /** Uploads are read into memory as base64, so keep a ceiling: 512 MB of audio is a long DJ set. */
 const MAX_IMPORT_BYTES = Number(process.env.SHADOWROOM_IMPORT_MAX_BYTES ?? 512 * 1024 * 1024);
 
+/**
+ * Where the studio looks for ffmpeg.
+ *
+ * The generator plugin installs one static binary at `<home>/bin/ffmpeg` (a symlink into the
+ * imageio-ffmpeg wheel), which is why this is mostly a lookup rather than a dependency: recording is
+ * the only thing the bridge itself needs an encoder for.
+ */
+function findFfmpeg() {
+  if (process.env.SHADOWROOM_FFMPEG !== undefined && existsSync(process.env.SHADOWROOM_FFMPEG)) {
+    return process.env.SHADOWROOM_FFMPEG;
+  }
+  const staged = join(WORKSPACES, "bin", process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+  if (existsSync(staged)) return staged;
+  for (const directory of (process.env.PATH ?? "").split(":")) {
+    if (directory === "") continue;
+    const candidate = join(directory, "ffmpeg");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** `track.wav` → `track-2.wav` when the name is taken, so an import never overwrites a file. */
 function uniqueName(directory, name) {
   if (!existsSync(join(directory, name))) return name;
@@ -86,6 +107,50 @@ function uniqueName(directory, name) {
     if (!existsSync(join(directory, candidate))) return candidate;
   }
   return `${stem}-${Date.now()}${extension}`;
+}
+
+/**
+ * How long a WAV is, read from its own header.
+ *
+ * The bridge has no ffprobe (only the ffmpeg binary is staged), and after a conversion we control
+ * exactly what was written — 16-bit PCM — so the byte rate and the data chunk size are all we need.
+ * Returns 0 when the file is not a WAV we understand, which the caller reports as "unknown length"
+ * rather than inventing a number.
+ */
+function wavDurationMs(buffer) {
+  if (buffer.length < 44 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") return 0;
+  let offset = 12;
+  let byteRate = 0;
+  let dataBytes = 0;
+  while (offset + 8 <= buffer.length) {
+    const id = buffer.toString("ascii", offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const body = offset + 8;
+    if (id === "fmt " && size >= 16) byteRate = buffer.readUInt32LE(body + 8);
+    if (id === "data") {
+      dataBytes = Math.min(size, buffer.length - body);
+      break;
+    }
+    offset = body + size + (size % 2);
+  }
+  if (byteRate <= 0 || dataBytes <= 0) return 0;
+  return Math.round((dataBytes / byteRate) * 1000);
+}
+
+/**
+ * A file name that is safe to write, without mangling the name.
+ *
+ * The first version replaced every non-ASCII character, so a recording called 「测试录音」 landed as
+ * `_.wav` (measured). Path separators, control characters and the characters the Finder refuses are
+ * the things worth removing — Chinese is not one of them.
+ */
+function safeFileName(name) {
+  return name
+    // eslint-disable-next-line no-control-regex
+    .replace(/[/\\:*?"<>|\u0000-\u001f]/g, "_")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 120);
 }
 
 /** Extensions the studio may stream into the browser (audio + MIDI, nothing executable). */
@@ -575,6 +640,55 @@ const http = createServer(async (request, response) => {
     }
 
     /**
+     * A recording from the studio's 录音 button: converted to WAV on the way in.
+     *
+     * MediaRecorder hands the browser webm/opus (Safari: mp4/aac), which the studio's own playback
+     * and export paths would rather not special-case, and which cannot be decoded reliably by the
+     * analyser. So the bytes land here and ffmpeg writes a 44.1 kHz 16-bit PCM WAV next to them —
+     * one format from then on, and the length comes back measured rather than guessed.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/record") {
+      const body = await readJsonBody(request, MAX_IMPORT_BYTES);
+      const data = typeof body.data === "string" ? body.data : "";
+      if (data === "") {
+        json(response, 400, { error: "缺少录音内容（data）" });
+        return;
+      }
+      const ffmpeg = findFfmpeg();
+      if (ffmpeg === null) {
+        json(response, 501, { error: "这台机器上没有 ffmpeg，录音无法转成 WAV。装好后重试，或用 SHADOWROOM_FFMPEG 指定路径。" });
+        return;
+      }
+      const rawExtension = typeof body.extension === "string" && /^[a-z0-9]{1,5}$/i.test(body.extension) ? body.extension.toLowerCase() : "";
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const rawName = typeof body.name === "string" && body.name.trim() !== "" ? body.name.trim() : `录音-${stamp}`;
+      const base = safeFileName(rawName.replace(/\.(wav|webm|m4a|mp4|ogg|opus)$/i, "")) || `录音-${stamp}`;
+      mkdirSync(RECORDINGS_DIR, { recursive: true });
+      const targetName = uniqueName(RECORDINGS_DIR, `${base}.wav`);
+      const target = join(RECORDINGS_DIR, targetName);
+      const temp = join(RECORDINGS_DIR, `.take-${stamp}${rawExtension === "" ? "" : `.${rawExtension}`}`);
+      writeFileSync(temp, Buffer.from(data, "base64"));
+      try {
+        const converted = spawnSync(
+          ffmpeg,
+          ["-v", "error", "-y", "-i", temp, "-ar", "44100", "-c:a", "pcm_s16le", target],
+          { encoding: "utf8", timeout: 120_000 },
+        );
+        if (converted.status !== 0) {
+          const detail = (converted.stderr || "").trim().split("\n").slice(-2).join(" ") || "ffmpeg 没有说明原因";
+          json(response, 500, { error: `ffmpeg 转换失败：${detail}` });
+          return;
+        }
+      } finally {
+        rmSync(temp, { force: true });
+      }
+      const durationMs = wavDurationMs(readFileSync(target));
+      console.log(`[agent] recorded ${targetName} (${(durationMs / 1000).toFixed(2)}s)`);
+      json(response, 200, { path: target, name: targetName, duration_ms: durationMs, bytes: statSync(target).size });
+      return;
+    }
+
+    /**
      * Import: a file the user dropped or picked in the browser, copied into the workspace.
      *
      * A browser cannot hand a local path to the audio server (the File object has no path), so the
@@ -601,7 +715,7 @@ const http = createServer(async (request, response) => {
       const day = new Date().toISOString().slice(0, 10);
       const directory = join(IMPORTS_DIR, day);
       mkdirSync(directory, { recursive: true });
-      const safeName = uniqueName(directory, rawName.replace(/[^\w.\- ()[\]]+/g, "_"));
+      const safeName = uniqueName(directory, safeFileName(rawName) || `import-${Date.now()}`);
       const target = join(directory, safeName);
       const buffer = Buffer.from(data, "base64");
       writeFileSync(target, buffer);
