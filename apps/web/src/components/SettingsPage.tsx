@@ -774,6 +774,12 @@ function ModelManager({
       });
       setFetched({ list: answer.models, ...(answer.error === undefined ? {} : { error: answer.error }) });
       setSelected(answer.models.filter((model) => !models.includes(model)));
+    } catch (cause) {
+      /**
+       * A failed fetch has to *say* so: the panel used to stay closed on a thrown error, which reads as
+       * "the button did nothing" (measured while wiring this up).
+       */
+      setFetched({ list: [], error: `拉取失败：${cause instanceof Error ? cause.message : String(cause)}` });
     } finally {
       setFetching(false);
     }
