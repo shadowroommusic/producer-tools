@@ -16,6 +16,7 @@ import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
   MAX_TRACKS,
   TRACK_COLORS,
+  barsFromMilliseconds,
   barsPerSecond,
   canAddTracks,
   defaultTrackName,
@@ -34,6 +35,7 @@ import {
   isPlayable,
   newClip,
   newTrack,
+  nextTrackColor,
   trackFromImport,
   analysisBadge,
   type StudioAnalysis,
@@ -42,6 +44,7 @@ import {
   type StudioProject,
   type StudioTrack,
 } from "../lib/studio";
+import { midiLengthMs, parseMidiSong } from "../lib/midi";
 import { createNotePlayer } from "../lib/synth";
 import { peaksFor } from "../lib/waveform";
 import { PianoRoll } from "./PianoRoll";
@@ -478,11 +481,66 @@ export function StudioPage({
       const clean = paths.map((path) => path.trim()).filter((path) => path !== "");
       if (clean.length === 0) return;
       const wasEmpty = project.tracks.every((track) => track.clips.length === 0);
+      setImportOpen(false);
+      setImportPath("");
+
+      /**
+       * A `.mid` is not audio: it is already notes, so it gets read here and lands as tracks full of
+       * editable notes — one track per MIDI track (or per channel in a format-0 file). It never goes
+       * near the audio analyser, and it never gets a "clip with an empty source".
+       */
+      const midiPaths = clean.filter((path) => /\.(mid|midi)$/i.test(path));
+      for (const path of midiPaths) {
+        try {
+          const response = await fetch(fileUrl(path));
+          const song = parseMidiSong(new Uint8Array(await response.arrayBuffer()));
+          if (song.parts.length === 0) {
+            say(`${path.split("/").pop() ?? path} 里没有音符。`);
+            continue;
+          }
+          const detected = song.bpm ?? project.bpm;
+          const adoptTempo = wasEmpty && song.bpm !== undefined;
+          onChange((current) => {
+            const bpm = adoptTempo ? (song.bpm as number) : current.bpm;
+            let tracks = [...current.tracks];
+            const names = tracks.map((track) => track.name);
+            for (const part of song.parts) {
+              let name = part.name;
+              for (let index = 2; names.includes(name) && index < 100; index += 1) name = `${part.name} ${index}`;
+              names.push(name);
+              tracks = [
+                ...tracks,
+                {
+                  ...newTrack(name),
+                  type: part.drums ? "drums" : "instrument",
+                  color: nextTrackColor(tracks),
+                  clips: [
+                    {
+                      ...newClip(name, 0, barsFromMilliseconds(midiLengthMs([part]), bpm), path),
+                      notes: withNoteIds(part.notes),
+                    },
+                  ],
+                },
+              ];
+            }
+            return { ...current, tracks, ...(adoptTempo ? { bpm: Math.round(detected) } : {}) };
+          });
+          say(
+            adoptTempo
+              ? `已从 ${path.split("/").pop() ?? "MIDI"} 建了 ${song.parts.length} 条音轨，工程 BPM 设为 ${Math.round(detected)}。`
+              : `已从 ${path.split("/").pop() ?? "MIDI"} 建了 ${song.parts.length} 条音轨${song.bpm === undefined ? "" : `（它标的是 ${song.bpm} BPM，当前工程 ${project.bpm}）`}。`,
+          );
+        } catch (cause) {
+          say(`MIDI 没读进来：${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+      }
+      if (midiPaths.length === clean.length) return;
+      const audioPaths = clean.filter((path) => !midiPaths.includes(path));
       const created: Array<{ trackId: string; clipId: string }> = [];
       onChange((current) => {
         let tracks = [...current.tracks];
         const names = tracks.map((track) => track.name);
-        for (const path of clean) {
+        for (const path of audioPaths) {
           const track = trackFromImport(path, names);
           names.push(track.name);
           tracks = [...tracks, track];
@@ -491,10 +549,8 @@ export function StudioPage({
         return { ...current, tracks };
       });
       setSelected(created.at(-1) ?? null);
-      setImportOpen(false);
-      setImportPath("");
 
-      for (const [index, path] of clean.entries()) {
+      for (const [index, path] of audioPaths.entries()) {
         // 1. the real duration decides the clip's length on the bar grid
         if (isPlayable(path)) {
           const probe = new Audio(fileUrl(path));

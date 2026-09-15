@@ -320,6 +320,17 @@ export function barsPerSecond(bpm: number): number {
   return bpm / 4 / 60;
 }
 
+/**
+ * How many bars a stretch of time covers at this tempo — at least one.
+ *
+ * Milliseconds, not seconds: the notes a MIDI file becomes are in milliseconds, and passing those
+ * numbers to `barsPerSecond` directly is how an imported clip once came out 625 bars long (measured:
+ * 1250 ms × 0.5, right number, wrong unit).
+ */
+export function barsFromMilliseconds(ms: number, bpm: number): number {
+  return Math.max(1, Math.ceil((ms / 1000) * barsPerSecond(bpm)));
+}
+
 /** URL the browser can stream a local file from (the agent bridge serves it). */
 export function fileUrl(path: string): string {
   return `/api/agent/file?path=${encodeURIComponent(path)}`;
