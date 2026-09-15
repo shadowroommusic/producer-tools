@@ -6,6 +6,14 @@
  * settings page reads like a form and not like a pile of fetches.
  */
 import type { CapabilityKind, ProviderProfile } from "./providers";
+import type { EndpointFormat } from "./providerModel";
+
+/** 我们的线格式 → bridge 认识的鉴权协议（openai 用 Bearer，其余按自定义处理）。 */
+function authProtocol(format: EndpointFormat): "openai" | "elevenlabs" | "custom" {
+  if (format === "chat_completions" || format === "responses") return "openai";
+  if (format === "messages") return "custom";
+  return "custom";
+}
 
 export type CredentialInfo = { name: string; source: "file" | "env" | "missing"; masked: string; variable?: string };
 
@@ -37,18 +45,18 @@ export async function deleteCredential(name: string): Promise<void> {
 
 /** The provider's own model list, asked for when a dropdown opens. */
 export async function listProviderModels(
-  provider: Pick<ProviderProfile, "baseUrl" | "credentialRef" | "protocol">,
+  provider: { baseUrl: string; credentialRef: string | null; endpointFormat: EndpointFormat },
 ): Promise<{ models: string[]; error?: string }> {
   return post<{ models: string[]; error?: string }>("/api/agent/providers/models", {
     baseUrl: provider.baseUrl,
     credentialRef: provider.credentialRef,
-    protocol: provider.protocol,
+    protocol: authProtocol(provider.endpointFormat),
   });
 }
 
 /** The smallest request that proves a role works. */
 export async function testRole(options: {
-  provider: Pick<ProviderProfile, "baseUrl" | "credentialRef" | "protocol">;
+  provider: { baseUrl: string; credentialRef: string | null; endpointFormat: EndpointFormat };
   capability: CapabilityKind;
   model: string;
   voice?: string;
@@ -56,7 +64,7 @@ export async function testRole(options: {
   return post<{ ok: boolean; detail: string; ms?: number }>("/api/agent/providers/test", {
     baseUrl: options.provider.baseUrl,
     credentialRef: options.provider.credentialRef,
-    protocol: options.provider.protocol,
+    protocol: authProtocol(options.provider.endpointFormat),
     capability: options.capability,
     model: options.model,
     ...(options.voice === undefined ? {} : { voice: options.voice }),

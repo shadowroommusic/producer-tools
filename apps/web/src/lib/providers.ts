@@ -1,130 +1,88 @@
 /**
- * Which model does what.
+ * 供应商与角色：形状照搬用户自己的 Shadow（`src/shared/app-settings-types-provider.ts`）。
  *
- * One 服务商 (provider) is an endpoint plus a credential *name*; the provider declares which
- * **capabilities** it offers (主模型 / 语音合成 / 音色克隆 / 语音识别 / 生图), each with its own
- * protocol, endpoint and default model. Roles then point at `providerId:capability`.
+ * 一个供应商 = 一个端点 + 一把 Key，`models` 是它的**对话模型列表**（可以多个，主模型从这里选），
+ * `modelProfiles` 是每个模型的档案（上下文、模态、工具调用、推理档），`capabilities` 是它的其它能力
+ * （语音合成 / 音色克隆 / 语音识别 / 生图 / 音乐生成，各有自己的协议、端点与模型列表）。
  *
- * Two rules from the project's first principle live here:
+ * 与 Shadow 的唯一差别：**没有 video**——类型、能力枚举、预设里都不留它的位置，
+ * 免得以后有人以为支持（用户明确要求，见 DECISIONS ADR-015 补充）。
  *
- * 1. **The capability is the only truth.** There used to be a persisted `slots` array *and* the roles
- *    pointing into it — two things describing the same assignment. Slots are now derived
- *    ({@link deriveSlots}), so they cannot drift.
- * 2. **Nothing is copied that can be inherited.** A capability's `baseUrl`/`protocol` are empty
- *    unless the user deliberately overrides them; {@link capabilityTarget} resolves the inheritance.
- *    Storing a copy would mean editing the chat endpoint silently leaves an old TTS endpoint behind.
+ * 第一原则照旧：能推导的不存。所以没有 `slots`、没有「默认模型」这种第二份真相——
+ * 角色的绑定是 `{providerId, capability, model}`，模型从供应商自己的列表里来。
  */
+import { copyModelProfiles, type EndpointFormat, type ModelProfile } from "./providerModel.ts";
 
-/** What a model can be asked to do. These are also the roles the settings page offers. */
-export type CapabilityKind = "agent" | "tts" | "voice_clone" | "stt" | "image";
+/** 角色种类。`agent` 用供应商的 `models`，其它用 `capabilities[kind].models`。 */
+export type CapabilityKind = "agent" | "tts" | "voice_clone" | "stt" | "image" | "music";
 
-/** The roles in the order the settings page shows them, with the label a beginner reads. */
+/** 角色表（设置页按这个顺序显示）。非 agent 的几项就是「能力」页签里的卡片。 */
 export const CAPABILITIES: ReadonlyArray<{ kind: CapabilityKind; label: string; hint: string }> = [
-  /* 中文说清楚是什么，后面跟上行业里真正叫的名字（AGENTS.md：行业词不翻译）。 */
   { kind: "agent", label: "主模型 · Main", hint: "对话、写歌、调用工具——只有它出现在对话页的模型开关里" },
   { kind: "tts", label: "语音合成 · TTS", hint: "把文字念出来（朗读回复、语音通话里的声音）" },
   { kind: "voice_clone", label: "音色克隆 · Voice Clone", hint: "用一段样本做自己的音色，给语音合成用" },
   { kind: "stt", label: "语音识别 · STT", hint: "把你说的话转成文字（默认用浏览器自带的）" },
   { kind: "image", label: "生图 · Image", hint: "封面、配图这类图像生成" },
+  { kind: "music", label: "音乐生成 · Music", hint: "让模型按描述写一段音乐（本地合成器之外的第二条路）" },
 ];
 
-/** How a provider's HTTP requests are shaped. `openai` is the common one; `custom` trusts the path. */
-export type ProviderProtocol = "openai" | "elevenlabs" | "custom";
+/** 能力页签里的卡片：除主模型以外的全部（Shadow 的能力页就是生图/语音/音乐那几张，没有视频）。 */
+export const PROVIDER_CAPABILITIES = CAPABILITIES.filter((entry) => entry.kind !== "agent");
 
-/**
- * What one capability needs on top of the provider.
- *
- * Every optional field means **inherit**: an empty `baseUrl` is the provider's chat endpoint, an empty
- * `protocol` is the provider's protocol. That is why they are optional rather than pre-filled — a copy
- * would be a second truth that goes stale the moment the chat endpoint changes.
- */
-export type CapabilityOverride = {
-  enabled: boolean;
-  protocol?: ProviderProtocol;
-  baseUrl?: string;
-  /** Path override, e.g. `/audio/speech`; the protocol's default path is used when absent. */
-  endpointPath?: string;
-  /** The model this capability uses. Required once the capability is enabled. */
-  defaultModel?: string;
-  /** Other models worth offering in the role dropdown; collapsed in the UI. */
-  extraModels?: string[];
-  /** Capability-specific extras: TTS `voice`, STT `language`, image `size`… */
-  options?: Record<string, string>;
+/** 一项能力的配置：协议 + 端点 + 模型列表（照抄 Shadow 的 `ModelProvider*CapabilityV1`）。 */
+export type CapabilityConfig = {
+  protocol: EndpointFormat;
+  baseUrl: string;
+  models: string[];
 };
 
 export type ProviderProfile = {
   id: string;
-  label: string;
-  /** The chat endpoint. Capabilities inherit it unless they override it. */
+  name: string;
   baseUrl: string;
-  /** Name of the credential in the bridge's store; `null` when the endpoint needs no key. */
+  /** 凭证名（值在 bridge，0600）。`null` = 这家不需要 Key（本地服务）。 */
   credentialRef: string | null;
-  protocol: ProviderProtocol;
+  endpointFormat: EndpointFormat;
   enabled: boolean;
-  capabilities: Partial<Record<CapabilityKind, CapabilityOverride>>;
-};
-
-/** A capability, resolved: what to call, where, and with which model. */
-export type CapabilityTarget = {
-  providerId: string;
-  capability: CapabilityKind;
-  protocol: ProviderProtocol;
-  baseUrl: string;
-  endpointPath: string | undefined;
-  model: string;
+  /** 来自哪个预设（`providerPresets.ts` 的 id），自定义端点为空。 */
+  presetSource?: string;
+  /** 对话模型。主模型从这里选——**可以多个**。 */
   models: string[];
-  options: Record<string, string>;
+  /** 每个模型的档案；没有档案的模型按「未知」处理，而不是编一个。 */
+  modelProfiles: Record<string, ModelProfile>;
+  /** 其它能力，没有这一项 = 这家不提供它。 */
+  capabilities: Partial<Record<CapabilityKind, CapabilityConfig>>;
 };
 
-/** Derived, never stored: one slot per enabled capability that names a model. */
-export type CapabilitySlot = { id: string; providerId: string; capability: CapabilityKind; model: string };
-
-/** Role → slot id (`providerId:capability`), or `null` when the role is deliberately not configured. */
-export type RoleMap = Record<CapabilityKind, string | null>;
+/** 角色 → 哪个供应商的哪项能力、用哪个模型。没有绑定就是 `null`。 */
+export type RoleBinding = { providerId: string; capability: CapabilityKind; model: string } | null;
 
 export type ModelSettings = {
-  /** 2 since capabilities became the truth and slots became derived. */
-  version: 2;
+  /** 3：供应商持有 `models` + `modelProfiles`，能力是 `{protocol, baseUrl, models}`，角色带 model。 */
+  version: 3;
   providers: ProviderProfile[];
-  roles: RoleMap;
+  roles: Record<CapabilityKind, RoleBinding>;
 };
 
-/** The default path each capability hits, per protocol — used when a capability overrides nothing. */
-export const DEFAULT_PATHS: Record<CapabilityKind, string> = {
-  agent: "/chat/completions",
-  tts: "/audio/speech",
-  voice_clone: "/voices/add",
-  stt: "/audio/transcriptions",
-  image: "/images/generations",
+/** 能力开启时的预填（照抄 Shadow 的 `defaultXCapability(baseUrl)` 思路：协议默认、端点沿用、模型空）。 */
+export const CAPABILITY_DEFAULT_PROTOCOL: Record<Exclude<CapabilityKind, "agent">, EndpointFormat> = {
+  tts: "chat_completions",
+  voice_clone: "custom_endpoint",
+  stt: "chat_completions",
+  image: "chat_completions",
+  music: "chat_completions",
 };
 
-/**
- * What turning a capability on should pre-fill.
- *
- * Not empty boxes: a beginner who switches on 语音合成 should find the model and voice that almost
- * every OpenAI-compatible endpoint uses, and change them only if their provider differs.
- */
-export const CAPABILITY_DEFAULTS: Record<CapabilityKind, { model: string; options?: Record<string, string> }> = {
-  agent: { model: "" },
-  tts: { model: "tts-1", options: { voice: "alloy", format: "mp3" } },
-  voice_clone: { model: "eleven_multilingual_v2", options: { samples: "5" } },
-  stt: { model: "whisper-1", options: { language: "auto", format: "wav" } },
-  image: { model: "", options: { size: "1024x1024", format: "png" } },
-};
-
-/** Everything unconfigured: the built-in agent (Codex) is the default main model. */
 export function emptySettings(): ModelSettings {
   return {
-    version: 2,
+    version: 3,
     providers: [],
-    roles: { agent: null, tts: null, voice_clone: null, stt: null, image: null },
+    roles: { agent: null, tts: null, voice_clone: null, stt: null, image: null, music: null },
   };
 }
 
-/** Where the settings live in the browser (no secrets: those are in the bridge). */
 export const SETTINGS_KEY = "shadowroom.models.v1";
 
-/** Read settings, upgrading anything written by the first version. */
 export function loadModelSettings(): ModelSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
@@ -143,298 +101,310 @@ export function saveModelSettings(settings: ModelSettings): void {
   }
 }
 
-/**
- * Bring any stored shape up to version 2.
- *
- * Version 1 kept a `slots` array and pointed roles at slot ids. Those slots are folded into the
- * provider's capabilities (inheriting its endpoint, since that is what the old UI meant) and the role
- * ids are rewritten to `providerId:capability`. The `slots` key is dropped, so a reader can never
- * find two answers again.
- */
+/** v1（只有 slots）/ v2（能力里塞一个 defaultModel）→ v3（供应商持有模型列表）。 */
 export function normalizeSettings(parsed: unknown): ModelSettings {
   const base = emptySettings();
   if (parsed === null || typeof parsed !== "object") return base;
   const raw = parsed as {
     version?: number;
-    providers?: Array<Partial<ProviderProfile> & { capabilities?: ProviderProfile["capabilities"] }>;
+    providers?: Array<Record<string, unknown>>;
     slots?: Array<{ id: string; providerId: string; capability: CapabilityKind; model: string }>;
-    roles?: Partial<RoleMap>;
+    roles?: Record<string, unknown>;
   };
   if (!Array.isArray(raw.providers)) return base;
   const legacySlots = Array.isArray(raw.slots) ? raw.slots : [];
 
   const providers: ProviderProfile[] = raw.providers.map((entry) => {
     const id = String(entry.id ?? `p-${Math.random().toString(36).slice(2, 8)}`);
-    const capabilities: ProviderProfile["capabilities"] = { ...(entry.capabilities ?? {}) };
-    for (const slot of legacySlots.filter((candidate) => candidate.providerId === id)) {
-      const existing = capabilities[slot.capability];
-      capabilities[slot.capability] = {
-        enabled: true,
-        ...(existing ?? {}),
-        defaultModel: existing?.defaultModel ?? slot.model,
+    const label = String(entry.name ?? entry.label ?? id);
+    const baseUrl = String(entry.baseUrl ?? "").trim().replace(/\/+$/, "");
+    const endpointFormat = (entry.endpointFormat ?? legacyFormat(entry.protocol)) as EndpointFormat;
+    const models = new Set<string>(Array.isArray(entry.models) ? (entry.models as string[]).map(String) : []);
+    const capabilities: ProviderProfile["capabilities"] = {};
+
+    /** v2：`capabilities[kind] = {enabled, protocol?, baseUrl?, defaultModel?, extraModels?}`。 */
+    const legacyCapabilities = (entry.capabilities ?? {}) as Record<
+      string,
+      { enabled?: boolean; protocol?: string; baseUrl?: string; defaultModel?: string; extraModels?: string[] }
+    >;
+    for (const [kind, config] of Object.entries(legacyCapabilities)) {
+      if (config?.enabled !== true) continue;
+      const kindModels = [config.defaultModel, ...(config.extraModels ?? [])]
+        .map((model) => String(model ?? "").trim())
+        .filter((model) => model !== "");
+      if (kind === "agent") {
+        for (const model of kindModels) models.add(model);
+        continue;
+      }
+      capabilities[kind as CapabilityKind] = {
+        protocol: (config.protocol ?? endpointFormat) as EndpointFormat,
+        baseUrl: (config.baseUrl ?? baseUrl).trim().replace(/\/+$/, ""),
+        models: kindModels,
       };
     }
+    /** v1：老 `slots` 里每一项折进它属于的那个地方。 */
+    for (const slot of legacySlots.filter((candidate) => candidate.providerId === id)) {
+      const model = String(slot.model ?? "").trim();
+      if (model === "") continue;
+      if (slot.capability === "agent") {
+        models.add(model);
+        continue;
+      }
+      const existing = capabilities[slot.capability] ?? { protocol: endpointFormat, baseUrl, models: [] };
+      capabilities[slot.capability] = { ...existing, models: [...new Set([...existing.models, model])] };
+    }
+
     return {
       id,
-      label: String(entry.label ?? id),
-      baseUrl: String(entry.baseUrl ?? ""),
+      name: label,
+      baseUrl,
       credentialRef: entry.credentialRef === null || entry.credentialRef === undefined ? null : String(entry.credentialRef),
-      protocol: (entry.protocol ?? "openai") as ProviderProtocol,
+      endpointFormat,
       enabled: entry.enabled !== false,
+      ...(typeof entry.presetSource === "string" ? { presetSource: entry.presetSource } : {}),
+      models: [...models],
+      modelProfiles: copyModelProfiles(
+        (entry.modelProfiles ?? {}) as Record<string, ModelProfile>,
+      ),
       capabilities,
     };
   });
 
-  const roles: RoleMap = { ...base.roles };
+  const roles: ModelSettings["roles"] = { ...base.roles };
   for (const kind of Object.keys(roles) as CapabilityKind[]) {
     const stored = raw.roles?.[kind];
     if (stored === null || stored === undefined) {
       roles[kind] = null;
       continue;
     }
-    if (stored.includes(":")) {
-      roles[kind] = stored;
+    if (typeof stored === "object") {
+      const binding = stored as { providerId?: unknown; capability?: unknown; model?: unknown };
+      if (typeof binding.providerId === "string" && typeof binding.model === "string") {
+        roles[kind] = {
+          providerId: binding.providerId,
+          capability: (typeof binding.capability === "string" ? binding.capability : kind) as CapabilityKind,
+          model: binding.model,
+        };
+      }
       continue;
     }
-    // A version-1 slot id: translate it into the provider+capability it named.
-    const slot = legacySlots.find((candidate) => candidate.id === stored);
-    roles[kind] = slot === undefined ? null : `${slot.providerId}:${slot.capability}`;
+    /** v1/v2：字符串形式的 `providerId:capability` 或老 slot id。 */
+    const id = String(stored);
+    const fromLegacySlot = legacySlots.find((candidate) => candidate.id === id);
+    const [providerId, capability] = (fromLegacySlot === undefined ? id : `${fromLegacySlot.providerId}:${fromLegacySlot.capability}`).split(":");
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    if (provider === undefined) {
+      roles[kind] = null;
+      continue;
+    }
+    const wanted = (capability ?? kind) as CapabilityKind;
+    const model = fromLegacySlot?.model ?? (wanted === "agent" ? provider.models[0] : provider.capabilities[wanted]?.models[0]);
+    roles[kind] = model === undefined ? null : { providerId, capability: wanted, model };
   }
-  return { version: 2, providers, roles };
+  return { version: 3, providers, roles };
 }
 
-/** The credential name a new provider defaults to, e.g. `openai` from its label. */
-export function credentialNameFor(label: string, taken: string[] = []): string {
-  const stem =
-    label
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "provider";
+function legacyFormat(protocol: unknown): EndpointFormat {
+  if (protocol === "openai") return "chat_completions";
+  if (protocol === "elevenlabs") return "custom_endpoint";
+  if (protocol === "custom") return "custom_endpoint";
+  return "chat_completions";
+}
+
+/** 凭证名从供应商名字派生（Shadow 的 `<ROUTE>_API_KEY` 思路）；同名时加序号。 */
+export function credentialNameFor(name: string, taken: string[] = []): string {
+  const stem = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "provider";
   if (!taken.includes(stem)) return stem;
   for (let index = 2; index < 100; index += 1) {
-    const candidate = `${stem}-${index}`;
-    if (!taken.includes(candidate)) return candidate;
+    if (!taken.includes(`${stem}-${index}`)) return `${stem}-${index}`;
   }
   return `${stem}-${taken.length + 1}`;
 }
 
-/** What the UI shows for a stored key: never the value, only enough to recognise it. */
+/** 界面只显示掩码与后四位，从不回显 Key。 */
 export function maskKey(value: string | undefined): string {
   if (value === undefined || value === "") return "";
-  const tail = value.length > 4 ? value.slice(-4) : "";
-  return `••••••••${tail}`;
+  return `••••••••${value.length > 4 ? value.slice(-4) : ""}`;
 }
 
-/** A provider needs a name and an http(s) endpoint to be worth saving. */
-export function providerProblems(profile: Pick<ProviderProfile, "label" | "baseUrl">): string[] {
+/** 供应商至少要有名字和 http(s) 端点。 */
+export function providerProblems(profile: Pick<ProviderProfile, "name" | "baseUrl">): string[] {
   const problems: string[] = [];
-  if (profile.label.trim() === "") problems.push("给它起个名字");
+  if (profile.name.trim() === "") problems.push("给它起个名字");
   const url = profile.baseUrl.trim();
   if (url === "") problems.push("填 Base URL");
   else if (!/^https?:\/\//i.test(url)) problems.push("Base URL 要以 http:// 或 https:// 开头");
   return problems;
 }
 
-/** One capability's configuration, or `{enabled:false}` when the provider does not offer it. */
-export function capabilityOf(provider: ProviderProfile, kind: CapabilityKind): CapabilityOverride {
-  return provider.capabilities[kind] ?? { enabled: false };
-}
-
-/** Resolve inheritance: what this capability would actually call, and with which model. */
-export function capabilityTarget(provider: ProviderProfile, kind: CapabilityKind): CapabilityTarget {
-  const config = capabilityOf(provider, kind);
-  const model = (config.defaultModel ?? "").trim();
-  return {
-    providerId: provider.id,
-    capability: kind,
-    protocol: config.protocol ?? provider.protocol,
-    baseUrl: (config.baseUrl ?? "").trim() === "" ? provider.baseUrl.trim() : (config.baseUrl as string).trim(),
-    endpointPath: config.endpointPath,
-    model,
-    models: model === "" ? [...(config.extraModels ?? [])] : [model, ...(config.extraModels ?? [])],
-    options: config.options ?? {},
-  };
-}
-
-/** What a status badge should say about one capability. */
-export type CapabilityStatus = "off" | "ready" | "needs-model" | "needs-credential" | "needs-endpoint" | "needs-path";
-
-/**
- * Why a capability is not usable, in the order a user would fix it.
- *
- * "凭证未配置" is its own state because it needs a different sentence from "模型没填" — and because a
- * credential lives outside the settings document entirely (the bridge holds the value).
- */
-export function capabilityStatus(
-  provider: ProviderProfile,
-  kind: CapabilityKind,
-  credential: { source: "file" | "env" | "missing" } | undefined,
-): CapabilityStatus {
-  const config = capabilityOf(provider, kind);
-  if (!config.enabled) return "off";
-  if (provider.credentialRef !== null && (credential === undefined || credential.source === "missing")) {
-    return "needs-credential";
+/** 这家提供了哪项能力（没开就是 undefined）。 */
+export function capabilityOf(provider: ProviderProfile, kind: CapabilityKind): CapabilityConfig | undefined {
+  if (kind === "agent") {
+    return provider.models.length === 0
+      ? undefined
+      : { protocol: provider.endpointFormat, baseUrl: provider.baseUrl, models: provider.models };
   }
-  if ((config.defaultModel ?? "").trim() === "") return "needs-model";
-  const target = capabilityTarget(provider, kind);
-  if (target.baseUrl !== "" && !/^https?:\/\//i.test(target.baseUrl)) return "needs-endpoint";
-  if (target.protocol === "custom" && (config.endpointPath ?? "") === "") return "needs-path";
-  if (target.baseUrl === "") return "needs-endpoint";
-  return "ready";
+  return provider.capabilities[kind];
 }
 
-/** The sentence a badge shows. */
-export function capabilityStatusLabel(status: CapabilityStatus): string {
-  switch (status) {
-    case "ready":
-      return "已启用";
-    case "needs-model":
-      return "需配置模型";
-    case "needs-credential":
-      return "凭证未配置";
-    case "needs-endpoint":
-      return "需配置 Endpoint";
-    case "needs-path":
-      return "需配置路径";
-    default:
-      return "未启用";
-  }
-}
-
-/** The derived slots: one per enabled capability that names a model. */
-export function deriveSlots(settings: ModelSettings): CapabilitySlot[] {
-  const slots: CapabilitySlot[] = [];
-  for (const provider of settings.providers) {
-    for (const kind of Object.keys(CAPABILITY_DEFAULTS) as CapabilityKind[]) {
-      const config = capabilityOf(provider, kind);
-      if (!config.enabled) continue;
-      const model = (config.defaultModel ?? "").trim();
-      if (model === "") continue;
-      slots.push({ id: `${provider.id}:${kind}`, providerId: provider.id, capability: kind, model });
+/** 一项能力实际会调用的地方（协议、端点、模型列表）。 */
+export function capabilityTarget(provider: ProviderProfile, kind: CapabilityKind): CapabilityConfig {
+  const config = capabilityOf(provider, kind);
+  return (
+    config ?? {
+      protocol: provider.endpointFormat,
+      baseUrl: provider.baseUrl,
+      models: [],
     }
-  }
-  return slots;
+  );
 }
 
-/** Every model a role could pick: the capability's default first, then its extras. */
-export function capabilityModels(provider: ProviderProfile, kind: CapabilityKind): string[] {
-  return capabilityTarget(provider, kind).models;
-}
-
-/** The provider+capability a role points at, or undefined when it points at nothing usable. */
+/** 角色实际绑定到的供应商 + 能力 + 模型，任何一环缺失就返回 undefined。 */
 export function roleTarget(
   settings: ModelSettings,
   role: CapabilityKind,
 ): { provider: ProviderProfile; capability: CapabilityKind; model: string } | undefined {
-  const id = settings.roles[role];
-  if (id === null || id === undefined) return undefined;
-  const [providerId, capability] = id.split(":");
-  const provider = settings.providers.find((entry) => entry.id === providerId);
+  const binding = settings.roles[role];
+  if (binding === null) return undefined;
+  const provider = settings.providers.find((entry) => entry.id === binding.providerId);
   if (provider === undefined || provider.enabled === false) return undefined;
-  const config = capabilityOf(provider, capability as CapabilityKind);
-  if (!config.enabled) return undefined;
-  const model = (config.defaultModel ?? "").trim();
-  if (model === "") return undefined;
-  return { provider, capability: capability as CapabilityKind, model };
+  const config = capabilityOf(provider, binding.capability);
+  if (config === undefined || !config.models.includes(binding.model)) return undefined;
+  return { provider, capability: binding.capability, model: binding.model };
+}
+
+export function roleSummary(settings: ModelSettings, role: CapabilityKind): string {
+  const target = roleTarget(settings, role);
+  return target === undefined ? "未配置" : `${target.provider.name} · ${target.model}`;
 }
 
 /**
- * What the chat's model switch may offer.
- *
- * Only the main model. This is the rule the user asked for, expressed once so no future screen has to
- * remember it.
+ * 对话页模型开关能列出的东西：**所有供应商的所有对话模型**。
+ * 规则（用户要求）依旧只在这里表达一次——语音、生图之类的模型永远不会出现在这里。
  */
-export function mainModelChoices(settings: ModelSettings): Array<{ provider: ProviderProfile; slot: CapabilitySlot }> {
-  return deriveSlots(settings)
-    .filter((slot) => slot.capability === "agent")
-    .map((slot) => ({
-      provider: settings.providers.find((provider) => provider.id === slot.providerId) as ProviderProfile,
-      slot,
-    }))
-    .filter((choice) => choice.provider !== undefined);
+export function agentModelChoices(settings: ModelSettings): Array<{ provider: ProviderProfile; model: string; profile?: ModelProfile }> {
+  const choices: Array<{ provider: ProviderProfile; model: string; profile?: ModelProfile }> = [];
+  for (const provider of settings.providers) {
+    if (!provider.enabled) continue;
+    for (const model of provider.models) {
+      const profile = provider.modelProfiles[model];
+      choices.push({ provider, model, ...(profile === undefined ? {} : { profile }) });
+    }
+  }
+  return choices;
 }
 
-/** A one-line description of a role for the settings page: who serves it, or that nobody does. */
-export function roleSummary(settings: ModelSettings, role: CapabilityKind): string {
-  const target = roleTarget(settings, role);
-  return target === undefined ? "未配置" : `${target.provider.label} · ${target.model}`;
-}
-
-/** Add or replace one provider. */
 export function upsertProvider(settings: ModelSettings, profile: ProviderProfile): ModelSettings {
   const exists = settings.providers.some((entry) => entry.id === profile.id);
   return {
     ...settings,
-    providers: exists
-      ? settings.providers.map((entry) => (entry.id === profile.id ? profile : entry))
-      : [...settings.providers, profile],
+    providers: exists ? settings.providers.map((entry) => (entry.id === profile.id ? profile : entry)) : [...settings.providers, profile],
   };
 }
 
-/** Remove a provider and unplug every role that pointed at it. */
+/** 删除供应商，并解掉指向它的角色（同一处更新里做完，界面不会瞥见悬空绑定）。 */
 export function removeProvider(settings: ModelSettings, providerId: string): ModelSettings {
   const roles = { ...settings.roles };
   for (const role of Object.keys(roles) as CapabilityKind[]) {
-    if (roles[role]?.startsWith(`${providerId}:`)) roles[role] = null;
+    if (roles[role]?.providerId === providerId) roles[role] = null;
   }
   return { ...settings, providers: settings.providers.filter((entry) => entry.id !== providerId), roles };
 }
 
-/** Point a role at a capability (or at nothing). */
-export function setRole(settings: ModelSettings, role: CapabilityKind, capabilityId: string | null): ModelSettings {
-  return { ...settings, roles: { ...settings.roles, [role]: capabilityId } };
+/** 批量加入模型（「拉取模型 → 勾选 → 加入所选」走这里）。 */
+export function addModels(settings: ModelSettings, providerId: string, models: string[], kind: CapabilityKind = "agent"): ModelSettings {
+  const clean = models.map((model) => model.trim()).filter((model) => model !== "");
+  return {
+    ...settings,
+    providers: settings.providers.map((provider) => {
+      if (provider.id !== providerId) return provider;
+      if (kind === "agent") return { ...provider, models: [...new Set([...provider.models, ...clean])] };
+      const existing = provider.capabilities[kind] ?? { protocol: provider.endpointFormat, baseUrl: provider.baseUrl, models: [] };
+      return {
+        ...provider,
+        capabilities: { ...provider.capabilities, [kind]: { ...existing, models: [...new Set([...existing.models, ...clean])] } },
+      };
+    }),
+  };
 }
 
-/** Turn one capability on or off, pre-filling the defaults when it is switched on. */
-export function setCapability(
-  settings: ModelSettings,
-  providerId: string,
-  kind: CapabilityKind,
-  patch: Partial<CapabilityOverride> | null,
-): ModelSettings {
+/** 移除一个模型；如果角色正绑着它，一并解掉。 */
+export function removeModel(settings: ModelSettings, providerId: string, model: string, kind: CapabilityKind = "agent"): ModelSettings {
   const providers = settings.providers.map((provider) => {
     if (provider.id !== providerId) return provider;
-    if (patch === null) {
-      const capabilities = { ...provider.capabilities };
-      delete capabilities[kind];
-      return { ...provider, capabilities };
+    if (kind === "agent") {
+      const modelProfiles = { ...provider.modelProfiles };
+      delete modelProfiles[model];
+      return { ...provider, models: provider.models.filter((entry) => entry !== model), modelProfiles };
     }
-    const current = provider.capabilities[kind];
-    const turningOn = patch.enabled === true && current?.enabled !== true;
-    const defaults = CAPABILITY_DEFAULTS[kind];
-    return {
-      ...provider,
-      capabilities: {
-        ...provider.capabilities,
-        [kind]: {
-          ...(current ?? {}),
-          ...(turningOn
-            ? { defaultModel: current?.defaultModel ?? defaults.model, options: current?.options ?? defaults.options }
-            : {}),
-          ...patch,
-        },
-      },
-    };
+    const existing = provider.capabilities[kind];
+    if (existing === undefined) return provider;
+    return { ...provider, capabilities: { ...provider.capabilities, [kind]: { ...existing, models: existing.models.filter((entry) => entry !== model) } } };
   });
-  /**
-   * Switching a capability off unplugs the roles that pointed at it — in the same update, so no render
-   * ever sees a role pointing at a capability that just disappeared.
-   */
   const roles = { ...settings.roles };
-  if (patch === null) {
+  for (const role of Object.keys(roles) as CapabilityKind[]) {
+    const binding = roles[role];
+    if (binding !== null && binding.providerId === providerId && binding.model === model && binding.capability === kind) roles[role] = null;
+  }
+  return { ...settings, providers, roles };
+}
+
+/** 编辑一个模型的档案（上下文、模态、工具调用、推理档……）。 */
+export function setModelProfile(settings: ModelSettings, providerId: string, model: string, profile: ModelProfile | null): ModelSettings {
+  return {
+    ...settings,
+    providers: settings.providers.map((provider) => {
+      if (provider.id !== providerId) return provider;
+      const modelProfiles = { ...provider.modelProfiles };
+      if (profile === null) delete modelProfiles[model];
+      else modelProfiles[model] = profile;
+      return { ...provider, modelProfiles };
+    }),
+  };
+}
+
+/** 打开/关闭一项能力：打开时按 Shadow 的思路预填（协议默认、端点沿用、模型空）。 */
+export function setCapability(settings: ModelSettings, providerId: string, kind: CapabilityKind, config: CapabilityConfig | null): ModelSettings {
+  const providers = settings.providers.map((provider) => {
+    if (provider.id !== providerId) return provider;
+    const capabilities = { ...provider.capabilities };
+    if (config === null) delete capabilities[kind];
+    else capabilities[kind] = config;
+    return { ...provider, capabilities };
+  });
+  const roles = { ...settings.roles };
+  if (config === null) {
     for (const role of Object.keys(roles) as CapabilityKind[]) {
-      if (roles[role] === `${providerId}:${kind}`) roles[role] = null;
+      const binding = roles[role];
+      if (binding !== null && binding.providerId === providerId && binding.capability === kind) roles[role] = null;
     }
   }
   return { ...settings, providers, roles };
 }
 
-/** Point a role at a provider's capability. */
-export function assignRole(settings: ModelSettings, role: CapabilityKind, providerId: string): ModelSettings {
-  return setRole(settings, role, `${providerId}:${role}`);
+export function defaultCapabilityConfig(provider: ProviderProfile, kind: Exclude<CapabilityKind, "agent">): CapabilityConfig {
+  return {
+    protocol: kind === "voice_clone" ? "custom_endpoint" : CAPABILITY_DEFAULT_PROTOCOL[kind],
+    baseUrl: provider.baseUrl,
+    models: [],
+  };
 }
 
-/** Switch a role off without touching the provider underneath it. */
+/** 把角色指到某个供应商的某项能力（模型用那项能力列表里的第一个）。 */
+export function assignRole(settings: ModelSettings, role: CapabilityKind, providerId: string, model?: string): ModelSettings {
+  const provider = settings.providers.find((entry) => entry.id === providerId);
+  const config = provider === undefined ? undefined : capabilityOf(provider, role);
+  const chosen = model ?? config?.models[0];
+  if (chosen === undefined) return settings;
+  return { ...settings, roles: { ...settings.roles, [role]: { providerId, capability: role, model: chosen } } };
+}
+
+export function setRoleModel(settings: ModelSettings, role: CapabilityKind, model: string): ModelSettings {
+  const binding = settings.roles[role];
+  if (binding === null) return settings;
+  return { ...settings, roles: { ...settings.roles, [role]: { ...binding, model } } };
+}
+
 export function clearRole(settings: ModelSettings, role: CapabilityKind): ModelSettings {
-  return setRole(settings, role, null);
+  return { ...settings, roles: { ...settings.roles, [role]: null } };
 }

@@ -21,9 +21,9 @@ import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
 import { SettingsPage } from "./components/SettingsPage";
 import {
+  agentModelChoices,
   capabilityTarget,
   loadModelSettings,
-  mainModelChoices,
   roleTarget,
   saveModelSettings,
   type ModelSettings,
@@ -196,14 +196,15 @@ export function App() {
         tts.current = createSystemTTS();
       } else {
         const capability = capabilityTarget(target.provider, "tts");
+        /**
+         * 音色暂时由供应商默认决定：能力配置里只存协议/端点/模型（和 Shadow 的能力形状一致），
+         * 音色选择会跟着「通话与声音」页一起做——那页要列出这家自己的音色。
+         */
         tts.current = createBridgeTTS({
           baseUrl: capability.baseUrl,
           credentialRef: target.provider.credentialRef,
           protocol: capability.protocol,
           model: target.model,
-          ...(capability.endpointPath === undefined ? {} : { endpointPath: capability.endpointPath }),
-          ...(capability.options.voice === undefined ? {} : { voice: capability.options.voice }),
-          ...(capability.options.format === undefined ? {} : { format: capability.options.format }),
         });
       }
       ttsKey.current = key;
@@ -275,10 +276,10 @@ export function App() {
   }, [modelSettings]);
   const configuredMainModels = useMemo<AgentModel[]>(
     () =>
-      mainModelChoices(modelSettings).map(({ provider, slot }) => ({
-        id: `custom:${provider.id}`,
-        displayName: `${provider.label} · ${slot.model}`,
-        description: "已配好；Codex 侧通道待打通（还没接上）",
+      agentModelChoices(modelSettings).map(({ provider, model, profile }) => ({
+        id: `custom:${provider.id}:${model}`,
+        displayName: `${provider.name} · ${model}`,
+        description: profile === undefined ? "设置里配好的对话模型" : "设置里配好的对话模型（有模型档）",
         isDefault: false,
         supportedReasoningEfforts: [],
       })),
@@ -662,18 +663,21 @@ export function App() {
         ...(() => {
           const custom =
             modelId?.startsWith("custom:") === true
-              ? mainModelChoices(modelSettings).find((choice) => choice.provider.id === modelId.slice("custom:".length))
+              ? (() => {
+                  const [, providerId, model] = modelId.split(":");
+                  return agentModelChoices(modelSettings).find((choice) => choice.provider.id === providerId && choice.model === model);
+                })()
               : undefined;
           if (custom === undefined) return { model: modelId, mentions };
           return {
-            model: custom.slot.model,
+            model: custom.model,
             mentions,
             provider: {
               id: custom.provider.id,
-              label: custom.provider.label,
+              label: custom.provider.name,
               baseUrl: custom.provider.baseUrl,
               credentialRef: custom.provider.credentialRef,
-              protocol: custom.provider.protocol,
+              endpointFormat: custom.provider.endpointFormat,
             },
           };
         })(),

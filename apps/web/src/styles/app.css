@@ -2855,3 +2855,166 @@
     transform: rotate(360deg);
   }
 }
+
+/* 预设已把端点填好时，这些字段收起来（点「自定义」或编辑已有供应商时才展开）。 */
+.sr-provider-form[data-hidden] {
+  display: none;
+}
+
+/* ── 供应商编辑页：页签、模型管理、模型档（照 Shadow 的三页签与模型列表） ── */
+.sr-settings-subtabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 0.5px solid var(--sr-border-l3);
+}
+
+.sr-settings-subtab {
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sr-settings-subtab:hover {
+  color: var(--sr-label-primary);
+}
+
+.sr-settings-subtab[data-active] {
+  border-bottom-color: var(--sr-accent);
+  color: var(--sr-label-primary);
+}
+
+.sr-model-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sr-model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+}
+
+.sr-model-chip[data-on] {
+  border-color: var(--sr-accent);
+}
+
+.sr-model-chip-name {
+  border: none;
+  background: transparent;
+  color: var(--sr-label-primary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.sr-model-chip-x {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sr-model-chip-x:hover {
+  background: var(--sr-hover);
+  color: var(--sr-danger, #f87171);
+}
+
+.sr-model-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sr-model-actions .sr-key-row {
+  flex: 1;
+  min-width: 220px;
+}
+
+.sr-model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 0.5px dashed var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+}
+
+.sr-model-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sr-model-picker-head .sr-input {
+  flex: 1;
+}
+
+.sr-model-picker-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 2px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.sr-model-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: var(--sr-radius-xs);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sr-model-picker-row:hover {
+  background: var(--sr-hover);
+}
+
+.sr-model-picker-foot {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sr-model-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 0.5px solid var(--sr-accent);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+}
+
+.sr-model-profile-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.sr-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}

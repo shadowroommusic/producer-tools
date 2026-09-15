@@ -115,7 +115,7 @@ export async function sendTurn(
     effort?: string;
     mentions?: Mention[];
     /** Run this turn on a provider the user configured in Settings instead of the built-in one. */
-    provider?: { id: string; label: string; baseUrl: string; credentialRef: string | null; protocol: string };
+    provider?: { id: string; label: string; baseUrl: string; credentialRef: string | null; endpointFormat: string };
   } = {},
 ): Promise<void> {
   const response = await fetch("/api/agent/send", {
