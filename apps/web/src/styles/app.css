@@ -3018,3 +3018,12 @@
   font-size: 12px;
   cursor: pointer;
 }
+
+/*
+  The composer's menus open upward. Inside the dock they used to slide under the dock header
+  (z-index 8 in conversation.css, but the dock's own stacking put the header on top), so the model
+  list was visible and unclickable — measured while switching to a configured provider.
+*/
+.sr-dock-composer .sr-menu {
+  z-index: 60;
+}
