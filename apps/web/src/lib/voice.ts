@@ -43,17 +43,17 @@ function recognitionConstructor(): RecognitionConstructor | undefined {
   return scope.SpeechRecognition ?? scope.webkitSpeechRecognition;
 }
 
+/**
+ * Can this environment capture the microphone at all?
+ *
+ * Deliberately *not* a question about `SpeechRecognition`: the desktop build has no browser recogniser
+ * (see DECISIONS ADR-018) but very much has a microphone, and a call button that hides itself there
+ * would be a lie. What recognition is available is reported inside the call, as a notice.
+ */
 export function voiceInputSupported(): boolean {
-  return recognitionConstructor() !== undefined;
+  return typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia !== undefined;
 }
 
-export function voiceOutputSupported(): boolean {
-  return typeof window.speechSynthesis !== "undefined";
-}
-
-export type VoiceSession = {
-  stop: () => void;
-};
 
 /**
  * Endpointing for the voice call: the call listens, the *user* decides when the turn is over by
@@ -249,7 +249,14 @@ export async function startCapture(): Promise<VoiceCapture | null> {
   };
 }
 
-/** Upload a recording through the agent bridge and get back the path the agent can read. */
+/**
+ * Upload a recording through the agent bridge and get back the path the agent can read.
+ *
+ * Same endpoint as a studio take (`/api/agent/record`), on purpose: there used to be two upload paths
+ * with different guarantees — this one wrote whatever the browser produced, the studio's one always
+ * converted to PCM WAV — so the agent could receive a webm from a voice turn and a wav from a take,
+ * for no reason a user could see.
+ */
 export async function saveRecording(blob: Blob, label: string): Promise<string | null> {
   const buffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
@@ -259,10 +266,10 @@ export async function saveRecording(blob: Blob, label: string): Promise<string |
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const response = await fetch("/api/agent/audio", {
+  const response = await fetch("/api/agent/record", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: `${label}-${stamp}.wav`, data: btoa(binary) }),
+    body: JSON.stringify({ name: `${label}-${stamp}`, extension: "wav", data: btoa(binary) }),
   });
   if (!response.ok) return null;
   const payload = (await response.json()) as { path?: string };

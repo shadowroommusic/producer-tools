@@ -692,23 +692,6 @@ const http = createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/agent/audio") {
-      const body = await readJsonBody(request, 64 * 1024 * 1024);
-      const data = typeof body.data === "string" ? body.data : "";
-      if (data === "") {
-        json(response, 400, { error: "missing base64 `data`" });
-        return;
-      }
-      const rawName = typeof body.name === "string" && body.name !== "" ? body.name : "recording.wav";
-      const safeName = rawName.replace(/[^A-Za-z0-9._-]/g, "_");
-      mkdirSync(RECORDINGS_DIR, { recursive: true });
-      const target = join(RECORDINGS_DIR, safeName);
-      writeFileSync(target, Buffer.from(data, "base64"));
-      console.log(`[agent] audio saved: ${target}`);
-      json(response, 200, { path: target, bytes: Buffer.byteLength(data, "base64") });
-      return;
-    }
-
     /**
      * Which credentials exist — names, sources and masks. Never a value.
      */
@@ -907,8 +890,22 @@ const http = createServer(async (request, response) => {
       mkdirSync(RECORDINGS_DIR, { recursive: true });
       const targetName = uniqueName(RECORDINGS_DIR, `${base}.wav`);
       const target = join(RECORDINGS_DIR, targetName);
+      const uploaded = Buffer.from(data, "base64");
+      /**
+       * Already a PCM WAV (the voice call encodes its own)? Then there is nothing to convert — copy it
+       * and save the ffmpeg round trip. Everything else (webm/opus from MediaRecorder, mp4 from
+       * Safari) goes through the converter.
+       */
+      const isWav = uploaded.length > 44 && uploaded.toString("ascii", 0, 4) === "RIFF" && uploaded.toString("ascii", 8, 12) === "WAVE";
+      if (isWav) {
+        writeFileSync(target, uploaded);
+        const fastDuration = wavDurationMs(uploaded);
+        console.log(`[agent] recorded ${targetName} (${(fastDuration / 1000).toFixed(2)}s, already wav)`);
+        json(response, 200, { path: target, name: targetName, duration_ms: fastDuration, bytes: uploaded.length });
+        return;
+      }
       const temp = join(RECORDINGS_DIR, `.take-${stamp}${rawExtension === "" ? "" : `.${rawExtension}`}`);
-      writeFileSync(temp, Buffer.from(data, "base64"));
+      writeFileSync(temp, uploaded);
       try {
         const converted = spawnSync(
           ffmpeg,

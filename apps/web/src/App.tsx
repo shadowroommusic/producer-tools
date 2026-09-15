@@ -9,6 +9,7 @@
  * same place the Codex core will write when it is wired.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Composer } from "./components/Composer";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
@@ -95,9 +96,6 @@ export function App() {
   const [home, setHome] = useState("");
   const [workspaces, setWorkspaces] = useState("");
   const [bridge, setBridge] = useState<Bridge>("connecting");
-  const [workspace, setWorkspace] = useState<WorkspaceId>(
-    () => (window.localStorage.getItem("shadowroom.workspace") as WorkspaceId | null) ?? "workbench",
-  );
   const [activePlugin, setActivePlugin] = useState("set-planner");
   /**
    * The dock is the conversation next to the work. It stays open on the work pages (工作台, Studio,
@@ -127,6 +125,27 @@ export function App() {
         | "settings"
         | null) ?? "workbench",
   );
+  /**
+   * Where the sidebar thinks you are is **derived**, not stored.
+   *
+   * There used to be two states for one question — `workspace` and `mainView` — and they could
+   * disagree (leaving Studio kept the sidebar on Studio while the page showed the 工作台). Anything
+   * that can disagree eventually does, so there is one state (`mainView`) and this reads it.
+   */
+  const [lastWorkspaceView, setLastWorkspaceView] = useState<WorkspaceId>("workbench");
+  const workspace: WorkspaceId =
+    mainView === "studio"
+      ? "studio"
+      : mainView === "settings"
+        ? "settings"
+        : mainView === "plugins" || mainView === "plugin"
+          ? "workbench"
+          : mainView === "workbench"
+            ? "workbench"
+            : lastWorkspaceView;
+  useEffect(() => {
+    if (mainView === "studio" || mainView === "settings" || mainView === "workbench") setLastWorkspaceView(mainView);
+  }, [mainView]);
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
   /**
@@ -241,9 +260,8 @@ export function App() {
   // Come back to the same page after a reload.
   useEffect(() => {
     window.localStorage.setItem("shadowroom.view", mainView);
-    window.localStorage.setItem("shadowroom.workspace", workspace);
     window.localStorage.setItem("shadowroom.dock", dockOpen ? "open" : "closed");
-  }, [dockOpen, mainView, workspace]);
+  }, [dockOpen, mainView]);
 
   // Reopen whatever project was open last, so a reload lands where the work was.
   useEffect(() => {
@@ -1000,6 +1018,28 @@ export function App() {
   }));
 
   /** One composer, two homes (the main column or the dock); the dock gets a shorter placeholder. */
+  /**
+   * The conversation, assembled once.
+   *
+   * It used to be written twice — once for the centre page and once inside the dock — and the two had
+   * already drifted (the dock gave its composer a placeholder the centre view did not). A transcript
+   * that can differ depending on where it is shown is exactly the kind of thing that makes an app feel
+   * arbitrary, so there is one component and `variant` says where it is being drawn.
+   */
+  const conversationPane = (options: { variant: "page" | "dock"; composer: ReactNode }) => (
+    <div className={options.variant === "dock" ? "sr-conversation-pane sr-conversation-pane--dock" : "sr-conversation-pane"}>
+      <div className="sr-transcript sr-scroll">
+        <Transcript
+          messages={session?.messages ?? []}
+          calls={session?.calls ?? []}
+          running={running}
+          quiet={mode === "极简"}
+        />
+      </div>
+      <div className={options.variant === "dock" ? "sr-dock-composer" : "sr-page-composer"}>{options.composer}</div>
+    </div>
+  );
+
   const composerFor = (placeholder?: string) => (
     <>
         {pendingForSession.map((approval) => (
@@ -1998,7 +2038,6 @@ export function App() {
           activeWorkspace={workspace}
           showPlugins={mainView === "plugins"}
           onSelectWorkspace={(next) => {
-            setWorkspace(next);
             // The work pages keep the conversation beside them; the conversation page is the
             // conversation, so the dock folds away there.
             setMainView(next === "studio" ? "studio" : next === "settings" ? "settings" : "workbench");
@@ -2032,7 +2071,6 @@ export function App() {
             onOpenProject={(id) => {
               setOpenProjectId(id);
               rememberOpenProject(id);
-              setWorkspace("studio");
               setMainView("studio");
             }}
             onOpenSession={(id) => {
@@ -2046,7 +2084,6 @@ export function App() {
               setProjects((current) => [created, ...current]);
               setOpenProjectId(created.id);
               rememberOpenProject(created.id);
-              setWorkspace("studio");
               setMainView("studio");
             }}
           />
@@ -2150,19 +2187,7 @@ export function App() {
       }
       dock={
         <DockPanel
-          chat={
-            <>
-              <div className="sr-transcript sr-scroll">
-                <Transcript
-                  messages={session?.messages ?? []}
-                  calls={session?.calls ?? []}
-                  running={running}
-                  quiet={mode === "极简"}
-                />
-              </div>
-              <div className="sr-dock-composer">{composerFor("和智能体说点什么…")}</div>
-            </>
-          }
+          chat={conversationPane({ variant: "dock", composer: composerFor("和智能体说点什么…") })}
           onClose={() => setDockOpen(false)}
         />
       }
