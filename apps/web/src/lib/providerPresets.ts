@@ -1,122 +1,209 @@
 /**
- * Provider presets: pick a service instead of typing its endpoint.
+ * Provider presets —— 从用户自己的 Shadow 全量搬过来的目录。
  *
- * Adding a provider used to ask for five fields (name, Base URL, protocol, credential name, key) and then
- * for an endpoint per capability. That is the app asking the user to do its job — 一家就是「一个网址 +
- * 一把 Key」，模型和能力都可以随后自动拉。
+ * 出处：`~/Desktop/shadow/src/shared/model-provider-preset-catalog-{core,extended}.ts`（同一个作者的项目，
+ * 见 DECISIONS ADR-015 补充）。每一行都带 `source`，将来某个端点了、模型换了，能顺着它回去核对。
  *
- * Where the data comes from: the rows below are taken from the user's own Shadow app
- * (`~/Desktop/shadow/src/shared/model-provider-preset-catalog-{core,extended}.ts`) — same author, so
- * copying the values is sanctioned (DECISIONS ADR-015 addendum). Two rules still apply:
- *
- * 1. `baseUrl` and model ids are **facts about public APIs**, and they go stale — each row says where it
- *    came from so the next reader can re-check it instead of trusting it.
- * 2. Anything not verified here is marked `needsVerification: true` and the UI says so, rather than
- *    presenting a guess as a preset (`AGENTS.md`: 不猜).
+ * 与 Shadow 的两点差别，都写在数据里而不是藏着：
+ * 1. **没有视频**：video 能力字段在生成时就丢掉了（用户要求）。
+ * 2. `kind !== "http"` 的行（订阅 / CLI 委托那一类）标记 `needsVerification`，界面上会写明原因——
+ *    我们的 bridge 现在只会说 HTTP。
  */
+
+export type ProviderPresetCapability = {
+  /** Shadow 里这一项能力用的协议名。 */
+  protocol: string;
+  baseUrl: string;
+  models: string[];
+};
 
 export type ProviderPreset = {
   id: string;
   label: string;
-  /** The chat endpoint. Capabilities inherit it unless they override it. */
   baseUrl: string;
-  /** Models worth offering as a starting point; 「拉取模型」 replaces them with the real list. */
   models: string[];
-  /** Where the row came from, so a stale value can be traced. */
+  /** 这家预置的非对话能力（生图 / 语音识别 / 语音合成 / 音乐），端点与模型都来自 Shadow。 */
+  capabilities?: Partial<Record<"image" | "speech" | "textToSpeech" | "music", ProviderPresetCapability>>;
   source: string;
-  /** True when the endpoint still has to be confirmed against the provider's docs. */
+  /** 端点或登录方式仍需核实 / 暂不支持时置 true，界面会说明。 */
   needsVerification?: boolean;
+  /** 为什么需要核实（有就显示给用户）。 */
+  note?: string;
 };
 
 export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
   {
-    id: "minimax",
-    label: "MiniMax",
-    // Shadow ships MiniMax on its Anthropic-compatible route; the OpenAI-compatible one has to be
-    // confirmed before we offer it (the reported hosts differ: api.minimax.cn / api.minimaxi.com).
-    baseUrl: "https://api.minimaxi.com/anthropic",
-    models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1"],
-    source: "shadow · model-provider-preset-catalog-extended.ts (id: minimax)",
+    id: "litellm",
+    label: "LiteLLM",
+    baseUrl: "http://localhost:4000",
+    models: [],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "longcat",
+    label: "LongCat",
+    baseUrl: "https://api.longcat.chat/openai",
+    models: ["LongCat-2.0-Preview"],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "claude-subscription",
+    label: "Claude (Pro/Max 订阅)",
+    baseUrl: "https://api.anthropic.com",
+    models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
     needsVerification: true,
-  },
-  {
-    id: "moonshot-cn",
-    label: "Moonshot （国内）",
-    baseUrl: "https://api.moonshot.cn/v1",
-    models: [],
-    source: "shadow · model-provider-preset-catalog-core.ts (id: moonshot-cn)",
-  },
-  {
-    id: "moonshot-global",
-    label: "Moonshot （国际）",
-    baseUrl: "https://api.moonshot.ai/v1",
-    models: [],
-    source: "shadow · model-provider-preset-catalog-core.ts (id: moonshot-global)",
-  },
-  {
-    id: "aliyun",
-    label: "Aliyun DashScope",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    models: ["qwen-max", "qwen-plus", "qwen-flash", "qwen3-coder-plus", "qwq-plus", "qwen-vl-max"],
-    source: "shadow · model-provider-preset-catalog-extended.ts (id: aliyun)",
-  },
-  {
-    id: "volcengine",
-    label: "Volcano Ark（火山方舟）",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-    models: [],
-    source: "shadow · model-provider-preset-catalog-core.ts (id: volcengine)",
+    note: "订阅 / CLI 登录方式（agent-sdk）暂不支持：bridge 现在只说 HTTP",
   },
   {
     id: "zhipu-coding-plan",
-    label: "Zhipu（智谱）",
+    label: "Zhipu Coding Plan",
     baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
     models: [],
-    source: "shadow · model-provider-preset-catalog-core.ts (id: zhipu-coding-plan)",
-    needsVerification: true,
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "zai-coding-plan",
+    label: "Z.ai Coding Plan",
+    baseUrl: "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    models: [],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
   },
   {
     id: "kimi-code",
     label: "Kimi Code",
     baseUrl: "https://api.kimi.com/coding/v1",
     models: ["k3", "kimi-for-coding", "kimi-for-coding-highspeed"],
-    source: "shadow · model-provider-preset-catalog-core.ts (id: kimi-code)",
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "volcengine",
+    label: "Volcano Ark API",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    models: [],
+    capabilities: {
+      image: { protocol: "volcengine-ark-image", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", models: [] },
+    },
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "volcengine-agent-plan",
+    label: "Volcano Ark Agent Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+    models: [],
+    capabilities: {
+      image: { protocol: "volcengine-ark-image", baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3", models: ["doubao-seedream-5.0-lite"] },
+    },
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "volcengine-coding-plan",
+    label: "Volcano Ark Coding Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+    models: ["doubao-seed-1-6-250615", "doubao-seed-1-6-flash-250828"],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "opencode-go",
+    label: "OpenCode Go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    models: ["grok-4.5", "glm-5.2", "glm-5.1", "glm-5", "kimi-k2.7", "kimi-k2.7-code", "kimi-k2.6", "deepseek-v4-pro", "deepseek-v4-flash", "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni", "minimax-m3", "minimax-m2.7", "minimax-m2.5", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus"],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "zenmux",
+    label: "ZenMux API",
+    baseUrl: "https://zenmux.ai/api/v1",
+    models: [],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "moonshot-cn",
+    label: "Moonshot CN",
+    baseUrl: "https://api.moonshot.cn/v1",
+    models: [],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "moonshot-global",
+    label: "Moonshot Global",
+    baseUrl: "https://api.moonshot.ai/v1",
+    models: [],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
   },
   {
     id: "xiaomi",
-    label: "Xiaomi MiMo",
+    label: "Xiaomi",
     baseUrl: "https://api.xiaomimimo.com/v1",
     models: ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni"],
-    source: "shadow · model-provider-preset-catalog-extended.ts (id: xiaomi)",
+    capabilities: {
+      speech: { protocol: "mimo-asr", baseUrl: "https://api.xiaomimimo.com/v1", models: ["mimo-v2.5-asr"] },
+      textToSpeech: { protocol: "mimo-tts", baseUrl: "https://api.xiaomimimo.com/v1", models: ["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"] },
+    },
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "minimax",
+    label: "MiniMax",
+    baseUrl: "https://api.minimaxi.com/anthropic",
+    models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2"],
+    capabilities: {
+      image: { protocol: "minimax-image", baseUrl: "https://api.minimaxi.com", models: ["image-01", "image-01-live"] },
+      textToSpeech: { protocol: "minimax-t2a", baseUrl: "https://api.minimax.io", models: ["speech-2.8-hd", "speech-2.8-turbo"] },
+      music: { protocol: "minimax-music", baseUrl: "https://api.minimax.io", models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"] },
+    },
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+  },
+  {
+    id: "aliyun",
+    label: "Aliyun",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    models: ["qwen-max", "qwen-plus", "qwen-flash", "qwen3-coder-plus", "qwq-plus", "qwen-vl-max", "qwen3-vl-plus"],
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
   },
   {
     id: "tencentcloud",
-    label: "Tencent Hunyuan",
+    label: "Tencent Cloud",
     baseUrl: "https://api.hunyuan.cloud.tencent.com/v1",
     models: ["hunyuan-turbos-latest", "hunyuan-t1-latest", "hunyuan-lite"],
-    source: "shadow · model-provider-preset-catalog-extended.ts (id: tencentcloud)",
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
   },
   {
-    id: "litellm",
-    label: "LiteLLM（本地网关）",
-    baseUrl: "http://localhost:4000",
+    id: "vercel-ai-gateway",
+    label: "Vercel AI Gateway",
+    baseUrl: "https://ai-gateway.vercel.sh/v1",
     models: [],
-    source: "shadow · model-provider-preset-catalog-core.ts (id: litellm)",
+    source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
   },
 ];
 
-/** The preset a user picked, or undefined for a custom (hand-typed) endpoint. */
+/** 预设按 id 取；自定义端点返回 undefined。 */
 export function presetById(id: string): ProviderPreset | undefined {
   return PROVIDER_PRESETS.find((preset) => preset.id === id);
 }
 
-/**
- * What the add form shows once a preset is chosen: the endpoint (read-only, as a fact) and the default
- * models, so the user can see what they are about to get without opening anything.
- */
+/** 一行摘要：端点是事实，模型与能力数量是承诺，待核实的直说。 */
 export function describePreset(preset: ProviderPreset): string {
   const parts = [preset.baseUrl];
   if (preset.models.length > 0) parts.push(`${preset.models.length} 个模型`);
-  if (preset.needsVerification === true) parts.push("端点待核实");
+  if (preset.capabilities !== undefined) parts.push(`${Object.keys(preset.capabilities).length} 项能力`);
+  if (preset.needsVerification === true) parts.push(preset.note ?? "端点待核实");
   return parts.join(" · ");
 }
+
+
+/** Shadow 的协议名 → 我们的线格式。 */
+export function presetProtocol(protocol: string): "chat_completions" | "responses" | "messages" | "custom_endpoint" {
+  if (protocol.includes("anthropic") || protocol === "messages") return "messages";
+  if (protocol.includes("responses")) return "responses";
+  if (protocol.includes("openai") || protocol.includes("chat")) return "chat_completions";
+  return "custom_endpoint";
+}
+
+/** 预设里那四项能力对应我们的哪个角色（speech 是语音识别）。 */
+export const PRESET_CAPABILITY_KIND = {
+  image: "image",
+  speech: "stt",
+  textToSpeech: "tts",
+  music: "music",
+} as const;

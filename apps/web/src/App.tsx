@@ -200,11 +200,13 @@ export function App() {
          * 音色暂时由供应商默认决定：能力配置里只存协议/端点/模型（和 Shadow 的能力形状一致），
          * 音色选择会跟着「通话与声音」页一起做——那页要列出这家自己的音色。
          */
+        const voice = window.localStorage.getItem("shadowroom.tts.voice") ?? "";
         tts.current = createBridgeTTS({
           baseUrl: capability.baseUrl,
           credentialRef: target.provider.credentialRef,
           protocol: capability.protocol,
           model: target.model,
+          ...(voice === "" ? {} : { voice }),
         });
       }
       ttsKey.current = key;

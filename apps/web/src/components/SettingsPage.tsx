@@ -52,7 +52,7 @@ import {
   type ModelProfile,
   type ReasoningCapability,
 } from "../lib/providerModel";
-import { PROVIDER_PRESETS, presetById } from "../lib/providerPresets";
+import { PRESET_CAPABILITY_KIND, PROVIDER_PRESETS, presetById, presetProtocol } from "../lib/providerPresets";
 import { deleteCredential, listCredentials, listProviderModels, saveCredential, testRole, type CredentialInfo } from "../lib/providerApi";
 import { createSystemTTS, type VoiceInfo } from "../lib/tts";
 
@@ -115,6 +115,9 @@ export function SettingsPage({
   const [tests, setTests] = useState<Record<string, { ok: boolean; detail: string; ms?: number } | "running">>({});
   const [voices, setVoices] = useState<VoiceInfo[]>([]);
   const [voiceId, setVoiceId] = useState(() => window.localStorage.getItem("shadowroom.voice") ?? "");
+  /** 供应商 TTS 的音色 id（存 localStorage，通话朗读时读同一个键）。 */
+  const [providerVoice, setProviderVoice] = useState(() => window.localStorage.getItem("shadowroom.tts.voice") ?? "");
+  const [previewing, setPreviewing] = useState(false);
 
   const refreshCredentials = useCallback(async () => {
     try {
@@ -406,6 +409,7 @@ export function SettingsPage({
                 配了「语音合成 · TTS」供应商时，通话用它的音色（合成走 bridge，播放走 WebAudio）；
                 没有配就回落到系统音色——那些听起来像机器人，属于兜底而不是推荐。
               </p>
+              {roleTarget(settings, "tts") === undefined && (
               <div className="sr-voice-picker">
                 <select
                   className="sr-input"
@@ -439,14 +443,75 @@ export function SettingsPage({
                 </button>
                 {voices.length === 0 && <span className="sr-role-empty sr-mono">这台机器没有系统语音，先用默认</span>}
               </div>
+              )}
               {(() => {
                 const tts = roleTarget(settings, "tts");
+                if (tts === undefined) {
+                  return <p className="sr-role-test sr-mono">当前：系统音色（这就是听起来像机器人的原因——配一个 TTS 供应商即可换成它的声音）</p>;
+                }
+                const target = capabilityTarget(tts.provider, "tts");
                 return (
-                  <p className="sr-role-test sr-mono" data-ok={tts !== undefined || undefined}>
-                    {tts === undefined
-                      ? "当前：系统音色（配置一个 TTS 供应商会好很多）"
-                      : `当前：${tts.provider.name} · ${tts.model}`}
-                  </p>
+                  <>
+                    <p className="sr-role-test sr-mono" data-ok={true}>
+                      当前：{tts.provider.name} · {tts.model}
+                    </p>
+                    <label className="sr-field sr-field--wide">
+                      <span className="sr-field-label sr-mono">音色 id（这家 TTS 的音色名，例如 MiniMax 的 voice_id）</span>
+                      <div className="sr-key-row">
+                        <input
+                          className="sr-input"
+                          spellCheck={false}
+                          value={providerVoice}
+                          placeholder="留空用这家默认音色"
+                          onChange={(event) => {
+                            setProviderVoice(event.target.value);
+                            if (event.target.value === "") window.localStorage.removeItem("shadowroom.tts.voice");
+                            else window.localStorage.setItem("shadowroom.tts.voice", event.target.value);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="sr-btn sr-btn--accent"
+                          disabled={previewing}
+                          onClick={async () => {
+                            setPreviewing(true);
+                            try {
+                              const response = await fetch("/api/agent/providers/tts", {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: JSON.stringify({
+                                  text: "你好，我是 Shadow，这段声音以后就是我在通话里的样子。",
+                                  baseUrl: target.baseUrl,
+                                  credentialRef: tts.provider.credentialRef,
+                                  protocol: target.protocol,
+                                  model: tts.model,
+                                  ...(providerVoice === "" ? {} : { voice: providerVoice }),
+                                }),
+                              });
+                              const payload = (await response.json()) as { audio?: string; error?: string };
+                              if (payload.audio === undefined) throw new Error(payload.error ?? "没有音频返回");
+                              const binary = atob(payload.audio);
+                              const bytes = new Uint8Array(binary.length);
+                              for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+                              const context = new AudioContext();
+                              const buffer = await context.decodeAudioData(bytes.buffer);
+                              const source = context.createBufferSource();
+                              source.buffer = buffer;
+                              source.connect(context.destination);
+                              source.start();
+                              setNotice(`试听：${tts.provider.name} 返回 ${Math.round(buffer.duration * 10) / 10} 秒音频`);
+                            } catch (cause) {
+                              setNotice(`试听失败：${cause instanceof Error ? cause.message : String(cause)}`);
+                            } finally {
+                              setPreviewing(false);
+                            }
+                          }}
+                        >
+                          {previewing ? "合成中…" : "试听"}
+                        </button>
+                      </div>
+                    </label>
+                  </>
                 );
               })()}
             </>
@@ -508,12 +573,28 @@ function ProviderEditor({
     const preset = presetById(id);
     if (preset === undefined) return;
     setCustom(false);
+    /**
+     * 能力也一起预填：Shadow 的目录里 MiniMax / Xiaomi / Volcengine 这些家写了各自的 TTS、生图、
+     * 音乐端点与模型，选它们的时候不该让用户再填一遍。协议名从 Shadow 的说法翻成我们的线格式。
+     */
+    const capabilities: ProviderProfile["capabilities"] = {};
+    for (const [key, config] of Object.entries(preset.capabilities ?? {})) {
+      const kind = PRESET_CAPABILITY_KIND[key as keyof typeof PRESET_CAPABILITY_KIND];
+      if (kind === undefined) continue;
+      capabilities[kind] = {
+        protocol: presetProtocol(config.protocol),
+        baseUrl: config.baseUrl === "" ? preset.baseUrl : config.baseUrl,
+        models: config.models,
+      };
+    }
     onChange({
       ...provider,
       name: preset.label,
       baseUrl: preset.baseUrl,
       presetSource: preset.id,
       models: preset.models,
+      capabilities,
+      ...(preset.note === undefined ? {} : {}),
     });
   };
 
@@ -617,6 +698,9 @@ function ProviderEditor({
             </label>
           </div>
           {problems.length > 0 && <p className="sr-settings-problem">{problems.join(" · ")}</p>}
+          {presetId !== "" && presetId !== "__custom" && presetById(presetId)?.note !== undefined && (
+            <p className="sr-role-test sr-mono">{presetById(presetId)?.note}</p>
+          )}
           {provider.credentialRef !== null && (
             <p className="sr-role-test sr-mono" data-ok={credential !== undefined && credential.source !== "missing" || undefined}>
               {credential === undefined || credential.source === "missing"
@@ -639,7 +723,8 @@ function ProviderEditor({
           onRemove={(model) => onRemoveModel(model, "agent")}
           onEdit={(model) => setEditingModel({ kind: "agent", model })}
           onTestModel={(model) => onTest("agent", model)}
-          test={editingModel === null ? undefined : tests[`${provider.id}:agent:${editingModel.model}`]}
+          tests={tests}
+          editingModel={editingModel?.kind === "agent" ? editingModel.model : null}
         />
       )}
 
@@ -708,7 +793,8 @@ function ProviderEditor({
                       onRemove={(model) => onRemoveModel(model, kind)}
                       onEdit={(model) => setEditingModel({ kind, model })}
                       onTestModel={(model) => onTest(kind, model)}
-                      test={editingModel !== null && editingModel.kind === kind ? tests[`${provider.id}:${kind}:${editingModel.model}`] : undefined}
+                      tests={tests}
+                      editingModel={editingModel?.kind === kind ? editingModel.model : null}
                     />
                     <p className="sr-capability-target sr-mono">实际调用：{target.protocol} · {target.baseUrl || "（没填 Endpoint）"}</p>
                   </div>
@@ -722,6 +808,7 @@ function ProviderEditor({
       {editingModel !== null && editingModel.kind === "agent" && (
         <ModelProfileEditor
           model={editingModel.model}
+          provider={provider}
           profile={provider.modelProfiles[editingModel.model]}
           onChange={(next) => onProfile(editingModel.model, next)}
           onClose={() => setEditingModel(null)}
@@ -745,7 +832,8 @@ function ModelManager({
   onRemove,
   onEdit,
   onTestModel,
-  test,
+  tests,
+  editingModel: editingModelProp,
 }: {
   provider: ProviderProfile;
   kind: CapabilityKind;
@@ -755,13 +843,18 @@ function ModelManager({
   onRemove: (model: string) => void;
   onEdit: (model: string) => void;
   onTestModel: (model: string) => void;
-  test?: { ok: boolean; detail: string; ms?: number } | "running";
+  /** All test results, keyed `provider:kind:model` — the manager picks its own. */
+  tests: Record<string, { ok: boolean; detail: string; ms?: number } | "running">;
+  /** Set while a single model is being edited, so 测试 means "this one". */
+  editingModel?: string | null;
 }) {
   const [fetching, setFetching] = useState(false);
   const [fetched, setFetched] = useState<{ list: string[]; error?: string } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [manual, setManual] = useState("");
+  /** 刚测过的模型：结果要就地显示，不能等某个「正在编辑」的状态配合。 */
+  const [lastTested, setLastTested] = useState<string | null>(null);
 
   const target = capabilityTarget(provider, kind);
   const fetchModels = useCallback(async () => {
@@ -790,6 +883,14 @@ function ModelManager({
     const needle = query.trim().toLowerCase();
     return needle === "" ? list : list.filter((model) => model.toLowerCase().includes(needle));
   }, [fetched, query]);
+
+  /**
+   * Which model the 「测试」button will test, and where its result comes from: the model being edited
+   * (the 模型 tab shows one at a time) or the first of the list, falling back to the last one tested.
+   */
+  const editingModel = editingModelProp ?? null;
+  const testTarget = editingModel ?? lastTested ?? models[0] ?? "";
+  const shown = testTarget === "" ? undefined : tests[`${provider.id}:${kind}:${testTarget}`];
 
   return (
     <div className="sr-model-manager">
@@ -826,16 +927,29 @@ function ModelManager({
           </button>
         </div>
         {models.length > 0 && (
-          <button type="button" className="sr-btn" disabled={test === "running"} onClick={() => onTestModel(models[0])}>
-            {test === "running" ? "测试中…" : "测试"}
+          <button
+            type="button"
+            className="sr-btn"
+            disabled={shown === "running"}
+            onClick={() => {
+              /**
+               * Test the model the user is looking at: the one being edited in the 模型 tab, otherwise
+               * the first of the list. The result is read back from `tests` by this same key.
+               */
+              const target = editingModel ?? models[0];
+              setLastTested(target);
+              onTestModel(target);
+            }}
+          >
+            {shown === "running" ? "测试中…" : "测试"}
           </button>
         )}
       </div>
 
-      {test !== undefined && test !== "running" && (
-        <p className="sr-role-test sr-mono" data-ok={test.ok || undefined}>
-          {test.ok ? "✓" : "✗"} {test.detail}
-          {test.ms === undefined ? "" : ` · ${test.ms} ms`}
+      {shown !== undefined && shown !== "running" && (
+        <p className="sr-role-test sr-mono" data-ok={shown.ok || undefined}>
+          {shown.ok ? "✓" : "✗"} {shown.detail}
+          {shown.ms === undefined ? "" : ` · ${shown.ms} ms`}
         </p>
       )}
 
@@ -894,11 +1008,13 @@ function ModelManager({
 /** 模型档编辑器：上下文、最大输出、模态、工具调用、推理档、别名、单价。 */
 function ModelProfileEditor({
   model,
+  provider,
   profile,
   onChange,
   onClose,
 }: {
   model: string;
+  provider: ProviderProfile;
   profile: ModelProfile | undefined;
   onChange: (next: ModelProfile | null) => void;
   onClose: () => void;
@@ -960,6 +1076,59 @@ function ModelProfileEditor({
             value={(current.aliases ?? []).join(", ")}
             placeholder="另一个写法"
             onChange={(event) => patch({ aliases: event.target.value.split(",").map((entry) => entry.trim()).filter((entry) => entry !== "") })}
+          />
+        </label>
+        <label className="sr-field">
+          <span className="sr-field-label sr-mono">单价 · 输入（$/百万 token）</span>
+          <input
+            className="sr-input"
+            type="number"
+            step="0.01"
+            value={current.pricing?.input ?? ""}
+            placeholder="不知道就留空"
+            onChange={(event) =>
+              patch({ pricing: { ...(current.pricing ?? {}), input: event.target.value === "" ? undefined : Number(event.target.value) } })
+            }
+          />
+        </label>
+        <label className="sr-field">
+          <span className="sr-field-label sr-mono">单价 · 输出（$/百万 token）</span>
+          <input
+            className="sr-input"
+            type="number"
+            step="0.01"
+            value={current.pricing?.output ?? ""}
+            placeholder="不知道就留空"
+            onChange={(event) =>
+              patch({ pricing: { ...(current.pricing ?? {}), output: event.target.value === "" ? undefined : Number(event.target.value) } })
+            }
+          />
+        </label>
+        <label className="sr-field">
+          <span className="sr-field-label sr-mono">这个模型的协议（缺省继承供应商）</span>
+          <select
+            className="sr-input"
+            value={current.endpointFormat ?? ""}
+            onChange={(event) => patch({ endpointFormat: event.target.value === "" ? undefined : (event.target.value as EndpointFormat) })}
+          >
+            <option value="">跟随供应商（{provider.endpointFormat}）</option>
+            {ENDPOINT_FORMATS.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="sr-field">
+          <span className="sr-field-label sr-mono">服务档位（逗号分隔）</span>
+          <input
+            className="sr-input"
+            value={(current.serviceTiers ?? []).join(", ")}
+            placeholder="例如 priority"
+            onChange={(event) => {
+              const tiers = event.target.value.split(",").map((entry) => entry.trim()).filter((entry) => entry !== "");
+              patch({ serviceTiers: tiers.length === 0 ? undefined : tiers });
+            }}
           />
         </label>
         <label className="sr-field">

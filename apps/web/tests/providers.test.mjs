@@ -161,3 +161,27 @@ test("keys are named, never shown, and a provider needs a real endpoint", () => 
   assert.deepEqual(providerProblems({ name: "OpenAI", baseUrl: "https://api.openai.com/v1" }), []);
   assert.deepEqual(providerProblems({ name: "", baseUrl: "api.openai.com" }), ["给它起个名字", "Base URL 要以 http:// 或 https:// 开头"]);
 });
+
+test("a version-3 store survives a round trip — capabilities are not dropped on load", () => {
+  const store = {
+    version: 3,
+    providers: [
+      {
+        id: "p-fake",
+        name: "假服务商",
+        baseUrl: "http://127.0.0.1:9931/v1",
+        credentialRef: "fake-provider",
+        endpointFormat: "chat_completions",
+        enabled: true,
+        models: ["fake-chat-1"],
+        modelProfiles: {},
+        capabilities: { tts: { protocol: "chat_completions", baseUrl: "http://127.0.0.1:9931/v1", models: ["fake-tts-1"] } },
+      },
+    ],
+    roles: { agent: { providerId: "p-fake", capability: "agent", model: "fake-chat-1" }, tts: { providerId: "p-fake", capability: "tts", model: "fake-tts-1" }, voice_clone: null, stt: null, image: null, music: null },
+  };
+  const reloaded = normalizeSettings(JSON.parse(JSON.stringify(store)));
+  assert.deepEqual(reloaded.providers[0].capabilities.tts?.models, ["fake-tts-1"], "the capability is still there");
+  assert.equal(roleTarget(reloaded, "tts")?.model, "fake-tts-1", "so the TTS role still resolves");
+  assert.equal(reloaded.roles.tts?.providerId, "p-fake");
+});

@@ -113,6 +113,35 @@ export function normalizeSettings(parsed: unknown): ModelSettings {
   };
   if (!Array.isArray(raw.providers)) return base;
   const legacySlots = Array.isArray(raw.slots) ? raw.slots : [];
+  /**
+   * Already version 3? Then the providers are authoritative and must be taken as they are. The first
+   * version of this function only knew the v1/v2 shape, so a round trip through it **dropped every
+   * capability** (v3 capabilities have no `enabled` flag to look at) — measured by seeding a v3 store
+   * and watching the TTS role come back 未配置.
+   */
+  if (raw.version === 3) {
+    const providers = raw.providers.map((entry) => ({
+      id: String(entry.id ?? ""),
+      name: String(entry.name ?? entry.label ?? entry.id ?? ""),
+      baseUrl: String(entry.baseUrl ?? "").trim().replace(/\/+$/, ""),
+      credentialRef: entry.credentialRef === null || entry.credentialRef === undefined ? null : String(entry.credentialRef),
+      endpointFormat: (entry.endpointFormat ?? "chat_completions") as EndpointFormat,
+      enabled: entry.enabled !== false,
+      ...(typeof entry.presetSource === "string" ? { presetSource: entry.presetSource } : {}),
+      models: Array.isArray(entry.models) ? (entry.models as string[]).map(String) : [],
+      modelProfiles: copyModelProfiles((entry.modelProfiles ?? {}) as Record<string, ModelProfile>),
+      capabilities: (entry.capabilities ?? {}) as ProviderProfile["capabilities"],
+    }));
+    const roles: ModelSettings["roles"] = { ...base.roles };
+    for (const kind of Object.keys(roles) as CapabilityKind[]) {
+      const stored = raw.roles?.[kind] as RoleBinding | null | undefined;
+      roles[kind] =
+        stored !== null && stored !== undefined && typeof stored === "object" && typeof stored.providerId === "string" && typeof stored.model === "string"
+          ? { providerId: stored.providerId, capability: (stored.capability ?? kind) as CapabilityKind, model: stored.model }
+          : null;
+    }
+    return { version: 3, providers, roles };
+  }
 
   const providers: ProviderProfile[] = raw.providers.map((entry) => {
     const id = String(entry.id ?? `p-${Math.random().toString(36).slice(2, 8)}`);
