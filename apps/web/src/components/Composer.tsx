@@ -22,7 +22,7 @@ export function Composer({
   mode,
   onModeChange,
   models = [],
-  otherMainModels = [],
+  pendingModels = [],
   modelId,
   onModelSelect,
   attachments = [],
@@ -52,8 +52,8 @@ export function Composer({
   mode: string;
   onModeChange: (mode: string) => void;
   models?: AgentModel[];
-  /** 主模型配置好但还没接上 harness 的：列出来，但点不动。 */
-  otherMainModels?: AgentModel[];
+  /** 主模型配好了但还没接上（Codex 侧通道未打通）：列出来，但点不动。 */
+  pendingModels?: AgentModel[];
   modelId?: string;
   onModelSelect?: (id: string) => void;
   attachments?: Mention[];
@@ -319,6 +319,20 @@ export function Composer({
           <div className="sr-menu sr-menu--right" role="menu" aria-label="选择模型">
             <p className="sr-menu-title sr-mono">模型</p>
             {models.length === 0 && <p className="sr-menu-hint">内核没启动，读不到模型列表。</p>}
+            {pendingModels.map((model) => (
+              <button
+                key={model.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={false}
+                className="sr-menu-item"
+                disabled
+                title={model.description}
+              >
+                <span className="sr-menu-label">{model.displayName}</span>
+                <span className="sr-menu-hint">{model.description}</span>
+              </button>
+            ))}
             {models.map((model) => (
               <button
                 key={model.id}
@@ -331,25 +345,6 @@ export function Composer({
                   onModelSelect?.(model.id);
                   setMenu("none");
                 }}
-              >
-                <span className="sr-menu-label">{model.displayName}</span>
-                <span className="sr-menu-hint">{model.description}</span>
-              </button>
-            ))}
-            {/*
-              The main model is the *only* model this menu may ever offer (语音、生图 等在设置里).
-              A custom 主模型 that is configured but not yet wired shows up switched off, so the
-              menu never lies about what can answer right now.
-            */}
-            {otherMainModels.map((model) => (
-              <button
-                key={model.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={false}
-                className="sr-menu-item"
-                disabled
-                title="在设置里配好了，但要等 harness 接入后才由它回答"
               >
                 <span className="sr-menu-label">{model.displayName}</span>
                 <span className="sr-menu-hint">{model.description}</span>

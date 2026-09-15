@@ -75,6 +75,82 @@ export function splitSentences(text: string): string[] {
   return parts;
 }
 
+/**
+ * Speech from a provider the user configured, played by us.
+ *
+ * The bytes come back through the bridge (the key never reaches the page), get decoded into an
+ * AudioBuffer and played through WebAudio — which is also what the desktop build needs in order to have
+ * a reference signal for echo cancellation (DECISIONS ADR-019). Returns null when the provider answers
+ * with an error, so the caller can fall back to the system voice.
+ */
+export function createBridgeTTS(options: {
+  baseUrl: string;
+  credentialRef: string | null;
+  protocol: string;
+  model: string;
+  endpointPath?: string;
+  voice?: string;
+  format?: string;
+}): TTSProvider {
+  let context: AudioContext | null = null;
+  let playing: AudioBufferSourceNode | null = null;
+  const audioContext = () => {
+    context ??= new AudioContext();
+    return context;
+  };
+  const synthesize = async (text: string): Promise<AudioBuffer | null> => {
+    const response = await fetch("/api/agent/providers/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text,
+        baseUrl: options.baseUrl,
+        credentialRef: options.credentialRef,
+        protocol: options.protocol,
+        model: options.model,
+        ...(options.endpointPath === undefined ? {} : { endpointPath: options.endpointPath }),
+        ...(options.voice === undefined ? {} : { voice: options.voice }),
+        ...(options.format === undefined ? {} : { format: options.format }),
+      }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { audio?: string; error?: string };
+    if (payload.audio === undefined) {
+      if (payload.error !== undefined) throw new Error(payload.error);
+      return null;
+    }
+    const binary = atob(payload.audio);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return audioContext().decodeAudioData(bytes.buffer);
+  };
+  return {
+    voices: async () => [],
+    synthesize,
+    speak: (text, speakOptions) => {
+      void synthesize(text)
+        .then((buffer) => {
+          if (buffer === null) return;
+          const source = audioContext().createBufferSource();
+          playing?.stop();
+          playing = source;
+          source.buffer = buffer;
+          source.connect(audioContext().destination);
+          source.onended = () => {
+            if (playing === source) playing = null;
+            speakOptions?.onEnd?.();
+          };
+          source.start();
+        })
+        .catch(() => speakOptions?.onEnd?.());
+    },
+    cancel: () => {
+      playing?.stop();
+      playing = null;
+    },
+    speaking: () => playing !== null,
+  };
+}
+
 /** The system-voice implementation. Works in the browser and inside Electron. */
 export function createSystemTTS(): TTSProvider {
   const supported = typeof window !== "undefined" && "speechSynthesis" in window;

@@ -20,7 +20,14 @@ import { PluginPanelPage } from "./components/PluginPanelPage";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
 import { SettingsPage } from "./components/SettingsPage";
-import { loadModelSettings, mainModelChoices, saveModelSettings, type ModelSettings } from "./lib/providers";
+import {
+  capabilityTarget,
+  loadModelSettings,
+  mainModelChoices,
+  roleTarget,
+  saveModelSettings,
+  type ModelSettings,
+} from "./lib/providers";
 import { StudioProjects, summarize } from "./components/StudioProjects";
 import { Transcript } from "./components/Transcript";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
@@ -64,7 +71,7 @@ import {
   type TurnDetector,
   type VoiceCapture,
 } from "./lib/voice";
-import { createSystemTTS, splitSentences } from "./lib/tts";
+import { createBridgeTTS, createSystemTTS, splitSentences, type TTSProvider } from "./lib/tts";
 import { createBrowserSTT, type STTSession } from "./lib/stt";
 import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
 import {
@@ -172,7 +179,37 @@ export function App() {
   /** One recogniser and one speaker for the whole call — implemented behind the interfaces in
       `lib/stt.ts` / `lib/tts.ts`, so the desktop build swaps them without touching this logic. */
   const stt = useRef(createBrowserSTT());
-  const tts = useRef(createSystemTTS());
+  /**
+   * Which voice the call speaks with.
+   *
+   * A configured 语音合成 role wins: its audio comes back through the bridge and we play it ourselves,
+   * which is also what gives the desktop build a reference signal for barge-in. With no role configured
+   * the system voice keeps working, so a call is never blocked on settings.
+   */
+  const tts = useRef<TTSProvider | null>(null);
+  const ttsKey = useRef("");
+  const currentTTS = (): TTSProvider => {
+    const target = roleTarget(modelSettings, "tts");
+    const key = target === undefined ? "system" : `${target.provider.id}:${target.model}:${target.provider.credentialRef ?? ""}`;
+    if (tts.current === null || ttsKey.current !== key) {
+      if (target === undefined) {
+        tts.current = createSystemTTS();
+      } else {
+        const capability = capabilityTarget(target.provider, "tts");
+        tts.current = createBridgeTTS({
+          baseUrl: capability.baseUrl,
+          credentialRef: target.provider.credentialRef,
+          protocol: capability.protocol,
+          model: target.model,
+          ...(capability.endpointPath === undefined ? {} : { endpointPath: capability.endpointPath }),
+          ...(capability.options.voice === undefined ? {} : { voice: capability.options.voice }),
+          ...(capability.options.format === undefined ? {} : { format: capability.options.format }),
+        });
+      }
+      ttsKey.current = key;
+    }
+    return tts.current;
+  };
   /**
    * The voice is read at speak time, not held in state: it is chosen in 设置 (another view), and a
    * call that is already up should pick the new voice for its next sentence instead of needing a
@@ -223,10 +260,14 @@ export function App() {
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   /**
-   * 主模型 configured in Settings that this build cannot run yet.
+   * 主模型 configured in Settings.
    *
-   * The chat's switch may only ever offer main models (语音/生图 live in settings), so a configured
-   * one belongs in that list — switched off, with a reason, until the harness can route to it.
+   * The chat's switch may only ever offer main models (语音/生图 live in settings). A configured one
+   * is **not live yet**: the bridge already builds the Codex config to run a session on a custom
+   * provider, but this Codex build ignored it and answered with its own backend's model list
+   * (measured: "The supported API model names are deepseek-flash, deepseek-v4-pro"). Until that channel
+   * is proven, the entry stays switched off rather than pretending — the wiring work is in the bridge
+   * and `docs` in STATUS.
    */
   const [modelSettings, setModelSettings] = useState<ModelSettings>(() => loadModelSettings());
   useEffect(() => {
@@ -235,9 +276,9 @@ export function App() {
   const configuredMainModels = useMemo<AgentModel[]>(
     () =>
       mainModelChoices(modelSettings).map(({ provider, slot }) => ({
-        id: `custom:${slot.id}`,
+        id: `custom:${provider.id}`,
         displayName: `${provider.label} · ${slot.model}`,
-        description: "设置里配好的主模型（等 harness 接入后生效）",
+        description: "已配好；Codex 侧通道待打通（还没接上）",
         isDefault: false,
         supportedReasoningEfforts: [],
       })),
@@ -617,8 +658,25 @@ export function App() {
       },
       abort.signal,
       {
-        model: modelId,
-        mentions,
+        // A `custom:` choice carries the provider with it: the bridge starts this thread on it.
+        ...(() => {
+          const custom =
+            modelId?.startsWith("custom:") === true
+              ? mainModelChoices(modelSettings).find((choice) => choice.provider.id === modelId.slice("custom:".length))
+              : undefined;
+          if (custom === undefined) return { model: modelId, mentions };
+          return {
+            model: custom.slot.model,
+            mentions,
+            provider: {
+              id: custom.provider.id,
+              label: custom.provider.label,
+              baseUrl: custom.provider.baseUrl,
+              credentialRef: custom.provider.credentialRef,
+              protocol: custom.provider.protocol,
+            },
+          };
+        })(),
       },
     )
       .catch((error: unknown) => {
@@ -657,7 +715,7 @@ export function App() {
         }
       });
     },
-    [agent, attachments, draft, modelId, noteContext, patchSession, running, store.activeId, store.sessions],
+    [agent, attachments, draft, modelId, modelSettings, noteContext, patchSession, running, store.activeId, store.sessions],
   );
 
   const stop = useCallback(() => {
@@ -866,7 +924,7 @@ export function App() {
       onCancel: () => {
         if (voiceStateRef.current !== "speaking" && voiceStateRef.current !== "thinking") return;
         answerToken.current += 1;
-        tts.current.cancel();
+        currentTTS().cancel();
         capture.current?.takeWav(); // the answer's tail is not part of the next request
         controller?.abort();
         if (store.activeId !== undefined) void interruptTurn(store.activeId);
@@ -887,7 +945,7 @@ export function App() {
     stopListening();
     answerToken.current += 1;
     speakingToken.current += 1;
-    tts.current.cancel();
+    currentTTS().cancel();
     capture.current?.stop();
     capture.current = null;
     turnRef.current = null;
@@ -956,7 +1014,7 @@ export function App() {
     }
     spokenUpTo.current = speakable.length;
     const text = next.join(" ");
-    tts.current.speak(text, {
+    currentTTS().speak(text, {
       voiceId: currentVoiceId(),
       onEnd: () => {
         if (!voiceModeRef.current || speakingToken.current !== token) return;
@@ -1059,7 +1117,7 @@ export function App() {
         mode={mode}
         onModeChange={setMode}
         models={models}
-        otherMainModels={configuredMainModels}
+        pendingModels={configuredMainModels}
         modelId={modelId}
         onModelSelect={chooseModel}
         attachments={attachments}

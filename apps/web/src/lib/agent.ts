@@ -110,7 +110,13 @@ export async function sendTurn(
   text: string,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
-  options: { model?: string; effort?: string; mentions?: Mention[] } = {},
+  options: {
+    model?: string;
+    effort?: string;
+    mentions?: Mention[];
+    /** Run this turn on a provider the user configured in Settings instead of the built-in one. */
+    provider?: { id: string; label: string; baseUrl: string; credentialRef: string | null; protocol: string };
+  } = {},
 ): Promise<void> {
   const response = await fetch("/api/agent/send", {
     method: "POST",
@@ -120,6 +126,7 @@ export async function sendTurn(
       text,
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.effort === undefined ? {} : { effort: options.effort }),
+      ...(options.provider === undefined ? {} : { provider: options.provider }),
       ...(options.mentions === undefined || options.mentions.length === 0
         ? {}
         : { mentions: options.mentions.map(({ name, path }) => ({ name, path })) }),

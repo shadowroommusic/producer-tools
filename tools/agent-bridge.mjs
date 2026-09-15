@@ -492,17 +492,51 @@ class Agent {
   }
 
   /** The Codex thread behind a UI session, created on first use. */
-  async threadFor(sessionId) {
+  async threadFor(sessionId, provider = null) {
     const known = this.threads.get(sessionId);
     if (known !== undefined) return known;
     await this.start();
-    const started = await this.request("thread/start", {
+    /**
+     * A thread can run on a provider the user configured in Settings — an OpenAI-compatible endpoint
+     * of their own. Codex supports this natively (`model_providers` in its config), so there is no
+     * second agent loop to write: the same config object we already use for MCP servers carries it.
+     *
+     * The key travels in `experimental_bearer_token` rather than an environment variable: the bridge
+     * builds the config per thread, so the secret never lands in a config file, and switching keys does
+     * not require restarting the Codex process. Codex's own docs call this the programmatic path.
+     */
+    const config = { mcp_servers: mcpServers() };
+    const params = {
       cwd: AGENT_CWD,
       sandbox: SANDBOX,
       approvalPolicy: APPROVAL,
       developerInstructions: DEVELOPER_INSTRUCTIONS,
-      config: { mcp_servers: mcpServers() },
-    });
+      config,
+    };
+    if (provider !== null && provider.baseUrl && provider.model) {
+      const key = provider.credentialRef ? resolveCredential(provider.credentialRef)?.value ?? "" : "";
+      const id = `shadowroom-${String(provider.id ?? "custom").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+      const entry = {
+        name: provider.label ?? id,
+        base_url: provider.baseUrl,
+        // Our providers are OpenAI-compatible endpoints; `chat` is the wire every one of them speaks.
+        wire_api: provider.wireApi === "responses" ? "responses" : "chat",
+        ...(key === "" ? {} : { experimental_bearer_token: key }),
+        ...(provider.headers === undefined ? {} : { http_headers: provider.headers }),
+      };
+      /**
+       * Both shapes: the app-server's config overrides are applied by *path* (its own tests write
+       * `model_providers.openai.name`), so the dotted form is what a merge understands, while the nested
+       * form is what a plain JSON read would see. Sending both costs nothing and removes the guesswork.
+       */
+      config.model_providers = { [id]: entry };
+      for (const [field, value] of Object.entries(entry)) {
+        config[`model_providers.${id}.${field}`] = value;
+      }
+      params.model = provider.model;
+      params.model_provider = id;
+    }
+    const started = await this.request("thread/start", params);
     const threadId = started?.thread?.id;
     if (typeof threadId !== "string") throw new Error("thread/start returned no thread id");
     this.threads.set(sessionId, threadId);
@@ -515,7 +549,7 @@ class Agent {
    * @returns the Codex turn id.
    */
   async send(sessionId, text, onEvent, options = {}) {
-    const threadId = await this.threadFor(sessionId);
+    const threadId = await this.threadFor(sessionId, options.provider ?? null);
     const listener = (message) => {
       const { method, params } = message;
       if (method === "item/agentMessage/delta") {
@@ -780,6 +814,69 @@ const http = createServer(async (request, response) => {
         json(response, 200, { models });
       } catch (cause) {
         json(response, 200, { models: [], error: `连不上：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
+      return;
+    }
+
+    /**
+     * Synthesize speech through a configured provider and hand the audio back.
+     *
+     * The call used to speak through the system voice, which gave us neither the user's chosen voice
+     * nor an audio stream to reason about (see DECISIONS ADR-019). Here the bridge makes the request
+     * and returns the bytes, so the page can play them through WebAudio and know exactly when they
+     * start and stop.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/providers/tts") {
+      const body = await readJsonBody(request, 256 * 1024);
+      const text = String(body.text ?? "").trim();
+      const provider = {
+        baseUrl: String(body.baseUrl ?? "").trim(),
+        reference: body.credentialRef ?? null,
+        protocol: body.protocol ?? "openai",
+      };
+      const model = String(body.model ?? "").trim();
+      if (text === "" || provider.baseUrl === "" || model === "") {
+        json(response, 400, { error: "缺少文本、端点或模型" });
+        return;
+      }
+      const path = typeof body.endpointPath === "string" && body.endpointPath !== "" ? body.endpointPath : "/audio/speech";
+      const voice = typeof body.voice === "string" && body.voice !== "" ? body.voice : "alloy";
+      const format = typeof body.format === "string" && body.format !== "" ? body.format : "mp3";
+      try {
+        const { response: answer } = await callProvider(provider, path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            provider.protocol === "elevenlabs"
+              ? { text, model_id: model, ...(body.options ?? {}) }
+              : { model, input: text, voice, response_format: format, ...(body.options ?? {}) },
+          ),
+        });
+        if (!answer.ok) {
+          json(response, 200, { error: await providerFailure(answer) });
+          return;
+        }
+        const bytes = Buffer.from(await answer.arrayBuffer());
+        /**
+         * Some endpoints answer JSON with base64 audio instead of raw bytes (MiniMax does); unwrap it
+         * here so the caller always gets audio, whatever the provider's shape.
+         */
+        let audio = bytes;
+        const contentType = answer.headers.get("content-type") ?? "";
+        if (contentType.includes("application/json")) {
+          const payload = JSON.parse(bytes.toString("utf8"));
+          const base64 =
+            payload?.data?.audio ?? payload?.audio ?? payload?.data?.audio_file ?? payload?.audio_file ?? (typeof payload?.data === "string" ? payload.data : undefined);
+          if (typeof base64 !== "string" || base64 === "") {
+            json(response, 200, { error: `返回里没有音频：${JSON.stringify(payload).slice(0, 200)}` });
+            return;
+          }
+          audio = Buffer.from(base64, "base64");
+        }
+        console.log(`[agent] tts ${model} → ${audio.length} bytes`);
+        json(response, 200, { audio: audio.toString("base64"), contentType: contentType.includes("json") ? "audio/mpeg" : contentType, bytes: audio.length });
+      } catch (cause) {
+        json(response, 200, { error: `合成失败：${cause instanceof Error ? cause.message : String(cause)}` });
       }
       return;
     }
@@ -1097,6 +1194,17 @@ const http = createServer(async (request, response) => {
           },
           {
             model: typeof body.model === "string" && body.model !== "" ? body.model : undefined,
+            provider:
+              body.provider !== null && typeof body.provider === "object" && typeof body.provider.baseUrl === "string"
+                ? {
+                    id: String(body.provider.id ?? "custom"),
+                    label: String(body.provider.label ?? "自定义"),
+                    baseUrl: String(body.provider.baseUrl),
+                    credentialRef: body.provider.credentialRef ?? null,
+                    wireApi: body.provider.wireApi,
+                    headers: body.provider.headers,
+                  }
+                : null,
             effort: typeof body.effort === "string" && body.effort !== "" ? body.effort : undefined,
             input: Array.isArray(body.mentions)
               ? body.mentions
