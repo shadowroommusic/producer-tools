@@ -85,7 +85,7 @@ const PLUGINS: Array<{ id: string; server: string; label: string; repo: string }
   { id: "analysis", server: "analysis", label: "音频分析去重", repo: "audio-analysis-dedupe" },
   { id: "planner", server: "planner", label: "Set 编排", repo: "set-planner" },
   { id: "generator", server: "generator", label: "音乐生成队列", repo: "shadow-music-generator" },
-  { id: "splitter", server: "splitter", label: "人声分轨", repo: "stem-splitter" },
+  { id: "splitter", server: "splitter", label: "Stem Splitter", repo: "stem-splitter" },
   { id: "grabber", server: "grabber", label: "音乐抓取转码", repo: "ShadowMusicGrabber" },
 ];
 
@@ -2233,10 +2233,14 @@ function stageLabel(stage: string | undefined): string {
 }
 
 /** Part names the synth uses, in the workbench's language. */
+/**
+ * Part names are the synth's own vocabulary and stay English — the agent says `drums`/`bass`, the
+ * MIDI files say `drums`/`bass`, and a producer looking for the kick reads "Drums", not "鼓".
+ */
 const PART_LABEL: Record<string, string> = {
-  drums: "鼓",
-  bass: "贝斯",
-  chords: "和弦",
-  lead: "主音",
-  pad: "铺底",
+  drums: "Drums",
+  bass: "Bass",
+  chords: "Chords",
+  lead: "Lead",
+  pad: "Pad",
 };

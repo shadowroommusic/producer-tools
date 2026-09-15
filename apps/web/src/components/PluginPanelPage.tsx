@@ -87,7 +87,7 @@ export function PluginPanelPage({
           ) : plugin.repo === "stem-splitter" ? (
             <div className="sr-plugin-pane">
               <p className="sr-plugin-hint">
-                分轨在 Studio 里用：右键任意音频片段 →「分轨（人声 / 鼓 / 贝斯 / 其它）」，四条分轨会自动落到新轨道。
+                分轨在 Studio 里用：右键任意音频片段 →「分轨（Vocal / Drums / Bass / Other）」，四条分轨会自动落到新轨道。
               </p>
               <ul className="sr-plugin-bullets">
                 <li>本地 Demucs：{plugin.connected ? "已连接" : "未连接"}</li>

@@ -216,7 +216,7 @@ export function SettingsPage({
           {(
             [
               { id: "roles", label: "角色与路由", hint: "谁干什么" },
-              { id: "providers", label: "供应商", hint: "端点与能力" },
+              { id: "providers", label: "供应商", hint: "Base URL 与能力" },
               { id: "voice", label: "通话与声音", hint: "通话音色" },
             ] as const
           ).map((entry) => (
@@ -513,7 +513,7 @@ function ProviderEditor({
           />
         </label>
         <label className="sr-field sr-field--wide">
-          <span className="sr-field-label sr-mono">对话端点</span>
+          <span className="sr-field-label sr-mono">Base URL（对话用）</span>
           <input
             className="sr-input"
             value={provider.baseUrl}
@@ -522,7 +522,7 @@ function ProviderEditor({
           />
         </label>
         <label className="sr-field">
-          <span className="sr-field-label sr-mono">协议</span>
+          <span className="sr-field-label sr-mono">Protocol</span>
           <select
             className="sr-input"
             value={provider.protocol}
@@ -537,7 +537,7 @@ function ProviderEditor({
         </label>
         <label className="sr-field">
           <span className="sr-field-label sr-mono">
-            凭证名
+            Credential
             {credential !== undefined && credential.source !== "missing" ? ` · ${credential.masked}` : ""}
           </span>
           <input
@@ -578,8 +578,8 @@ function ProviderEditor({
 
       <h4 className="sr-settings-h3">能力</h4>
       <p className="sr-settings-hint">
-        打开这家提供的能力。每张卡片里的协议与端点**留空就跟着对话端点走**（改了对话端点，它们自动跟着改），
-        模型名和音色可以按需要填。
+        打开这家提供的能力。每张卡片里的 Protocol 与 Endpoint **留空就跟随上面的 Base URL**
+        （改了 Base URL，它们自动跟着改），Model 与 Voice 按需要填。
       </p>
       <div className="sr-capability-list">
         {CAPABILITIES.map(({ kind, label, hint }) => {
@@ -638,7 +638,7 @@ function ProviderEditor({
                 <div className="sr-capability-body">
                   <div className="sr-capability-grid">
                     <label className="sr-field">
-                      <span className="sr-field-label sr-mono">协议</span>
+                      <span className="sr-field-label sr-mono">Protocol</span>
                       <select
                         className="sr-input"
                         value={config.protocol ?? ""}
@@ -659,12 +659,12 @@ function ProviderEditor({
                       </select>
                     </label>
                     <label className="sr-field sr-field--wide">
-                      <span className="sr-field-label sr-mono">端点（留空＝跟随对话端点）</span>
+                      <span className="sr-field-label sr-mono">Endpoint（留空＝跟随 Base URL）</span>
                       <input
                         className="sr-input"
                         value={config.baseUrl ?? ""}
                         spellCheck={false}
-                        placeholder={`${provider.baseUrl}（跟随）`}
+                        placeholder={`${provider.baseUrl}（跟随 Base URL）`}
                         onChange={(event) =>
                           onChange(setCapabilityOf(provider, kind, { baseUrl: event.target.value === "" ? undefined : event.target.value }))
                         }
@@ -728,7 +728,7 @@ function ProviderEditor({
 
                   <div className="sr-capability-foot">
                     <span className="sr-capability-target sr-mono" title={`${target.baseUrl}${target.endpointPath ?? ""}`}>
-                      实际调用：{target.protocol} · {target.baseUrl || "（没填端点）"}
+                      实际调用：{target.protocol} · {target.baseUrl || "（没填 Endpoint）"}
                     </span>
                     <button
                       type="button"

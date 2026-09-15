@@ -83,7 +83,7 @@ export function PianoRoll({
    * Which pitches get a row.
    *
    * Normally that is just the range the clip uses. A drum track is different: the kit's five voices
-   * are *always* there to click on — an empty drum clip opens with 底鼓 / 军鼓 / 拍手 / 闭镲 / 开镲
+   * are *always* there to click on — an empty drum clip opens with Kick / Snare / Clap / Hi-hat
    * waiting, which is the whole point of naming the rows. The rest of the keyboard is not taken away
    * (a note at 45 still gets its row, named by pitch), because a row that cannot be reached is a
    * dead end for anyone who learned a fill from a tutorial.
@@ -236,7 +236,7 @@ export function PianoRoll({
         <span className="sr-roll-meta sr-mono">
           {notes.length} 个音符 · {bars} 小节 · 网格 1/{step * 4}
         </span>
-        {drumKit && <span className="sr-roll-tag sr-mono">鼓轨 · 按鼓件编辑</span>}
+        {drumKit && <span className="sr-roll-tag sr-mono">Drums · 按鼓件编辑</span>}
         <div className="sr-roll-actions">
           <button
             type="button"
@@ -310,17 +310,13 @@ export function PianoRoll({
                 data-black={BLACK.has(pitch % 12) || undefined}
                 data-voice={voice?.name}
                 style={{ height: ROW_PX }}
-                title={
-                  voice === undefined
-                    ? `${noteName} · 点一下试听`
-                    : `${voice.zh} ${voice.name} · MIDI ${pitch} · 点一下试听`
-                }
+                title={voice === undefined ? `${noteName} · 点一下试听` : `${voice.name} · MIDI ${pitch} · 点一下试听`}
                 onClick={() => onAudition?.(pitch, stepMs * 2)}
               >
                 <span className="sr-roll-key-label sr-mono">
-                  {/* 底鼓 (Kick): the studio speaks Chinese, the tutorials speak English. */}
+                  {/* Kick, Snare, Clap… stay English: they are the names on every drum machine. */}
                   {voice !== undefined
-                    ? `${voice.zh} (${voice.name})`
+                    ? voice.name
                     : pitch % 12 === 0
                       ? `C${Math.floor(pitch / 12) - 1}`
                       : ""}
@@ -353,7 +349,7 @@ export function PianoRoll({
                 title={
                   voice === undefined
                     ? `${NAMES[note.midi % 12]}${Math.floor(note.midi / 12) - 1} · 力度 ${velocity}`
-                    : `${voice.zh} ${voice.name} · 力度 ${velocity}`
+                    : `${voice.name} · 力度 ${velocity}`
                 }
                 onPointerDown={(event) => {
                   event.stopPropagation();

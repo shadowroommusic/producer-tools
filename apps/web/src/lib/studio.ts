@@ -406,12 +406,13 @@ export function trackTypeOf(track: StudioTrack): StudioTrackType {
   if (track.type !== undefined) return track.type;
   const notated = track.clips.some((clip) => (clip.notes?.length ?? 0) > 0);
   if (!notated) return "audio";
-  return /鼓|drum|kick/i.test(track.name) ? "drums" : "instrument";
+  return /drum|kick|snare|clap|beat|鼓/i.test(track.name) ? "drums" : "instrument";
 }
 
 /** Default name for a new track of each kind; numbering keeps them apart. */
 export function defaultTrackName(tracks: StudioTrack[], type: StudioTrackType): string {
-  const base = type === "drums" ? "鼓" : type === "audio" ? "音频" : "乐器";
+  /* Track kinds are DAW vocabulary: Audio / Instrument / Drums. */
+  const base = type === "drums" ? "Drums" : type === "audio" ? "Audio" : "Instrument";
   const taken = new Set(tracks.map((track) => track.name));
   if (!taken.has(base)) return base;
   for (let index = 2; index < 100; index += 1) {
@@ -434,16 +435,16 @@ export function canAddTracks(tracks: StudioTrack[], count: number): boolean {
  * The drum voices the synth can play, at the General-MIDI pitches it writes them at.
  *
  * The list is not a catalogue — it is exactly `DRUM_MIDI` in shadow-music-generator, so a drum
- * track's notes always land on a row that has a name. The English name is the label (drum machines
- * have said "Kick" since the 808); the Chinese one is the tooltip, for the beginner who has only
- * ever seen 底鼓 in a tutorial.
+ * track's notes always land on a row that has a name. The names stay English on purpose: Kick,
+ * Snare, Clap and Hi-hat are what every drum machine, tutorial and sample pack says, and translating
+ * them would make the studio harder to read for the people who use it (see AGENTS.md: 行业词不翻译).
  */
-export const DRUM_VOICES: ReadonlyArray<{ midi: number; name: string; zh: string }> = [
-  { midi: 36, name: "Kick", zh: "底鼓" },
-  { midi: 38, name: "Snare", zh: "军鼓" },
-  { midi: 39, name: "Clap", zh: "拍手" },
-  { midi: 42, name: "Hi-hat", zh: "闭镲" },
-  { midi: 46, name: "Open hat", zh: "开镲" },
+export const DRUM_VOICES: ReadonlyArray<{ midi: number; name: string }> = [
+  { midi: 36, name: "Kick" },
+  { midi: 38, name: "Snare" },
+  { midi: 39, name: "Clap" },
+  { midi: 42, name: "Hi-hat" },
+  { midi: 46, name: "Open hat" },
 ];
 
 /**
@@ -452,9 +453,9 @@ export const DRUM_VOICES: ReadonlyArray<{ midi: number; name: string; zh: string
  * Returning `undefined` (rather than guessing "Tom") is the honest answer: a note at 45 was not
  * written by our drum kit, and mislabelling it would teach the user something false.
  */
-export function drumVoice(midi: number): { name: string; zh: string } | undefined {
+export function drumVoice(midi: number): { name: string } | undefined {
   const voice = DRUM_VOICES.find((entry) => entry.midi === midi);
-  return voice === undefined ? undefined : { name: voice.name, zh: voice.zh };
+  return voice === undefined ? undefined : { name: voice.name };
 }
 
 /**
@@ -569,10 +570,10 @@ export function analysisBadge(analysis: StudioAnalysis | undefined): string {
 
 /** The names a separator's stems get in the studio, in track order. */
 export const STEM_LABELS: Record<string, string> = {
-  vocals: "人声",
-  drums: "鼓",
-  bass: "贝斯",
-  other: "其它",
+  vocals: "Vocal",
+  drums: "Drums",
+  bass: "Bass",
+  other: "Other",
 };
 
 /**
@@ -627,9 +628,9 @@ export function defaultProject(): StudioProject {
      * song arrives from a render (one sentence) or from an import.
      */
     tracks: [
-      { ...newTrack("鼓"), type: "drums", color: 0 },
-      { ...newTrack("贝斯"), type: "instrument", color: 1 },
-      { ...newTrack("合成器"), type: "instrument", color: 2 },
+      { ...newTrack("Drums"), type: "drums", color: 0 },
+      { ...newTrack("Bass"), type: "instrument", color: 1 },
+      { ...newTrack("Synth"), type: "instrument", color: 2 },
     ],
   };
 }

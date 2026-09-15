@@ -20,11 +20,12 @@ export type CapabilityKind = "agent" | "tts" | "voice_clone" | "stt" | "image";
 
 /** The roles in the order the settings page shows them, with the label a beginner reads. */
 export const CAPABILITIES: ReadonlyArray<{ kind: CapabilityKind; label: string; hint: string }> = [
-  { kind: "agent", label: "主模型", hint: "对话、写歌、调用工具——只有它出现在对话页的模型开关里" },
-  { kind: "tts", label: "语音合成", hint: "把文字念出来（朗读回复、语音通话里的声音）" },
-  { kind: "voice_clone", label: "音色克隆", hint: "用一段样本做自己的音色，给语音合成用" },
-  { kind: "stt", label: "语音识别", hint: "把你说的话转成文字（默认用浏览器自带的）" },
-  { kind: "image", label: "生图", hint: "封面、配图这类图像生成" },
+  /* 中文说清楚是什么，后面跟上行业里真正叫的名字（AGENTS.md：行业词不翻译）。 */
+  { kind: "agent", label: "主模型 · Main", hint: "对话、写歌、调用工具——只有它出现在对话页的模型开关里" },
+  { kind: "tts", label: "语音合成 · TTS", hint: "把文字念出来（朗读回复、语音通话里的声音）" },
+  { kind: "voice_clone", label: "音色克隆 · Voice Clone", hint: "用一段样本做自己的音色，给语音合成用" },
+  { kind: "stt", label: "语音识别 · STT", hint: "把你说的话转成文字（默认用浏览器自带的）" },
+  { kind: "image", label: "生图 · Image", hint: "封面、配图这类图像生成" },
 ];
 
 /** How a provider's HTTP requests are shaped. `openai` is the common one; `custom` trusts the path. */
@@ -292,7 +293,7 @@ export function capabilityStatusLabel(status: CapabilityStatus): string {
     case "needs-credential":
       return "凭证未配置";
     case "needs-endpoint":
-      return "需配置端点";
+      return "需配置 Endpoint";
     case "needs-path":
       return "需配置路径";
     default:

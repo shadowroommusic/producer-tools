@@ -1838,7 +1838,7 @@ export function StudioPage({
                   }}
                 >
                   <span className="sr-menu-label">
-                    {splitting.includes(clip.id) ? "分轨中…" : "分轨（人声 / 鼓 / 贝斯 / 其它）"}
+                    {splitting.includes(clip.id) ? "分轨中…" : "分轨（Vocal / Drums / Bass / Other）"}
                   </span>
                   <span className="sr-menu-hint sr-mono">
                     {isPlayable(clip.source)

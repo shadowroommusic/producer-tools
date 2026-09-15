@@ -71,13 +71,14 @@ test("a separation becomes four new tracks that keep the clip's place", () => {
     other: "/stems/other.wav",
   };
   const existing = [
-    { id: "t1", name: "鼓", muted: false, soloed: false, volume: 80, clips: [] },
-    { id: "t2", name: "贝斯", muted: false, soloed: false, volume: 80, clips: [] },
+    { id: "t1", name: "Drums", muted: false, soloed: false, volume: 80, clips: [] },
+    { id: "t2", name: "Bass", muted: false, soloed: false, volume: 80, clips: [] },
   ];
   const created = tracksFromStems(stems, existing, { name: "Night Drive", start: 2, length: 8 });
   assert.deepEqual(
     created.map((track) => track.name),
-    ["人声", "鼓 2", "贝斯 2", "其它"],
+    ["Vocal", "Drums 2", "Bass 2", "Other"],
+    "stems are named the way every DAW and sample pack names them",
   );
   for (const track of created) {
     assert.equal(track.clips.length, 1);
@@ -319,9 +320,10 @@ test("a track knows what it is, and older projects fall back to their name", () 
 });
 
 test("drums are named at the five pitches the kit actually has", () => {
+  // The names stay English — Kick/Snare/Clap are what every drum machine and tutorial says.
   assert.equal(drumVoice(36)?.name, "Kick");
-  assert.equal(drumVoice(36)?.zh, "底鼓");
   assert.equal(drumVoice(46)?.name, "Open hat");
+  assert.equal(drumVoice(42)?.name, "Hi-hat");
   // 45 is a low tom in General MIDI — we never write it, so calling it a tom would be a lie.
   assert.equal(drumVoice(45), undefined);
   assert.equal(drumVoice(60), undefined);
@@ -343,13 +345,13 @@ test("the overflow notice counts what to delete, and says nothing inside the lim
 test("new track names are numbered per kind", () => {
   const tracks = [];
   const first = trackOfType(tracks, "drums");
-  assert.equal(first.name, "鼓");
+  assert.equal(first.name, "Drums");
   tracks.push(first);
   const second = trackOfType(tracks, "drums");
-  assert.equal(second.name, "鼓 2");
+  assert.equal(second.name, "Drums 2");
   tracks.push(second);
-  assert.equal(trackOfType(tracks, "audio").name, "音频");
-  assert.equal(trackOfType(tracks, "instrument").name, "乐器");
+  assert.equal(trackOfType(tracks, "audio").name, "Audio");
+  assert.equal(trackOfType(tracks, "instrument").name, "Instrument");
 });
 
 test("automatic additions may overflow to the hard limit, not past it", () => {
