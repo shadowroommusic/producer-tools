@@ -263,16 +263,23 @@ export function App() {
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   /**
-   * 主模型 configured in Settings.
+   * 主模型 configured in Settings — and they are **live**.
    *
-   * The chat's switch may only ever offer main models (语音/生图 live in settings). A configured one
-   * is **not live yet**: the bridge already builds the Codex config to run a session on a custom
-   * provider, but this Codex build ignored it and answered with its own backend's model list
-   * (measured: "The supported API model names are deepseek-flash, deepseek-v4-pro"). Until that channel
-   * is proven, the entry stays switched off rather than pretending — the wiring work is in the bridge
-   * and `docs` in STATUS.
+   * Choosing one starts that session's Codex thread on the provider's endpoint: the bridge writes a
+   * `CODEX_HOME` config, runs a loopback Responses→Chat adapter in front of the provider, and restarts
+   * the core on it. Measured end to end against a local OpenAI-compatible endpoint: the turn came back
+   * as `turn, item×3, delta, usage, done` with the provider's own reply.
    */
   const [modelSettings, setModelSettings] = useState<ModelSettings>(() => loadModelSettings());
+  /**
+   * Which provider the Codex core is currently running on ("" = the built-in one).
+   *
+   * Switching is a core restart — the accepted channel is a `CODEX_HOME` config file, not a per-thread
+   * override — so it happens only when the choice actually changes, not on every message. A restart also
+   * drops the bridge's thread mapping, i.e. the next message starts a fresh agent thread on the new
+   * provider (the transcript in the UI is unaffected).
+   */
+  const appliedProvider = useRef("");
   useEffect(() => {
     saveModelSettings(modelSettings);
   }, [modelSettings]);
@@ -281,7 +288,7 @@ export function App() {
       agentModelChoices(modelSettings).map(({ provider, model, profile }) => ({
         id: `custom:${provider.id}:${model}`,
         displayName: `${provider.name} · ${model}`,
-        description: profile === undefined ? "设置里配好的对话模型" : "设置里配好的对话模型（有模型档）",
+        description: `${provider.name} · 走你自己的端点`,
         isDefault: false,
         supportedReasoningEfforts: [],
       })),
@@ -405,7 +412,11 @@ export function App() {
   }, []);
 
   const submit = useCallback(
-    (override?: string, options: { mentions?: Mention[] } = {}) => {
+    /**
+     * Async because the turn may first have to point the Codex core at the chosen provider (a core
+     * restart, ~1s). Everything below is unchanged — the awaits are only around that switch.
+     */
+    async (override?: string, options: { mentions?: Mention[] } = {}) => {
     const text = (override ?? draft).trim();
     if (text === "" || running) return;
     setDraft("");
@@ -502,6 +513,41 @@ export function App() {
             "[/structure_context]",
             "（要改结构就调 shadow-music-generator 的 arrange：把上面的 bars/sections/tracks 原样传进去、operations 写操作、revision 回传；它会把每个片段的新位置算好，前端落盘。不要自己算位置。）",
           ];
+    /**
+     * Point the core at the provider this choice belongs to (or back at the built-in one) before the
+     * turn is sent. Without this the turn went out with the custom *model name* but the built-in
+     * provider, and Codex answered "The supported API model names are …".
+     */
+    const chosen =
+      modelId?.startsWith("custom:") === true
+        ? agentModelChoices(modelSettings).find((choice) => `custom:${choice.provider.id}:${choice.model}` === modelId)
+        : undefined;
+    const wantedProvider = chosen?.provider.id ?? "";
+    if (wantedProvider !== appliedProvider.current) {
+      try {
+        await fetch("/api/agent/use-provider", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            provider:
+              chosen === undefined
+                ? null
+                : {
+                    id: chosen.provider.id,
+                    label: chosen.provider.name,
+                    baseUrl: chosen.provider.baseUrl,
+                    model: chosen.model,
+                    credentialRef: chosen.provider.credentialRef,
+                    endpointFormat: chosen.provider.endpointFormat,
+                  },
+          }),
+        });
+        appliedProvider.current = wantedProvider;
+      } catch {
+        /* the bridge will answer with its own error if the provider cannot be started */
+      }
+    }
+
     const outgoing =
       noteContext === null
         ? [text, ...arrangementContext].join("\n")
@@ -1122,8 +1168,12 @@ export function App() {
         busy={running}
         mode={mode}
         onModeChange={setMode}
-        models={models}
-        pendingModels={configuredMainModels}
+        /*
+          Configured main models are part of the same list now — they run on the user's own endpoint,
+          so they are choices, not promises. The menu still offers *only* main models (语音/生图 stay
+          in settings), which is the rule the user asked for.
+        */
+        models={[...models, ...configuredMainModels]}
         modelId={modelId}
         onModelSelect={chooseModel}
         attachments={attachments}

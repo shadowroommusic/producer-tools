@@ -166,7 +166,13 @@ async function startChatAdapter(provider, credential) {
         send(404, JSON.stringify({ error: "adapter: only /v1/responses and /v1/models" }));
         return;
       }
-      const body = JSON.parse((await readJsonBody(request, 8 * 1024 * 1024)) ?? "{}");
+      /**
+       * `readJsonBody` already parses — calling `JSON.parse` on its result turned every request into
+       * `"[object Object]" is not valid JSON`, i.e. a 500 the moment Codex connected. It answered
+       * "stream disconnected" and retried five times, which is why the adapter looked unreachable.
+       */
+      const body = await readJsonBody(request, 8 * 1024 * 1024);
+      console.log(`[adapter] ← ${body.model} · input=${Array.isArray(body.input) ? body.input.length : 0} · tools=${body.tools?.length ?? 0} · stream=${body.stream}`);
       /** Responses `input` items → chat messages. */
       const input = Array.isArray(body.input) ? body.input : [];
       const messages = [];
@@ -204,9 +210,12 @@ async function startChatAdapter(provider, credential) {
         }),
       });
       if (!chat.ok) {
-        send(chat.status, await chat.text());
+        const detail = await chat.text();
+        console.log(`[adapter] provider said ${chat.status}: ${detail.slice(0, 200)}`);
+        send(chat.status, detail);
         return;
       }
+      console.log(`[adapter] provider ${chat.status} · streaming`);
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
       const emit = (type, payload) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
       const id = `resp-${Date.now().toString(36)}`;
@@ -264,6 +273,7 @@ async function startChatAdapter(provider, credential) {
         emit("response.output_item.done", { output_index: index + (opened ? 1 : 0), item: { id: call.id, type: "function_call", call_id: call.id, name: call.name, arguments: call.arguments } });
       }
       emit("response.completed", { response: { id, model: body.model ?? "", status: "completed", output: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } });
+      console.log(`[adapter] → done · text=${JSON.stringify(text.slice(0, 40))} · calls=${calls.size}`);
       response.end();
     } catch (error) {
       if (!response.headersSent) send(500, JSON.stringify({ error: String(error?.message ?? error) }));
@@ -516,10 +526,19 @@ class Agent {
       this.extraEnv = credential === null ? {} : { [envKey]: credential.value };
       console.log(`[agent] provider → ${provider.label} (${provider.model}) · CODEX_HOME=${home}`);
     }
+    /**
+     * Restarting on purpose: the old core's pending requests are going to be rejected with "agent core
+     * exited", which is expected and must not look like a failure to the caller.
+     */
     const child = this.child;
     this.child = null;
     this.threads.clear();
-    if (child !== null) child.kill();
+    this.models = null;
+    if (child !== null) {
+      for (const pending of this.pending.values()) pending.reject(new Error("core restarted for a provider switch"));
+      this.pending.clear();
+      child.kill();
+    }
     await this.start();
     return { provider: provider?.id ?? null, codexHome: this.codexHome };
   }
