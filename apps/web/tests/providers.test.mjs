@@ -184,3 +184,19 @@ test("keys are named, never shown, and a provider needs a real endpoint", () => 
   assert.deepEqual(providerProblems({ label: "OpenAI", baseUrl: "https://api.openai.com/v1" }), []);
   assert.deepEqual(providerProblems({ label: "", baseUrl: "api.openai.com" }), ["给它起个名字", "Base URL 要以 http:// 或 https:// 开头"]);
 });
+
+test("provider presets are real rows with a source, not invented data", async () => {
+  const { PROVIDER_PRESETS, describePreset, presetById } = await import("../src/lib/providerPresets.ts");
+  assert.ok(PROVIDER_PRESETS.length >= 8, "enough presets that adding a provider is a choice, not typing");
+  const ids = PROVIDER_PRESETS.map((preset) => preset.id);
+  assert.equal(new Set(ids).size, ids.length, "ids are unique");
+  for (const preset of PROVIDER_PRESETS) {
+    assert.match(preset.baseUrl, /^https?:\/\//, `${preset.id} has a usable endpoint`);
+    assert.ok(preset.source.includes("shadow"), `${preset.id} says where its values came from`);
+    // Every model id must be a plain identifier — no prose sneaking into the data.
+    for (const model of preset.models) assert.match(model, /^[A-Za-z0-9._-]+$/, `${preset.id}: ${model}`);
+  }
+  assert.equal(presetById("minimax")?.label, "MiniMax");
+  assert.equal(presetById("nope"), undefined);
+  assert.ok(describePreset(presetById("aliyun")).includes("个模型"));
+});
