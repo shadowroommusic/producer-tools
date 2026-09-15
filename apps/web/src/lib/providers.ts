@@ -1,14 +1,18 @@
 /**
  * Which model does what.
  *
- * One 服务商 (provider) is an endpoint plus a credential name; a 能力槽 (slot) is one of that
- * provider's models doing one job. Roles point at slots. The point of the split is the rule the user
- * asked for: **the chat can only switch the main model** — everything else (voice out, voice clone,
- * speech in, images) is chosen in settings and never appears next to the send button.
+ * One 服务商 (provider) is an endpoint plus a credential *name*; the provider declares which
+ * **capabilities** it offers (主模型 / 语音合成 / 音色克隆 / 语音识别 / 生图), each with its own
+ * protocol, endpoint and default model. Roles then point at `providerId:capability`.
  *
- * Credentials are *names* here — never values. The bridge owns the values (see `tools/agent-bridge.mjs`,
- * `~/.shadowroom/credentials.json`, 0600, environment variables win), so a project file or a browser
- * profile can be copied around without leaking a key.
+ * Two rules from the project's first principle live here:
+ *
+ * 1. **The capability is the only truth.** There used to be a persisted `slots` array *and* the roles
+ *    pointing into it — two things describing the same assignment. Slots are now derived
+ *    ({@link deriveSlots}), so they cannot drift.
+ * 2. **Nothing is copied that can be inherited.** A capability's `baseUrl`/`protocol` are empty
+ *    unless the user deliberately overrides them; {@link capabilityTarget} resolves the inheritance.
+ *    Storing a copy would mean editing the chat endpoint silently leaves an old TTS endpoint behind.
  */
 
 /** What a model can be asked to do. These are also the roles the settings page offers. */
@@ -26,45 +30,92 @@ export const CAPABILITIES: ReadonlyArray<{ kind: CapabilityKind; label: string; 
 /** How a provider's HTTP requests are shaped. `openai` is the common one; `custom` trusts the path. */
 export type ProviderProtocol = "openai" | "elevenlabs" | "custom";
 
+/**
+ * What one capability needs on top of the provider.
+ *
+ * Every optional field means **inherit**: an empty `baseUrl` is the provider's chat endpoint, an empty
+ * `protocol` is the provider's protocol. That is why they are optional rather than pre-filled — a copy
+ * would be a second truth that goes stale the moment the chat endpoint changes.
+ */
+export type CapabilityOverride = {
+  enabled: boolean;
+  protocol?: ProviderProtocol;
+  baseUrl?: string;
+  /** Path override, e.g. `/audio/speech`; the protocol's default path is used when absent. */
+  endpointPath?: string;
+  /** The model this capability uses. Required once the capability is enabled. */
+  defaultModel?: string;
+  /** Other models worth offering in the role dropdown; collapsed in the UI. */
+  extraModels?: string[];
+  /** Capability-specific extras: TTS `voice`, STT `language`, image `size`… */
+  options?: Record<string, string>;
+};
+
 export type ProviderProfile = {
   id: string;
   label: string;
+  /** The chat endpoint. Capabilities inherit it unless they override it. */
   baseUrl: string;
   /** Name of the credential in the bridge's store; `null` when the endpoint needs no key. */
   credentialRef: string | null;
   protocol: ProviderProtocol;
   enabled: boolean;
+  capabilities: Partial<Record<CapabilityKind, CapabilityOverride>>;
 };
 
-/** One model, doing one job. */
-export type CapabilitySlot = {
-  id: string;
+/** A capability, resolved: what to call, where, and with which model. */
+export type CapabilityTarget = {
   providerId: string;
   capability: CapabilityKind;
+  protocol: ProviderProtocol;
+  baseUrl: string;
+  endpointPath: string | undefined;
   model: string;
-  /** Overrides the protocol's default path, e.g. `/audio/speech` vs `/chat/completions`. */
-  endpointPath?: string;
-  enabled: boolean;
-  /** Capability-specific extras: TTS's `voice`, image's `size`… */
-  metadata?: Record<string, string>;
+  models: string[];
+  options: Record<string, string>;
 };
 
-/** Role → slot id, or `null` when the role is deliberately not configured. */
+/** Derived, never stored: one slot per enabled capability that names a model. */
+export type CapabilitySlot = { id: string; providerId: string; capability: CapabilityKind; model: string };
+
+/** Role → slot id (`providerId:capability`), or `null` when the role is deliberately not configured. */
 export type RoleMap = Record<CapabilityKind, string | null>;
 
 export type ModelSettings = {
-  version: 1;
+  /** 2 since capabilities became the truth and slots became derived. */
+  version: 2;
   providers: ProviderProfile[];
-  slots: CapabilitySlot[];
   roles: RoleMap;
+};
+
+/** The default path each capability hits, per protocol — used when a capability overrides nothing. */
+export const DEFAULT_PATHS: Record<CapabilityKind, string> = {
+  agent: "/chat/completions",
+  tts: "/audio/speech",
+  voice_clone: "/voices/add",
+  stt: "/audio/transcriptions",
+  image: "/images/generations",
+};
+
+/**
+ * What turning a capability on should pre-fill.
+ *
+ * Not empty boxes: a beginner who switches on 语音合成 should find the model and voice that almost
+ * every OpenAI-compatible endpoint uses, and change them only if their provider differs.
+ */
+export const CAPABILITY_DEFAULTS: Record<CapabilityKind, { model: string; options?: Record<string, string> }> = {
+  agent: { model: "" },
+  tts: { model: "tts-1", options: { voice: "alloy", format: "mp3" } },
+  voice_clone: { model: "eleven_multilingual_v2", options: { samples: "5" } },
+  stt: { model: "whisper-1", options: { language: "auto", format: "wav" } },
+  image: { model: "", options: { size: "1024x1024", format: "png" } },
 };
 
 /** Everything unconfigured: the built-in agent (Codex) is the default main model. */
 export function emptySettings(): ModelSettings {
   return {
-    version: 1,
+    version: 2,
     providers: [],
-    slots: [],
     roles: { agent: null, tts: null, voice_clone: null, stt: null, image: null },
   };
 }
@@ -72,18 +123,12 @@ export function emptySettings(): ModelSettings {
 /** Where the settings live in the browser (no secrets: those are in the bridge). */
 export const SETTINGS_KEY = "shadowroom.models.v1";
 
+/** Read settings, upgrading anything written by the first version. */
 export function loadModelSettings(): ModelSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (raw === null) return emptySettings();
-    const parsed = JSON.parse(raw) as Partial<ModelSettings>;
-    const base = emptySettings();
-    return {
-      version: 1,
-      providers: Array.isArray(parsed.providers) ? parsed.providers : base.providers,
-      slots: Array.isArray(parsed.slots) ? parsed.slots : base.slots,
-      roles: { ...base.roles, ...(parsed.roles ?? {}) },
-    };
+    return normalizeSettings(JSON.parse(raw));
   } catch {
     return emptySettings();
   }
@@ -95,6 +140,66 @@ export function saveModelSettings(settings: ModelSettings): void {
   } catch {
     /* storage blocked: the in-memory settings still work for this session */
   }
+}
+
+/**
+ * Bring any stored shape up to version 2.
+ *
+ * Version 1 kept a `slots` array and pointed roles at slot ids. Those slots are folded into the
+ * provider's capabilities (inheriting its endpoint, since that is what the old UI meant) and the role
+ * ids are rewritten to `providerId:capability`. The `slots` key is dropped, so a reader can never
+ * find two answers again.
+ */
+export function normalizeSettings(parsed: unknown): ModelSettings {
+  const base = emptySettings();
+  if (parsed === null || typeof parsed !== "object") return base;
+  const raw = parsed as {
+    version?: number;
+    providers?: Array<Partial<ProviderProfile> & { capabilities?: ProviderProfile["capabilities"] }>;
+    slots?: Array<{ id: string; providerId: string; capability: CapabilityKind; model: string }>;
+    roles?: Partial<RoleMap>;
+  };
+  if (!Array.isArray(raw.providers)) return base;
+  const legacySlots = Array.isArray(raw.slots) ? raw.slots : [];
+
+  const providers: ProviderProfile[] = raw.providers.map((entry) => {
+    const id = String(entry.id ?? `p-${Math.random().toString(36).slice(2, 8)}`);
+    const capabilities: ProviderProfile["capabilities"] = { ...(entry.capabilities ?? {}) };
+    for (const slot of legacySlots.filter((candidate) => candidate.providerId === id)) {
+      const existing = capabilities[slot.capability];
+      capabilities[slot.capability] = {
+        enabled: true,
+        ...(existing ?? {}),
+        defaultModel: existing?.defaultModel ?? slot.model,
+      };
+    }
+    return {
+      id,
+      label: String(entry.label ?? id),
+      baseUrl: String(entry.baseUrl ?? ""),
+      credentialRef: entry.credentialRef === null || entry.credentialRef === undefined ? null : String(entry.credentialRef),
+      protocol: (entry.protocol ?? "openai") as ProviderProtocol,
+      enabled: entry.enabled !== false,
+      capabilities,
+    };
+  });
+
+  const roles: RoleMap = { ...base.roles };
+  for (const kind of Object.keys(roles) as CapabilityKind[]) {
+    const stored = raw.roles?.[kind];
+    if (stored === null || stored === undefined) {
+      roles[kind] = null;
+      continue;
+    }
+    if (stored.includes(":")) {
+      roles[kind] = stored;
+      continue;
+    }
+    // A version-1 slot id: translate it into the provider+capability it named.
+    const slot = legacySlots.find((candidate) => candidate.id === stored);
+    roles[kind] = slot === undefined ? null : `${slot.providerId}:${slot.capability}`;
+  }
+  return { version: 2, providers, roles };
 }
 
 /** The credential name a new provider defaults to, e.g. `openai` from its label. */
@@ -129,35 +234,107 @@ export function providerProblems(profile: Pick<ProviderProfile, "label" | "baseU
   return problems;
 }
 
-/**
- * The slots that may serve one role: same capability, enabled, a real model name, and a provider
- * that is switched on. A slot whose model is still blank is a half-typed row, not an answer — the
- * chat must never offer "OpenAI · " as if it were a model.
- */
-export function slotsForRole(settings: ModelSettings, role: CapabilityKind): CapabilitySlot[] {
-  const live = new Set(settings.providers.filter((provider) => provider.enabled).map((provider) => provider.id));
-  return settings.slots.filter(
-    (slot) => slot.capability === role && slot.enabled && slot.model.trim() !== "" && live.has(slot.providerId),
-  );
+/** One capability's configuration, or `{enabled:false}` when the provider does not offer it. */
+export function capabilityOf(provider: ProviderProfile, kind: CapabilityKind): CapabilityOverride {
+  return provider.capabilities[kind] ?? { enabled: false };
 }
 
-/** The slot a role points at, or undefined when it is unconfigured or points at a dead slot. */
-export function slotForRole(settings: ModelSettings, role: CapabilityKind): CapabilitySlot | undefined {
-  const id = settings.roles[role];
-  if (id === null || id === undefined) return undefined;
-  return slotsForRole(settings, role).find((slot) => slot.id === id);
+/** Resolve inheritance: what this capability would actually call, and with which model. */
+export function capabilityTarget(provider: ProviderProfile, kind: CapabilityKind): CapabilityTarget {
+  const config = capabilityOf(provider, kind);
+  const model = (config.defaultModel ?? "").trim();
+  return {
+    providerId: provider.id,
+    capability: kind,
+    protocol: config.protocol ?? provider.protocol,
+    baseUrl: (config.baseUrl ?? "").trim() === "" ? provider.baseUrl.trim() : (config.baseUrl as string).trim(),
+    endpointPath: config.endpointPath,
+    model,
+    models: model === "" ? [...(config.extraModels ?? [])] : [model, ...(config.extraModels ?? [])],
+    options: config.options ?? {},
+  };
 }
 
+/** What a status badge should say about one capability. */
+export type CapabilityStatus = "off" | "ready" | "needs-model" | "needs-credential" | "needs-endpoint" | "needs-path";
+
 /**
- * The slot a role points at even when it is not usable yet — a provider just switched off, or a model
- * name the user has not typed in. The settings page needs this: without it, choosing a provider would
- * immediately lose the choice (the strict lookup answers "nothing") and the model field would vanish
- * before anyone could fill it in.
+ * Why a capability is not usable, in the order a user would fix it.
+ *
+ * "凭证未配置" is its own state because it needs a different sentence from "模型没填" — and because a
+ * credential lives outside the settings document entirely (the bridge holds the value).
  */
-export function assignedSlot(settings: ModelSettings, role: CapabilityKind): CapabilitySlot | undefined {
+export function capabilityStatus(
+  provider: ProviderProfile,
+  kind: CapabilityKind,
+  credential: { source: "file" | "env" | "missing" } | undefined,
+): CapabilityStatus {
+  const config = capabilityOf(provider, kind);
+  if (!config.enabled) return "off";
+  if (provider.credentialRef !== null && (credential === undefined || credential.source === "missing")) {
+    return "needs-credential";
+  }
+  if ((config.defaultModel ?? "").trim() === "") return "needs-model";
+  const target = capabilityTarget(provider, kind);
+  if (target.baseUrl !== "" && !/^https?:\/\//i.test(target.baseUrl)) return "needs-endpoint";
+  if (target.protocol === "custom" && (config.endpointPath ?? "") === "") return "needs-path";
+  if (target.baseUrl === "") return "needs-endpoint";
+  return "ready";
+}
+
+/** The sentence a badge shows. */
+export function capabilityStatusLabel(status: CapabilityStatus): string {
+  switch (status) {
+    case "ready":
+      return "已启用";
+    case "needs-model":
+      return "需配置模型";
+    case "needs-credential":
+      return "凭证未配置";
+    case "needs-endpoint":
+      return "需配置端点";
+    case "needs-path":
+      return "需配置路径";
+    default:
+      return "未启用";
+  }
+}
+
+/** The derived slots: one per enabled capability that names a model. */
+export function deriveSlots(settings: ModelSettings): CapabilitySlot[] {
+  const slots: CapabilitySlot[] = [];
+  for (const provider of settings.providers) {
+    for (const kind of Object.keys(CAPABILITY_DEFAULTS) as CapabilityKind[]) {
+      const config = capabilityOf(provider, kind);
+      if (!config.enabled) continue;
+      const model = (config.defaultModel ?? "").trim();
+      if (model === "") continue;
+      slots.push({ id: `${provider.id}:${kind}`, providerId: provider.id, capability: kind, model });
+    }
+  }
+  return slots;
+}
+
+/** Every model a role could pick: the capability's default first, then its extras. */
+export function capabilityModels(provider: ProviderProfile, kind: CapabilityKind): string[] {
+  return capabilityTarget(provider, kind).models;
+}
+
+/** The provider+capability a role points at, or undefined when it points at nothing usable. */
+export function roleTarget(
+  settings: ModelSettings,
+  role: CapabilityKind,
+): { provider: ProviderProfile; capability: CapabilityKind; model: string } | undefined {
   const id = settings.roles[role];
   if (id === null || id === undefined) return undefined;
-  return settings.slots.find((slot) => slot.id === id);
+  const [providerId, capability] = id.split(":");
+  const provider = settings.providers.find((entry) => entry.id === providerId);
+  if (provider === undefined || provider.enabled === false) return undefined;
+  const config = capabilityOf(provider, capability as CapabilityKind);
+  if (!config.enabled) return undefined;
+  const model = (config.defaultModel ?? "").trim();
+  if (model === "") return undefined;
+  return { provider, capability: capability as CapabilityKind, model };
 }
 
 /**
@@ -167,21 +344,22 @@ export function assignedSlot(settings: ModelSettings, role: CapabilityKind): Cap
  * remember it.
  */
 export function mainModelChoices(settings: ModelSettings): Array<{ provider: ProviderProfile; slot: CapabilitySlot }> {
-  return slotsForRole(settings, "agent").map((slot) => ({
-    provider: settings.providers.find((provider) => provider.id === slot.providerId) as ProviderProfile,
-    slot,
-  }));
+  return deriveSlots(settings)
+    .filter((slot) => slot.capability === "agent")
+    .map((slot) => ({
+      provider: settings.providers.find((provider) => provider.id === slot.providerId) as ProviderProfile,
+      slot,
+    }))
+    .filter((choice) => choice.provider !== undefined);
 }
 
 /** A one-line description of a role for the settings page: who serves it, or that nobody does. */
 export function roleSummary(settings: ModelSettings, role: CapabilityKind): string {
-  const slot = slotForRole(settings, role);
-  if (slot === undefined) return "未配置";
-  const provider = settings.providers.find((entry) => entry.id === slot.providerId);
-  return `${provider?.label ?? "?"} · ${slot.model}`;
+  const target = roleTarget(settings, role);
+  return target === undefined ? "未配置" : `${target.provider.label} · ${target.model}`;
 }
 
-/** Add or replace one provider, and keep slots pointing at providers that still exist. */
+/** Add or replace one provider. */
 export function upsertProvider(settings: ModelSettings, profile: ProviderProfile): ModelSettings {
   const exists = settings.providers.some((entry) => entry.id === profile.id);
   return {
@@ -192,58 +370,70 @@ export function upsertProvider(settings: ModelSettings, profile: ProviderProfile
   };
 }
 
-/**
- * Remove a provider and everything that pointed at it — including roles, which fall back to
- * "unconfigured" rather than silently keeping a slot that can never work.
- */
+/** Remove a provider and unplug every role that pointed at it. */
 export function removeProvider(settings: ModelSettings, providerId: string): ModelSettings {
-  const gone = settings.slots.filter((slot) => slot.providerId === providerId).map((slot) => slot.id);
   const roles = { ...settings.roles };
   for (const role of Object.keys(roles) as CapabilityKind[]) {
-    if (roles[role] !== null && gone.includes(roles[role] as string)) roles[role] = null;
+    if (roles[role]?.startsWith(`${providerId}:`)) roles[role] = null;
   }
-  return {
-    ...settings,
-    providers: settings.providers.filter((entry) => entry.id !== providerId),
-    slots: settings.slots.filter((slot) => slot.providerId !== providerId),
-    roles,
-  };
+  return { ...settings, providers: settings.providers.filter((entry) => entry.id !== providerId), roles };
 }
 
-/** Point a role at a slot (or at nothing). */
-export function setRole(settings: ModelSettings, role: CapabilityKind, slotId: string | null): ModelSettings {
-  return { ...settings, roles: { ...settings.roles, [role]: slotId } };
+/** Point a role at a capability (or at nothing). */
+export function setRole(settings: ModelSettings, role: CapabilityKind, capabilityId: string | null): ModelSettings {
+  return { ...settings, roles: { ...settings.roles, [role]: capabilityId } };
 }
 
-/** Give a role a slot for a provider+model, creating the slot when it does not exist yet. */
-export function assignRole(
+/** Turn one capability on or off, pre-filling the defaults when it is switched on. */
+export function setCapability(
   settings: ModelSettings,
-  role: CapabilityKind,
   providerId: string,
-  model: string,
-  metadata?: Record<string, string>,
+  kind: CapabilityKind,
+  patch: Partial<CapabilityOverride> | null,
 ): ModelSettings {
-  const trimmed = model.trim();
-  const existing = settings.slots.find(
-    (slot) => slot.capability === role && slot.providerId === providerId && slot.model === trimmed,
-  );
-  const slot: CapabilitySlot =
-    existing ??
-    {
-      id: `slot-${role}-${providerId}-${trimmed.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "model"}`,
-      providerId,
-      capability: role,
-      model: trimmed,
-      enabled: true,
+  const providers = settings.providers.map((provider) => {
+    if (provider.id !== providerId) return provider;
+    if (patch === null) {
+      const capabilities = { ...provider.capabilities };
+      delete capabilities[kind];
+      return { ...provider, capabilities };
+    }
+    const current = provider.capabilities[kind];
+    const turningOn = patch.enabled === true && current?.enabled !== true;
+    const defaults = CAPABILITY_DEFAULTS[kind];
+    return {
+      ...provider,
+      capabilities: {
+        ...provider.capabilities,
+        [kind]: {
+          ...(current ?? {}),
+          ...(turningOn
+            ? { defaultModel: current?.defaultModel ?? defaults.model, options: current?.options ?? defaults.options }
+            : {}),
+          ...patch,
+        },
+      },
     };
-  const withSlot: ModelSettings = existing === undefined ? { ...settings, slots: [...settings.slots, slot] } : settings;
-  const slots = withSlot.slots.map((entry) =>
-    entry.id === slot.id ? { ...entry, enabled: true, ...(metadata === undefined ? {} : { metadata }) } : entry,
-  );
-  return setRole({ ...withSlot, slots }, role, slot.id);
+  });
+  /**
+   * Switching a capability off unplugs the roles that pointed at it — in the same update, so no render
+   * ever sees a role pointing at a capability that just disappeared.
+   */
+  const roles = { ...settings.roles };
+  if (patch === null) {
+    for (const role of Object.keys(roles) as CapabilityKind[]) {
+      if (roles[role] === `${providerId}:${kind}`) roles[role] = null;
+    }
+  }
+  return { ...settings, providers, roles };
 }
 
-/** Turn a role off without deleting the slot underneath it. */
+/** Point a role at a provider's capability. */
+export function assignRole(settings: ModelSettings, role: CapabilityKind, providerId: string): ModelSettings {
+  return setRole(settings, role, `${providerId}:${role}`);
+}
+
+/** Switch a role off without touching the provider underneath it. */
 export function clearRole(settings: ModelSettings, role: CapabilityKind): ModelSettings {
   return setRole(settings, role, null);
 }

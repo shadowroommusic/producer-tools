@@ -1090,6 +1090,236 @@
 }
 
 /* 通话的声音: one select and one 试听 button — the list is whatever this machine has. */
+.sr-settings-body {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* 设置内部导航: 角色与路由 / 供应商 / 通话与声音 — one page each, like the reference app. */
+.sr-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+}
+
+.sr-settings-nav-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-settings-nav-item:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+.sr-settings-nav-item[data-active] {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+  box-shadow: inset 2px 0 0 var(--sr-accent);
+}
+
+.sr-settings-nav-label {
+  font-size: 13px;
+}
+
+.sr-settings-nav-hint {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+.sr-settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sr-settings-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* The key field and its 保存 button read as one control. */
+.sr-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sr-key-row .sr-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sr-key-row .sr-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* One card per capability: name, status badge, switch, then the fields when it is on. */
+.sr-capability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sr-capability-card {
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-bg-base);
+}
+
+.sr-capability-card[data-on] {
+  border-color: var(--sr-border-strong);
+}
+
+.sr-capability-card[data-status="needs-model"],
+.sr-capability-card[data-status="needs-endpoint"],
+.sr-capability-card[data-status="needs-path"],
+.sr-capability-card[data-status="needs-credential"] {
+  border-left: 3px solid var(--sr-warn, #fbbf24);
+}
+
+.sr-capability-card[data-status="ready"] {
+  border-left: 3px solid var(--sr-ok, #34d399);
+}
+
+.sr-capability-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.sr-capability-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-capability-name {
+  font-size: 13px;
+}
+
+.sr-capability-badge {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover);
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+.sr-capability-badge[data-status="ready"] {
+  background: color-mix(in srgb, var(--sr-ok, #34d399) 18%, transparent);
+  color: var(--sr-ok, #34d399);
+}
+
+.sr-capability-badge[data-status^="needs"] {
+  background: color-mix(in srgb, var(--sr-warn, #fbbf24) 18%, transparent);
+  color: var(--sr-warn, #fbbf24);
+}
+
+.sr-capability-hint {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+}
+
+.sr-capability-toggle {
+  flex: none;
+  min-width: 44px;
+  height: 24px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sr-capability-toggle[data-on] {
+  border-color: var(--sr-accent);
+  color: var(--sr-accent);
+}
+
+.sr-capability-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+  border-top: 0.5px solid var(--sr-border-l3);
+  padding-top: 12px;
+}
+
+.sr-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.sr-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sr-model-chip {
+  padding: 2px 8px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-pill);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.sr-model-chip:hover,
+.sr-model-chip[data-on] {
+  border-color: var(--sr-accent);
+  color: var(--sr-accent);
+}
+
+.sr-capability-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sr-capability-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sr-label-caption);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-provider-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .sr-voice-picker {
   display: flex;
   align-items: center;
