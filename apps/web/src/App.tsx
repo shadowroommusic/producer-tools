@@ -2226,6 +2226,12 @@ export function App() {
         </div>
       }
       dockRail={
+        /**
+         * Pages that have no conversation show no way *into* one either: a rail whose only button
+         * teleports you elsewhere is the same "why is there a chat in my settings" problem in smaller
+         * form. 设置 and 插件 therefore get a plain collapsed column.
+         */
+        !viewShowsDock ? null : (
         <div className="sr-dock-rail">
           <button
             type="button"
@@ -2242,6 +2248,7 @@ export function App() {
             <IconChat size={18} />
           </button>
         </div>
+        )
       }
       dock={
         <DockPanel
