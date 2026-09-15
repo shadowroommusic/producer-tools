@@ -38,7 +38,7 @@ const WORKSPACES: Array<{ id: WorkspaceId; label: string; icon: typeof IconWorkb
   { id: "library", label: "曲目库", icon: IconLibrary, ready: false },
   { id: "studio", label: "Studio", icon: IconStudio, ready: true },
   { id: "dj", label: "DJ", icon: IconDj, ready: false },
-  { id: "settings", label: "设置", icon: IconSettings, ready: false },
+  { id: "settings", label: "设置", icon: IconSettings, ready: true },
 ];
 
 /** Scrollbars are a pointer affordance: a column nobody points at carries none. */

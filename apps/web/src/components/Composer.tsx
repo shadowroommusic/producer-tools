@@ -22,6 +22,7 @@ export function Composer({
   mode,
   onModeChange,
   models = [],
+  otherMainModels = [],
   modelId,
   onModelSelect,
   attachments = [],
@@ -51,6 +52,8 @@ export function Composer({
   mode: string;
   onModeChange: (mode: string) => void;
   models?: AgentModel[];
+  /** 主模型配置好但还没接上 harness 的：列出来，但点不动。 */
+  otherMainModels?: AgentModel[];
   modelId?: string;
   onModelSelect?: (id: string) => void;
   attachments?: Mention[];
@@ -328,6 +331,25 @@ export function Composer({
                   onModelSelect?.(model.id);
                   setMenu("none");
                 }}
+              >
+                <span className="sr-menu-label">{model.displayName}</span>
+                <span className="sr-menu-hint">{model.description}</span>
+              </button>
+            ))}
+            {/*
+              The main model is the *only* model this menu may ever offer (语音、生图 等在设置里).
+              A custom 主模型 that is configured but not yet wired shows up switched off, so the
+              menu never lies about what can answer right now.
+            */}
+            {otherMainModels.map((model) => (
+              <button
+                key={model.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={false}
+                className="sr-menu-item"
+                disabled
+                title="在设置里配好了，但要等 harness 接入后才由它回答"
               >
                 <span className="sr-menu-label">{model.displayName}</span>
                 <span className="sr-menu-hint">{model.description}</span>

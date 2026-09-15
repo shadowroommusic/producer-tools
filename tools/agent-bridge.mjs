@@ -22,7 +22,7 @@
  *   SHADOWROOM_AGENT_PORT      default 8788
  */
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -151,6 +151,76 @@ function safeFileName(name) {
     .replace(/^\.+/, "")
     .trim()
     .slice(0, 120);
+}
+
+/**
+ * Where model credentials live.
+ *
+ * Settings files (browser storage, project JSON) contain only the *name* of a credential. The value
+ * lives here: one file only this OS user can read (`~/.shadowroom/credentials.json`, mode 0600, in a
+ * 0700 directory), with an environment variable per credential winning over the file so a shell can
+ * override without touching disk. The bridge is the only thing that ever reads a key — the browser
+ * asks it to make the call instead of holding the secret itself.
+ */
+const CREDENTIALS_DIR = process.env.SHADOWROOM_CREDENTIALS_DIR ?? join(homedir(), ".shadowroom");
+const CREDENTIALS_FILE = join(CREDENTIALS_DIR, "credentials.json");
+
+function credentialEnvName(reference) {
+  return `SHADOWROOM_${reference.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+function readCredentialFile() {
+  try {
+    const parsed = JSON.parse(readFileSync(CREDENTIALS_FILE, "utf8"));
+    return parsed !== null && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCredentialFile(map) {
+  mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(CREDENTIALS_FILE, `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
+  // writeFileSync only applies the mode when it creates the file, so set it either way.
+  chmodSync(CREDENTIALS_FILE, 0o600);
+}
+
+function masked(value) {
+  return `••••••••${value.length > 4 ? value.slice(-4) : ""}`;
+}
+
+/** The stored credential for a reference, environment first. */
+function resolveCredential(reference) {
+  const env = credentialEnvName(reference);
+  if (typeof process.env[env] === "string" && process.env[env] !== "") {
+    return { value: process.env[env], source: "env", variable: env };
+  }
+  const stored = readCredentialFile()[reference];
+  if (typeof stored === "string" && stored !== "") return { value: stored, source: "file" };
+  return null;
+}
+
+const CREDENTIAL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/** One HTTP call to a provider, with the key attached the way that protocol expects. */
+async function callProvider({ baseUrl, reference, protocol }, path, init) {
+  const credential = reference === null || reference === undefined ? null : resolveCredential(reference);
+  const headers = { ...(init?.headers ?? {}) };
+  if (credential !== null && protocol !== "elevenlabs") headers.authorization = `Bearer ${credential.value}`;
+  if (credential !== null && protocol === "elevenlabs") headers["xi-api-key"] = credential.value;
+  const url = `${String(baseUrl).replace(/\/+$/, "")}${path}`;
+  const response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(20_000) });
+  return { response, credential };
+}
+
+/** Turn a failed provider response into a sentence the settings page can show as-is. */
+async function providerFailure(response) {
+  if (response.status === 401 || response.status === 403) return "Key 无效或没有权限";
+  if (response.status === 404) return "端点或模型不存在";
+  if (response.status === 429) return "请求太频繁（被限流了）";
+  if (response.status >= 500) return "服务商那边出错了";
+  const detail = (await response.text().catch(() => "")).slice(0, 200).trim();
+  return detail === "" ? `HTTP ${response.status}` : `HTTP ${response.status}：${detail}`;
 }
 
 /** Extensions the studio may stream into the browser (audio + MIDI, nothing executable). */
@@ -636,6 +706,177 @@ const http = createServer(async (request, response) => {
       writeFileSync(target, Buffer.from(data, "base64"));
       console.log(`[agent] audio saved: ${target}`);
       json(response, 200, { path: target, bytes: Buffer.byteLength(data, "base64") });
+      return;
+    }
+
+    /**
+     * Which credentials exist — names, sources and masks. Never a value.
+     */
+    if (request.method === "GET" && url.pathname === "/api/agent/credentials") {
+      const stored = readCredentialFile();
+      const names = new Set(Object.keys(stored));
+      for (const [key, value] of Object.entries(process.env)) {
+        if (key.startsWith("SHADOWROOM_") && key.endsWith("_KEY") === false && typeof value === "string") {
+          // SHADOWROOM_OPENAI → openai; the variable name is the name the settings page knows.
+          names.add(key.slice("SHADOWROOM_".length).toLowerCase());
+        }
+      }
+      const credentials = [...names].sort().map((name) => {
+        const resolved = resolveCredential(name);
+        return resolved === null
+          ? { name, source: "missing", masked: "" }
+          : { name, source: resolved.source, masked: masked(resolved.value), variable: resolved.variable ?? credentialEnvName(name) };
+      });
+      json(response, 200, { credentials, file: CREDENTIALS_FILE });
+      return;
+    }
+
+    /** Store or replace one credential. */
+    if (request.method === "POST" && url.pathname === "/api/agent/credentials") {
+      const body = await readJsonBody(request, 64 * 1024);
+      const name = typeof body.name === "string" ? body.name.trim().toLowerCase() : "";
+      const value = typeof body.value === "string" ? body.value.trim() : "";
+      if (!CREDENTIAL_NAME.test(name)) {
+        json(response, 400, { error: "凭证名只能用小写字母、数字、点、下划线和横线" });
+        return;
+      }
+      if (value === "") {
+        json(response, 400, { error: "Key 不能是空的" });
+        return;
+      }
+      const map = readCredentialFile();
+      map[name] = value;
+      writeCredentialFile(map);
+      console.log(`[agent] credential stored: ${name}`);
+      json(response, 200, { name, source: "file", masked: masked(value) });
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/agent/credentials") {
+      const name = (url.searchParams.get("name") ?? "").trim().toLowerCase();
+      if (!CREDENTIAL_NAME.test(name)) {
+        json(response, 400, { error: "凭证名不合法" });
+        return;
+      }
+      const map = readCredentialFile();
+      delete map[name];
+      writeCredentialFile(map);
+      json(response, 200, { name, removed: true });
+      return;
+    }
+
+    /**
+     * The model list a provider offers, asked for when the settings page opens a dropdown.
+     *
+     * Never fetched on save: probing a provider can cost money and can fail for providers without a
+     * `/models` route, so the page falls back to typing a model name instead of refusing to continue.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/providers/models") {
+      const body = await readJsonBody(request, 64 * 1024);
+      const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+      if (baseUrl === "") {
+        json(response, 400, { error: "缺少 Base URL" });
+        return;
+      }
+      try {
+        const { response: answer } = await callProvider(
+          { baseUrl, reference: body.credentialRef ?? null, protocol: body.protocol ?? "openai" },
+          "/models",
+          { method: "GET" },
+        );
+        if (!answer.ok) {
+          json(response, 200, { models: [], error: await providerFailure(answer) });
+          return;
+        }
+        const payload = await answer.json().catch(() => ({}));
+        const models = Array.isArray(payload?.data)
+          ? payload.data.map((entry) => String(entry?.id ?? entry?.name ?? "")).filter(Boolean)
+          : Array.isArray(payload?.models)
+            ? payload.models.map((entry) => String(entry?.name ?? entry?.id ?? entry)).filter(Boolean)
+            : [];
+        json(response, 200, { models });
+      } catch (cause) {
+        json(response, 200, { models: [], error: `连不上：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
+      return;
+    }
+
+    /**
+     * The smallest request that proves one role works: a 5-token chat, a two-word synthesis, a
+     * 256×256 image. Small on purpose — a test button must not spend the user's credit.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/providers/test") {
+      const body = await readJsonBody(request, 256 * 1024);
+      const capability = String(body.capability ?? "");
+      const model = String(body.model ?? "").trim();
+      const provider = {
+        baseUrl: String(body.baseUrl ?? "").trim(),
+        reference: body.credentialRef ?? null,
+        protocol: body.protocol ?? "openai",
+      };
+      if (provider.baseUrl === "" || model === "") {
+        json(response, 400, { error: "先选好服务商和模型" });
+        return;
+      }
+      const started = Date.now();
+      try {
+        if (capability === "agent") {
+          const { response: answer } = await callProvider(provider, "/chat/completions", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 5 }),
+          });
+          if (!answer.ok) {
+            json(response, 200, { ok: false, detail: await providerFailure(answer) });
+            return;
+          }
+          const payload = await answer.json().catch(() => ({}));
+          const said = payload?.choices?.[0]?.message?.content ?? "";
+          json(response, 200, {
+            ok: typeof said === "string" && said.trim() !== "",
+            detail: typeof said === "string" && said.trim() !== "" ? `回复：${said.trim().slice(0, 40)}` : "回复是空的",
+            ms: Date.now() - started,
+          });
+          return;
+        }
+        if (capability === "tts") {
+          const voice = typeof body.voice === "string" && body.voice !== "" ? body.voice : "alloy";
+          const { response: answer } = await callProvider(provider, "/audio/speech", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model, input: "测试", voice, response_format: "mp3" }),
+          });
+          if (!answer.ok) {
+            json(response, 200, { ok: false, detail: await providerFailure(answer) });
+            return;
+          }
+          const bytes = (await answer.arrayBuffer()).byteLength;
+          json(response, 200, { ok: bytes > 1000, detail: `${bytes} 字节音频`, ms: Date.now() - started });
+          return;
+        }
+        if (capability === "image") {
+          const { response: answer } = await callProvider(provider, "/images/generations", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model, prompt: "a dot", size: "256x256", n: 1 }),
+          });
+          if (!answer.ok) {
+            json(response, 200, { ok: false, detail: await providerFailure(answer) });
+            return;
+          }
+          const payload = await answer.json().catch(() => ({}));
+          const made = payload?.data?.[0];
+          json(response, 200, {
+            ok: made !== undefined,
+            detail: made === undefined ? "没有返回图像" : "返回了 1 张图",
+            ms: Date.now() - started,
+          });
+          return;
+        }
+        json(response, 200, { ok: false, detail: "这个角色还没有自动测试；先按保存，用的时候会报错就知道" });
+      } catch (cause) {
+        json(response, 200, { ok: false, detail: `连不上：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
       return;
     }
 

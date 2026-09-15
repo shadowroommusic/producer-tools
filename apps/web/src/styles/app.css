@@ -869,6 +869,226 @@
 }
 
 /* 录音: a dot that lights up while a take is running, and the two click-track toggles beside it. */
+.sr-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 20px 40px;
+  overflow-y: auto;
+}
+
+.sr-settings-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sr-settings-title {
+  margin: 0;
+  font-size: var(--sr-text-17, 17px);
+  font-weight: 600;
+}
+
+.sr-settings-meta {
+  color: var(--sr-label-caption);
+  font-size: 11px;
+}
+
+.sr-settings-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-left: 3px solid var(--sr-accent);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  font-size: 12px;
+}
+
+.sr-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-md, 10px);
+  background: var(--sr-surface-1, var(--sr-surface-2));
+}
+
+.sr-settings-h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sr-settings-hint {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.sr-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-provider-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-bg-base);
+}
+
+.sr-provider-card[data-off] {
+  opacity: 0.5;
+}
+
+.sr-provider-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sr-provider-label {
+  font-size: 13px;
+}
+
+.sr-provider-url {
+  overflow: hidden;
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-provider-meta {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+.sr-provider-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.sr-settings-empty {
+  padding: 10px 0;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+  list-style: none;
+}
+
+.sr-settings-add {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sr-provider-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 0.5px dashed var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+}
+
+.sr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sr-field--wide {
+  grid-column: span 2;
+}
+
+.sr-provider-form-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sr-settings-problem {
+  margin-right: auto;
+  color: var(--sr-warn, var(--sr-label-secondary));
+  font-size: 11px;
+}
+
+.sr-role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-role-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(280px, 2fr);
+  gap: 6px 14px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-bg-base);
+}
+
+.sr-role-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sr-role-hint,
+.sr-role-summary {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+.sr-role-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sr-role-empty {
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+}
+
+.sr-role-test {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--sr-danger, #f87171);
+  font-size: 11px;
+}
+
+.sr-role-test[data-ok] {
+  color: var(--sr-ok, #34d399);
+}
+
 .sr-studio-record {
   gap: 6px;
 }

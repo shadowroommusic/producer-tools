@@ -8,7 +8,7 @@
  * tool a panel runs lands in that session's transcript next to the message that asked for it — the
  * same place the Codex core will write when it is wired.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./components/Composer";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
@@ -18,6 +18,8 @@ import { WorkbenchHome } from "./components/WorkbenchHome";
 import { PluginPanelPage } from "./components/PluginPanelPage";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
+import { SettingsPage } from "./components/SettingsPage";
+import { loadModelSettings, mainModelChoices, saveModelSettings, type ModelSettings } from "./lib/providers";
 import { StudioProjects, summarize } from "./components/StudioProjects";
 import { Transcript } from "./components/Transcript";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
@@ -116,7 +118,7 @@ export function App() {
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [mainView, setMainView] = useState<
-    "workbench" | "conversation" | "plugins" | "plugin" | "studio"
+    "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "settings"
   >(
     () =>
       (window.localStorage.getItem("shadowroom.view") as
@@ -125,6 +127,7 @@ export function App() {
         | "plugins"
         | "plugin"
         | "studio"
+        | "settings"
         | null) ?? "workbench",
   );
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
@@ -182,6 +185,27 @@ export function App() {
   }, []);
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
+  /**
+   * 主模型 configured in Settings that this build cannot run yet.
+   *
+   * The chat's switch may only ever offer main models (语音/生图 live in settings), so a configured
+   * one belongs in that list — switched off, with a reason, until the harness can route to it.
+   */
+  const [modelSettings, setModelSettings] = useState<ModelSettings>(() => loadModelSettings());
+  useEffect(() => {
+    saveModelSettings(modelSettings);
+  }, [modelSettings]);
+  const configuredMainModels = useMemo<AgentModel[]>(
+    () =>
+      mainModelChoices(modelSettings).map(({ provider, slot }) => ({
+        id: `custom:${slot.id}`,
+        displayName: `${provider.label} · ${slot.model}`,
+        description: "设置里配好的主模型（等 harness 接入后生效）",
+        isDefault: false,
+        supportedReasoningEfforts: [],
+      })),
+    [modelSettings],
+  );
   const [modelId, setModelId] = useState<string | undefined>(
     () => window.localStorage.getItem("shadowroom.model") ?? undefined,
   );
@@ -891,6 +915,7 @@ export function App() {
         mode={mode}
         onModeChange={setMode}
         models={models}
+        otherMainModels={configuredMainModels}
         modelId={modelId}
         onModelSelect={chooseModel}
         attachments={attachments}
@@ -1863,7 +1888,7 @@ export function App() {
             setWorkspace(next);
             // The work pages keep the conversation beside them; the conversation page is the
             // conversation, so the dock folds away there.
-            setMainView(next === "studio" ? "studio" : "workbench");
+            setMainView(next === "studio" ? "studio" : next === "settings" ? "settings" : "workbench");
             setDockOpen(true);
           }}
           onShowPlugins={() => {
@@ -1929,6 +1954,8 @@ export function App() {
               onCallBegin={beginCall}
               onCallEnd={endCall}
             />
+          ) : mainView === "settings" ? (
+            <SettingsPage settings={modelSettings} onChange={setModelSettings} />
           ) : mainView === "studio" ? (
           openProject === undefined ? (
             <StudioProjects
