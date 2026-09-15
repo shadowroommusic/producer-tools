@@ -935,6 +935,11 @@
   color: var(--sr-accent);
 }
 
+/* The audio no longer matches the arrangement: say it, don't hide it. */
+.sr-clip-badge--stale {
+  color: var(--sr-warn, var(--sr-label-secondary));
+}
+
 /* Export row: labels keep their line, the path takes the slack, nothing wraps mid-word. */
 .sr-studio-export-bar .sr-field-label {
   flex: none;

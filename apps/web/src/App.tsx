@@ -39,6 +39,7 @@ import {
   clipFromNotes,
   defaultProject,
   notesRevision,
+  structureRevision,
   tracksFromStems,
   type StudioAnalysis,
   type StudioNote,
@@ -126,11 +127,12 @@ export function App() {
   );
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
-  /** Undo/redo for the open Studio project (drag gestures push one snapshot, not one per frame). */
-  const [history, setHistory] = useState<{ past: StudioProject[]; future: StudioProject[] }>({
-    past: [],
-    future: [],
-  });
+  /**
+   * Undo/redo, **per project**: each project keeps its own past/future, so switching projects never
+   * mixes histories (the rule every editor follows, and the one this app got wrong until now).
+   */
+  const [histories, setHistories] = useState<Record<string, { past: StudioProject[]; future: StudioProject[] }>>({});
+  const history = histories[openProjectId ?? ""] ?? { past: [], future: [] };
   /** Clips an agent is re-rendering right now — the workbench shows a badge while it happens. */
   const [rendering, setRendering] = useState<string[]>([]);
   /** When each of those renders started, so a very fast one still shows its badge for a moment. */
@@ -371,9 +373,23 @@ export function App() {
      * it is looking at. The clip cannot be read from the agent's side — the app owns that state — so
      * it travels with the message, together with the revision the edit must match.
      */
+    const openProject = projects.find((project) => project.id === openProjectId);
+    const arrangementContext =
+      openProject === undefined || (openProject.sections?.length ?? 0) === 0
+        ? []
+        : [
+            "",
+            "[structure_context]",
+            `revision: ${structureRevision(openProject)}`,
+            `bars: ${openProject.bars}`,
+            `sections: ${JSON.stringify((openProject.sections ?? []).map((section) => ({ id: section.id, name: section.name, start: section.start, bars: section.bars })))}`,
+            `tracks: ${JSON.stringify(openProject.tracks.map((track) => ({ name: track.name, clips: track.clips.map((clip) => ({ id: clip.id, start: clip.start, length: clip.length })) })))}`,
+            "[/structure_context]",
+            "（要改结构就调 shadow-music-generator 的 arrange：把上面的 bars/sections/tracks 原样传进去、operations 写操作、revision 回传；它会把每个片段的新位置算好，前端落盘。不要自己算位置。）",
+          ];
     const outgoing =
       noteContext === null
-        ? text
+        ? [text, ...arrangementContext].join("\n")
         : [
             text,
             "",
@@ -390,7 +406,8 @@ export function App() {
               ? []
               : [`render_spec: ${JSON.stringify(noteContext.render)}`]),
             "[/clip_context]",
-            "（这一段是用户在 Studio 里选中的片段。改音符用 transform_notes；想让这一轨的声音变一点（比如鼓更重、bass 更暗、换波形）就调 regenerate_part：把上面的 render_spec 原样放进 part（并带上 bpm/bars/sections）、用 patch 描述改动、out_path 用 ~/Documents/ShadowRoom/recordings/<名字>-v<时间戳>.wav、clip_id 回传上面的 clip_id。不要自己写整份 spec。）",
+            "（这一段是用户在 Studio 里选中的片段：改音符用 transform_notes；想让这一轨的声音变一点就调 regenerate_part，把上面的 render_spec 原样放进 part、clip_id 必填、patch 只动要改的那几个键。）",
+            ...arrangementContext,
           ].join("\n");
 
     void sendTurn(
@@ -895,6 +912,109 @@ export function App() {
    * the rendered stem. No button, no second step — the song grows out of the same sentence.
    */
   /**
+   * Apply an arrangement edit (insert bars / repeat a section / delete one).
+   *
+   * The tool returns where every clip ends up — copies name the clip they came from — so this only
+   * moves data around. Clips whose stored plan no longer matches the new structure are marked as
+   * needing a re-render: the arrangement changed, the audio did not, and pretending otherwise would
+   * put the wrong sound in the wrong place. (This absorber was missing for a while because a patch
+   * that added it crashed before writing — the agent's call landed on nothing. Lesson: run it.)
+   */
+  const applyArrangement = useCallback(
+    (call: ToolCall) => {
+      const notice = (title: string, text: string) =>
+        withActiveSession((current) => ({
+          ...current,
+          messages: [...current.messages, { id: `ar-${Date.now()}`, role: "notice", title, text, at: Date.now() }],
+        }));
+      try {
+        const wrapper = JSON.parse(call.detail ?? "{}") as { result?: { content?: Array<{ text?: string }> } };
+        const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
+          revision?: string;
+          bars?: number;
+          sections?: Array<{ id?: string; name?: string; start?: number; bars?: number }>;
+          clips?: Array<{ id?: string; track?: string; start?: number; length?: number; copy_of?: string }>;
+          diff_summary?: string;
+        };
+        if (parsed.clips === undefined || parsed.bars === undefined) throw new Error("结果里没有结构");
+
+        /**
+         * Decide first, then hand React one finished project.
+         *
+         * The flags below used to be written *inside* the `setProjects` updater; React runs updaters
+         * during the next render, so the notice was written while the flags still said "nothing
+         * happened" — the arrangement changed and the transcript stayed silent (measured).
+         */
+        const current = projects.find((entry) => entry.id === openProjectId);
+        if (current === undefined) throw new Error("没有打开的工程");
+        if (parsed.revision !== undefined && parsed.revision !== structureRevision(current)) {
+          notice("结构没改成", "这段时间线在你发消息之后被改过，智能体的版本已经过期；再说一次就会用最新结构重算。");
+          return;
+        }
+        const next = ((project: StudioProject) => {
+          const byId = new Map((parsed.clips ?? []).map((clip) => [String(clip.id), clip]));
+          const songBars = Math.max(1, Math.round(parsed.bars as number));
+          const tracks = project.tracks.map((track) => {
+            const kept = track.clips
+              .filter((clip) => byId.has(clip.id))
+              .map((clip) => {
+                const position = byId.get(clip.id) as { start?: number; length?: number };
+                const start = typeof position.start === "number" ? position.start : clip.start;
+                const length = typeof position.length === "number" ? position.length : clip.length;
+                const planBars = typeof clip.render?.bars === "number" ? clip.render.bars : undefined;
+                const moved = start !== clip.start;
+                return {
+                  ...clip,
+                  start,
+                  length,
+                  // the plan described the old arrangement: say so instead of re-rendering silently
+                  ...(moved && planBars !== undefined && planBars !== songBars
+                    ? { renderStale: "结构变了，音频还没跟上" }
+                    : {}),
+                };
+              });
+            const copies = (parsed.clips ?? [])
+              .filter((entry) => entry.copy_of !== undefined && entry.track === track.name)
+              .flatMap((entry) => {
+                const source = track.clips.find((clip) => clip.id === entry.copy_of);
+                if (source === undefined) return [];
+                return [
+                  {
+                    ...source,
+                    id: String(entry.id),
+                    start: typeof entry.start === "number" ? entry.start : source.start,
+                    length: typeof entry.length === "number" ? entry.length : source.length,
+                  },
+                ];
+              });
+            return { ...track, clips: [...kept, ...copies].sort((a, b) => a.start - b.start) };
+          });
+          const sections = (parsed.sections ?? [])
+            .filter((section) => typeof section.bars === "number" && (section.bars as number) > 0)
+            .map((section, index) => ({
+              ...(section.id === undefined ? {} : { id: section.id }),
+              name: section.name ?? `段落 ${index + 1}`,
+              bars: Number(section.bars),
+              start: Number(section.start ?? 0),
+            }));
+          return {
+            ...project,
+            bars: songBars,
+            tracks,
+            ...(sections.length > 0 ? { sections } : {}),
+          };
+        })(current);
+        updateProjectRef.current(() => next);
+        notice("结构改了", `${parsed.diff_summary ?? "已调整"}（⌘Z 可撤销；需要重渲染的片段会标出来）`);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        notice("结构没改成", message);
+      }
+    },
+    [openProjectId, projects, withActiveSession],
+  );
+
+  /**
    * Swap in a freshly rendered part.
    * The clip keeps its place on the timeline (start, length) and gains a new source file plus the
    * updated plan; one undo step, and the summary the renderer wrote is what the user reads.
@@ -1051,6 +1171,7 @@ export function App() {
 
   const absorbToolResult = useCallback(
     (call: ToolCall) => {
+
       if (call.status !== "ok" || openProjectId === undefined) return;
       if (call.name === "transform_notes") {
         applyNoteEdit(call);
@@ -1058,6 +1179,10 @@ export function App() {
       }
       if (call.name === "regenerate_part") {
         applyRegeneratedPart(call);
+        return;
+      }
+      if (call.name === "arrange") {
+        applyArrangement(call);
         return;
       }
       if (!["hum_to_midi", "render_song", "render_part"].includes(call.name)) return;
@@ -1517,7 +1642,11 @@ export function App() {
   const beginEdit = useCallback(() => {
     const project = projects.find((entry) => entry.id === openProjectId);
     if (project === undefined) return;
-    setHistory((previous) => ({ past: [...previous.past.slice(-49), project], future: [] }));
+    const id = project.id;
+    setHistories((previous) => {
+      const current = previous[id] ?? { past: [], future: [] };
+      return { ...previous, [id]: { past: [...current.past.slice(-49), project], future: [] } };
+    });
   }, [openProjectId, projects]);
 
   const updateProject = useCallback(
@@ -1537,29 +1666,41 @@ export function App() {
   const undo = useCallback(() => {
     const previousProject = history.past.at(-1);
     if (previousProject === undefined) return;
-    const currentProject = projects.find((project) => project.id === previousProject.id);
+    const id = previousProject.id;
+    const currentProject = projects.find((project) => project.id === id);
     setProjects((current) =>
-      current.map((project) =>
-        project.id === previousProject.id ? { ...previousProject, updatedAt: Date.now() } : project,
-      ),
+      current.map((project) => (project.id === id ? { ...previousProject, updatedAt: Date.now() } : project)),
     );
-    setHistory({
-      past: history.past.slice(0, -1),
-      future: currentProject === undefined ? history.future : [currentProject, ...history.future].slice(0, 50),
-    });
+    setHistories((previous) => ({
+      ...previous,
+      [id]: {
+        past: (previous[id]?.past ?? []).slice(0, -1),
+        future:
+          currentProject === undefined
+            ? (previous[id]?.future ?? [])
+            : [currentProject, ...(previous[id]?.future ?? [])].slice(0, 50),
+      },
+    }));
   }, [history, projects]);
 
   const redo = useCallback(() => {
     const nextProject = history.future[0];
     if (nextProject === undefined) return;
-    const currentProject = projects.find((project) => project.id === nextProject.id);
+    const id = nextProject.id;
+    const currentProject = projects.find((project) => project.id === id);
     setProjects((current) =>
-      current.map((project) => (project.id === nextProject.id ? { ...nextProject, updatedAt: Date.now() } : project)),
+      current.map((project) => (project.id === id ? { ...nextProject, updatedAt: Date.now() } : project)),
     );
-    setHistory({
-      past: currentProject === undefined ? history.past : [...history.past.slice(-49), currentProject],
-      future: history.future.slice(1),
-    });
+    setHistories((previous) => ({
+      ...previous,
+      [id]: {
+        past:
+          currentProject === undefined
+            ? (previous[id]?.past ?? [])
+            : [...(previous[id]?.past ?? []).slice(-49), currentProject],
+        future: (previous[id]?.future ?? []).slice(1),
+      },
+    }));
   }, [history, projects]);
 
   // Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (or Ctrl+Y) while a Studio project is open.

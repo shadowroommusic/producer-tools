@@ -22,6 +22,14 @@ export type StudioClip = {
   /** Where a separation job put this clip's stems — marks the clip as already split. */
   stemsDir?: string;
   /**
+   * Set when the arrangement changed under this clip and its audio has not caught up yet.
+   *
+   * The structure tools never re-render anything by themselves: "加一个 breakdown" means the timeline
+   * grows, not that every track starts rendering. A clip whose audio no longer matches its place says
+   * so, and the user (or the agent) decides when to re-render it.
+   */
+  renderStale?: string;
+  /**
    * How this clip's audio was made: the part spec the synth rendered it from.
    *
    * Kept on the clip (not in the agent's memory) because "make the drums heavier" has to change *one*

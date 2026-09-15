@@ -1501,6 +1501,12 @@ function Clip({
         {badge !== "" && <span className="sr-clip-badge"> · {badge}</span>}
         {splitting && <span className="sr-clip-badge"> · 分轨中…</span>}
         {rendering && <span className="sr-clip-badge"> · 重渲染中…</span>}
+        {clip.renderStale !== undefined && (
+          <span className="sr-clip-badge sr-clip-badge--stale" title={clip.renderStale}>
+            {" "}
+            · ⚠ 需重渲染
+          </span>
+        )}
         {clip.stemsDir !== undefined && <span className="sr-clip-badge sr-clip-badge--stems"> · 已分轨</span>}
       </span>
       <span
