@@ -7,6 +7,7 @@
 import { AnalysisPanel } from "./AnalysisPanel";
 import { ConverterPanel } from "./ConverterPanel";
 import { GeneratorPanel } from "./GeneratorPanel";
+import { GrabberPanel } from "./GrabberPanel";
 import { SetPlannerPanel } from "./SetPlannerPanel";
 import type { PluginEntry } from "./Sidebar";
 import type { ToolCall } from "./ToolCallRow";
@@ -76,6 +77,24 @@ export function PluginPanelPage({
               onBegin={onCallBegin}
               onEnd={onCallEnd}
             />
+          ) : plugin.repo === "ShadowMusicGrabber" ? (
+            <GrabberPanel
+              connected={plugin.connected}
+              tools={plugin.tools}
+              onBegin={onCallBegin}
+              onEnd={onCallEnd}
+            />
+          ) : plugin.repo === "stem-splitter" ? (
+            <div className="sr-plugin-pane">
+              <p className="sr-plugin-hint">
+                分轨在 Studio 里用：右键任意音频片段 →「分轨（人声 / 鼓 / 贝斯 / 其它）」，四条分轨会自动落到新轨道。
+              </p>
+              <ul className="sr-plugin-bullets">
+                <li>本地 Demucs：{plugin.connected ? "已连接" : "未连接"}</li>
+                <li>要分离一整首歌，也可以直接在对话里说「把这首歌分轨」</li>
+                <li>作业是异步的：启动后返回 job id，中断不会丢</li>
+              </ul>
+            </div>
           ) : (
             <div className="sr-plugin-pane">
               <p className="sr-plugin-hint">{placeholder?.body ?? "这个插件还没有面板。"}</p>

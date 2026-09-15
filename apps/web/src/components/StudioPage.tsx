@@ -14,7 +14,9 @@ import type { ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
+  MAX_TRACKS,
   barsPerSecond,
+  withNoteIds,
   fileUrl,
   isPlayable,
   newClip,
@@ -29,6 +31,7 @@ import {
 } from "../lib/studio";
 import { createNotePlayer } from "../lib/synth";
 import { peaksFor } from "../lib/waveform";
+import { PianoRoll } from "./PianoRoll";
 
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
@@ -60,6 +63,7 @@ export function StudioPage({
   onPickImport,
   onAnalyze,
   onExportFormats,
+  onSplitStems,
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
@@ -84,6 +88,11 @@ export function StudioPage({
   onAnalyze?: (path: string, context: { wasEmpty: boolean }) => Promise<StudioAnalysis | null>;
   /** Which export containers this machine can actually write, from the generator plugin. */
   onExportFormats?: () => Promise<ExportFormat[]>;
+  /**
+   * Separate one clip into vocals / drums / bass / other (the stem-splitter plugin). Resolves when
+   * the job has finished; the stems land on their own tracks through the App's absorber.
+   */
+  onSplitStems?: (clip: { source: string; clipId: string; name: string; start: number; length: number }) => Promise<boolean>;
 }) {
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
@@ -92,6 +101,10 @@ export function StudioPage({
   const [importOpen, setImportOpen] = useState(false);
   const [importPath, setImportPath] = useState("");
   const [importing, setImporting] = useState(false);
+  /** Clips whose separation is running right now. */
+  const [splitting, setSplitting] = useState<string[]>([]);
+  /** The clip whose notes the piano roll is editing (at most one: the editor shows one clip). */
+  const [editing, setEditing] = useState<{ trackId: string; clipId: string } | null>(null);
   const [dragging, setDragging] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -247,6 +260,27 @@ export function StudioPage({
     },
     [],
   );
+
+  /**
+   * Open the piano roll for one clip.
+   *
+   * Ids are attached here, in an event handler, and not from inside the editor: React's StrictMode
+   * runs mount effects twice, so a "fill in the missing ids" effect wrote the note array twice and the
+   * roll drew the same notes twice (measured: 4 notes rendered as 7).
+   */
+  const openNotes = useCallback(
+    (trackId: string, clipId: string) => {
+      changeClip(trackId, clipId, (clip) => ({ ...clip, notes: withNoteIds(clip.notes ?? []) }));
+      setEditing({ trackId, clipId });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  /** Play one note through the same synth the transport uses, so editing has a sound. */
+  const audition = useCallback((midi: number, durationMs: number) => {
+    notePlayer.current.play([{ start_ms: 0, end_ms: Math.max(60, durationMs), midi }], { leadSeconds: 0, gain: 0.8 });
+  }, []);
 
   const togglePlay = () => {
     const next = !playing;
@@ -442,6 +476,16 @@ export function StudioPage({
     await importFiles(paths);
   }, [importFiles, onPickImport]);
 
+  /** Replace the notes of the clip the piano roll is editing. */
+  const setNotes = useCallback(
+    (notes: StudioNote[]) => {
+      if (editing === null) return;
+      changeClip(editing.trackId, editing.clipId, (clip) => ({ ...clip, notes }), { transient: true });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editing],
+  );
+
   const anySoloTrack = project.tracks.find((track) => track.soloed);
   const positionLabel = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
   const grid = useMemo(() => Array.from({ length: project.bars }, (_, bar) => bar), [project.bars]);
@@ -557,13 +601,28 @@ export function StudioPage({
           <button
             type="button"
             className="sr-btn sr-studio-addtrack"
+            disabled={project.tracks.length >= MAX_TRACKS}
+            title={
+              project.tracks.length >= MAX_TRACKS
+                ? `最多 ${MAX_TRACKS} 条音轨；删掉一条再加，或者让智能体帮你合并`
+                : `加一条音轨（上限 ${MAX_TRACKS}）`
+            }
             onClick={() =>
-              onChange((current) => ({ ...current, tracks: [...current.tracks, newTrack(`音轨 ${current.tracks.length + 1}`)] }))
+              onChange((current) =>
+                current.tracks.length >= MAX_TRACKS
+                  ? current
+                  : { ...current, tracks: [...current.tracks, newTrack(`音轨 ${current.tracks.length + 1}`)] },
+              )
             }
           >
             <IconPlus size={14} />
             音轨
           </button>
+          {project.tracks.length > MAX_TRACKS && (
+            <span className="sr-transport-hint sr-mono" title={`超过上限 ${MAX_TRACKS} 条；删掉几条就恢复`}>
+              {project.tracks.length}/{MAX_TRACKS} 轨
+            </span>
+          )}
           <button
             type="button"
             className="sr-btn sr-studio-import"
@@ -927,6 +986,12 @@ export function StudioPage({
                     onBeginEdit={() => onBeginEdit?.()}
                     onDelete={() => removeClip(track.id, clip.id)}
                     onMenu={(x, y) => setMenu({ trackId: track.id, clipId: clip.id, x, y })}
+                    onOpenNotes={() => openNotes(track.id, clip.id)}
+                    onDuplicate={() => {
+                      const copy = { ...clip, id: `${clip.id}-copy-${Date.now().toString(36)}` };
+                      updateTrack(track.id, (current) => ({ ...current, clips: [...current.clips, copy] }));
+                    }}
+                    splitting={splitting.includes(clip.id)}
                   />
                 ))}
               </div>
@@ -945,6 +1010,25 @@ export function StudioPage({
           </button>
         </div>
       </div>
+
+      {editing !== null &&
+        (() => {
+          const track = project.tracks.find((entry) => entry.id === editing.trackId);
+          const clip = track?.clips.find((entry) => entry.id === editing.clipId);
+          if (clip === undefined || (clip.notes?.length ?? 0) === 0) return null;
+          return (
+            <PianoRoll
+              clipName={clip.name}
+              bpm={project.bpm}
+              lengthMs={(clip.length * 60_000) / project.bpm}
+              notes={clip.notes ?? []}
+              onChange={setNotes}
+              onBeginEdit={() => onBeginEdit?.()}
+              onAudition={audition}
+              onClose={() => setEditing(null)}
+            />
+          );
+        })()}
 
       {composer !== null && <div className="sr-studio-composer">{composer}</div>}
       <div className="sr-studio-audio" ref={audioHost} hidden />
@@ -1069,6 +1153,51 @@ export function StudioPage({
                 <button
                   type="button"
                   role="menuitem"
+                  className="sr-menu-item"
+                  disabled={(clip.notes?.length ?? 0) === 0}
+                  onClick={() => {
+                    openNotes(track.id, clip.id);
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">编辑音符</span>
+                  <span className="sr-menu-hint sr-mono">
+                    {(clip.notes?.length ?? 0) === 0 ? "先用「转 MIDI」得到音符" : `${clip.notes?.length} 个音符 · 钢琴卷帘`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!isPlayable(clip.source) || onSplitStems === undefined || splitting.includes(clip.id)}
+                  onClick={async () => {
+                    if (clip.source === undefined || onSplitStems === undefined) return;
+                    setSplitting((current) => [...current, clip.id]);
+                    close();
+                    await onSplitStems({
+                      source: clip.source,
+                      clipId: clip.id,
+                      name: clip.name,
+                      start: clip.start,
+                      length: clip.length,
+                    });
+                    setSplitting((current) => current.filter((entry) => entry !== clip.id));
+                  }}
+                >
+                  <span className="sr-menu-label">
+                    {splitting.includes(clip.id) ? "分轨中…" : "分轨（人声 / 鼓 / 贝斯 / 其它）"}
+                  </span>
+                  <span className="sr-menu-hint sr-mono">
+                    {isPlayable(clip.source)
+                      ? clip.stemsDir === undefined
+                        ? "Demucs 本地分离，几分钟"
+                        : "已分轨，可再分一次"
+                      : "只有音频片段能分"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   className="sr-menu-item sr-menu-item--danger"
                   onClick={() => {
                     removeClip(track.id, clip.id);
@@ -1098,6 +1227,9 @@ function Clip({
   onDelete,
   onMenu,
   onBeginEdit,
+  onOpenNotes,
+  onDuplicate,
+  splitting,
 }: {
   clip: StudioClip;
   barPx: number;
@@ -1110,6 +1242,12 @@ function Clip({
   onDelete: () => void;
   onMenu: (x: number, y: number) => void;
   onBeginEdit: () => void;
+  /** Double-clicking a notated clip opens it in the piano roll. */
+  onOpenNotes?: () => void;
+  /** Alt-drag copies: the caller leaves this clip alone and starts dragging a duplicate. */
+  onDuplicate?: () => void;
+  /** A separation is running for this clip right now. */
+  splitting?: boolean;
 }) {
   const badge = analysisBadge(clip.analysis);
   const drag = useRef<{
@@ -1145,10 +1283,15 @@ function Clip({
     const active = drag.current;
     if (active === null) return false;
     const delta = (event.clientX - active.originX) / barPx;
+    // A sixteenth of a bar is a sixteenth note: fine enough to place a clip on the beat, coarse
+    // enough that a beginner's drag lands where it looks like it landed. Alt frees the grid.
+    const unit = event.altKey ? 1 / 64 : 1 / 16;
+    const quantise = (value: number) => Math.round(value / unit) * unit;
     if (active.mode === "move") {
-      if (Math.abs(delta) >= 0.5) onMoveTo(Math.max(0, active.start + Math.round(delta)), event.clientX, event.clientY);
-    } else if (Math.abs(delta) >= 0.4) {
-      onResize(Math.max(1, active.length + Math.round(delta)));
+      const start = Math.max(0, quantise(active.start + delta));
+      if (start !== clip.start) onMoveTo(start, event.clientX, event.clientY);
+    } else if (Math.abs(delta) >= unit) {
+      onResize(Math.max(unit, quantise(active.length + delta)));
     }
     return true;
   };
@@ -1171,7 +1314,11 @@ function Clip({
       tabIndex={0}
       role="button"
       aria-label={clip.name}
-      onPointerDown={(event) => begin(event, "move")}
+      onPointerDown={(event) => {
+        // Alt-drag leaves the clip where it is and drags a copy, the gesture every DAW shares.
+        if (event.altKey && !event.shiftKey) onDuplicate?.();
+        begin(event, "move");
+      }}
       onPointerMove={(event) => {
         track(event);
       }}
@@ -1182,6 +1329,11 @@ function Clip({
         event.preventDefault();
         onSelect();
         onMenu(event.clientX, event.clientY);
+      }}
+      onDoubleClick={(event) => {
+        if ((clip.notes?.length ?? 0) === 0 || onOpenNotes === undefined) return;
+        event.stopPropagation();
+        onOpenNotes();
       }}
       onKeyDown={(event) => {
         if (event.key === "Delete" || event.key === "Backspace") onDelete();
@@ -1201,6 +1353,7 @@ function Clip({
       <span className="sr-clip-meta sr-mono">
         {Number(clip.length.toFixed(2))} 小节
         {badge !== "" && <span className="sr-clip-badge"> · {badge}</span>}
+        {splitting && <span className="sr-clip-badge"> · 分轨中…</span>}
         {clip.stemsDir !== undefined && <span className="sr-clip-badge sr-clip-badge--stems"> · 已分轨</span>}
       </span>
       <span

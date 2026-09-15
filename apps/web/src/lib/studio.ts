@@ -23,7 +23,82 @@ export type StudioClip = {
   stemsDir?: string;
 };
 
-export type StudioNote = { start_ms: number; end_ms: number; midi: number; name?: string };
+/**
+ * One note inside a clip.
+ *
+ * Milliseconds (not beats or ticks) because that is what the melody tool reports and what the
+ * Web Audio synth and the MIDI writer already consume — the piano roll converts to the bar grid for
+ * display, and stays compatible with everything that came before it.
+ *
+ * `id` is what makes the piano roll *editable*: an agent edit can name the notes it touched instead
+ * of resending the whole array, and undo can move exactly those.
+ */
+export type StudioNote = {
+  id?: string;
+  start_ms: number;
+  end_ms: number;
+  midi: number;
+  /** 1–127; the editor shows it as opacity, the MIDI writer passes it through. */
+  velocity?: number;
+  name?: string;
+};
+
+/** How many tracks a project may hold when the user adds them by hand. */
+export const MAX_TRACKS = 10;
+
+/** Default note length in the editor: one 16th. */
+export const NOTE_STEP_MS = (bpm: number): number => 60_000 / Math.max(1, bpm) / 4;
+
+let noteCounter = 0;
+/** A stable id for a new note (`n1`, `n2`, …); derived here so tests can rely on the shape. */
+export function newNoteId(): string {
+  noteCounter += 1;
+  return `n${Date.now().toString(36)}-${noteCounter}`;
+}
+
+/** Fill in the ids an older project (or a tool result) did not carry. */
+export function withNoteIds(notes: StudioNote[]): StudioNote[] {
+  return notes.map((note) => (note.id === undefined ? { ...note, id: newNoteId() } : note));
+}
+
+/** Transpose notes by semitones, clamped to the MIDI range. */
+export function transposeNotes(notes: StudioNote[], semitones: number): StudioNote[] {
+  return notes.map((note) => ({ ...note, midi: Math.max(0, Math.min(127, note.midi + semitones)) }));
+}
+
+/** Snap note starts (and the ends they imply) onto a grid of `stepMs`. */
+export function quantiseNotes(notes: StudioNote[], stepMs: number): StudioNote[] {
+  return notes.map((note) => {
+    const start = Math.round(note.start_ms / stepMs) * stepMs;
+    const length = Math.max(stepMs, Math.round((note.end_ms - note.start_ms) / stepMs) * stepMs);
+    return { ...note, start_ms: Math.round(start), end_ms: Math.round(start + length) };
+  });
+}
+
+/** Shift notes in time, keeping them inside the clip. */
+export function nudgeNotes(notes: StudioNote[], deltaMs: number, lengthMs: number): StudioNote[] {
+  const earliest = notes.reduce((value, note) => Math.min(value, note.start_ms), Infinity);
+  const latest = notes.reduce((value, note) => Math.max(value, note.end_ms), 0);
+  const shift = Math.max(-earliest, Math.min(deltaMs, Math.max(0, lengthMs - latest)));
+  if (!Number.isFinite(shift) || shift === 0) return notes;
+  return notes.map((note) => ({ ...note, start_ms: note.start_ms + shift, end_ms: note.end_ms + shift }));
+}
+
+/**
+ * Which keys the piano roll should draw: the notes' own span, padded, and never a sliver.
+ *
+ * An empty clip still shows a keyboard (middle C up an octave and a half), because a piano roll you
+ * cannot click into is not an editor.
+ * @param notes - the clip's notes.
+ * @returns the lowest and highest MIDI note to draw, inclusive.
+ */
+export function clipNoteRange(notes: StudioNote[]): { from: number; to: number } {
+  if (notes.length === 0) return { from: 58, to: 72 };
+  const lowest = notes.reduce((value, note) => Math.min(value, note.midi), 127);
+  const highest = notes.reduce((value, note) => Math.max(value, note.midi), 0);
+  const from = Math.max(0, lowest - 2);
+  return { from, to: Math.min(127, Math.max(highest + 2, from + 14)) };
+}
 
 /**
  * What the analysis plugin heard in one file: tempo and key, each with the confidence it had.
@@ -101,7 +176,7 @@ export function clipFromNotes(notes: StudioNote[], bars: number, start: number, 
     start: Math.min(Math.max(0, start), Math.max(0, bars - length)),
     length: Math.min(length, bars),
     source,
-    notes,
+    notes: withNoteIds(notes),
   };
 }
 
@@ -153,6 +228,47 @@ export function analysisBadge(analysis: StudioAnalysis | undefined): string {
   const key = analysis.camelot ?? analysis.key;
   if (typeof key === "string" && key !== "") parts.push(key);
   return parts.join(" · ");
+}
+
+/** The names a separator's stems get in the studio, in track order. */
+export const STEM_LABELS: Record<string, string> = {
+  vocals: "人声",
+  drums: "鼓",
+  bass: "贝斯",
+  other: "其它",
+};
+
+/**
+ * The four new tracks a finished separation becomes.
+ *
+ * They are **new** tracks, not a merge into tracks of the same name: "separate this" means "give me
+ * the four parts", and a stem that silently joined a track the user already had would be hard to
+ * undo. A name that is taken gets a ` 2`, like every other import.
+ * @param stems - `{vocals: path, drums: path, …}` as the splitter reported them.
+ * @param existing - the project's tracks, used only to avoid duplicate names.
+ * @param clip - where the stems came from: they keep its position and length.
+ * @returns one new track per stem, in the order the separator listed them.
+ */
+export function tracksFromStems(
+  stems: Record<string, string>,
+  existing: StudioTrack[],
+  clip: { name: string; start: number; length: number },
+): StudioTrack[] {
+  const created: StudioTrack[] = [];
+  const taken = existing.map((track) => track.name);
+  for (const [stem, path] of Object.entries(stems)) {
+    const base = STEM_LABELS[stem] ?? stem;
+    let label = base;
+    for (let index = 2; taken.includes(label) && index < 100; index += 1) {
+      label = `${base} ${index}`;
+    }
+    taken.push(label);
+    created.push({
+      ...newTrack(label),
+      clips: [newClip(`${label} · ${clip.name}`, clip.start, clip.length, path)],
+    });
+  }
+  return created;
 }
 
 /** A project that already looks like a DAW: three labelled tracks, empty clips, 16 bars. */

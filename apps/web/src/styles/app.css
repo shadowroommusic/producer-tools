@@ -860,6 +860,14 @@
   white-space: nowrap;
 }
 
+/* A quiet note in the transport when a project is over the track cap (imports and stem
+   decomposition are allowed to overflow; adding by hand is not). */
+.sr-transport-hint {
+  flex: none;
+  color: var(--sr-warn, var(--sr-label-secondary));
+  font-size: 10px;
+}
+
 /* 音轨 / 导入音频 / 导出音频 are one block: they wrap together or not at all. */
 .sr-transport-actions {
   display: flex;
@@ -1265,6 +1273,124 @@
   white-space: nowrap;
 }
 
+/* ---------- piano roll (editing one clip's notes) ---------- */
+
+.sr-roll {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  max-height: 46vh;
+  border-top: var(--sr-shell-border);
+  background: var(--sr-surface);
+}
+
+.sr-roll-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: var(--sr-shell-border);
+}
+
+.sr-roll-title {
+  overflow: hidden;
+  font-size: var(--sr-text-13);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-roll-meta {
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
+.sr-roll-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.sr-roll-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The keyboard: white rows are notes, black ones are the accidentals. */
+.sr-roll-keys {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: none;
+  width: 46px;
+  background: var(--sr-bg-base);
+  border-right: var(--sr-shell-border);
+}
+
+.sr-roll-key {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  padding: 0 4px;
+  border: none;
+  border-bottom: 0.5px solid var(--sr-border-l2);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-caption);
+  font-size: 9px;
+}
+
+.sr-roll-key[data-black] {
+  background: var(--sr-bg-base);
+}
+
+.sr-roll-surface {
+  position: relative;
+  flex: none;
+  /* Bar lines brightest, beats next, sixteenths faintest — the same hierarchy the timeline uses. */
+  background-image:
+    repeating-linear-gradient(to right, var(--sr-border-l2) 0 1px, transparent 1px calc(var(--sr-roll-beat) * 4)),
+    repeating-linear-gradient(to right, var(--sr-border-l3) 0 1px, transparent 1px var(--sr-roll-beat)),
+    repeating-linear-gradient(to right, color-mix(in srgb, var(--sr-border-l3) 45%, transparent) 0 1px, transparent 1px calc(var(--sr-roll-beat) / 4)),
+    repeating-linear-gradient(to bottom, var(--sr-border-l2) 0 1px, transparent 1px var(--sr-roll-row));
+}
+
+.sr-roll-note {
+  position: absolute;
+  height: calc(var(--sr-roll-row) - 2px);
+  border: 0.5px solid var(--sr-accent);
+  border-radius: 3px;
+  background: var(--sr-accent);
+  cursor: grab;
+}
+
+.sr-roll-note[data-selected] {
+  border-color: var(--sr-label-primary);
+  box-shadow: 0 0 0 1px var(--sr-label-primary);
+}
+
+.sr-roll-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.sr-roll-hint {
+  flex: none;
+  margin: 0;
+  padding: 4px 12px 6px;
+  border-top: var(--sr-shell-border);
+  color: var(--sr-label-caption);
+  font-size: 10px;
+}
+
 /* Mini piano roll inside a clip that came from a hummed take. */
 .sr-noteroll {
   position: relative;
@@ -1665,6 +1791,42 @@
   display: grid;
   gap: var(--sr-space-3);
   align-content: start;
+}
+
+/* A row of mode chips above a panel's form (grabber: 看这是什么 / 转码 / 解密). */
+.sr-chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sr-chip[data-on] {
+  background: var(--sr-active);
+  color: var(--sr-label-primary);
+}
+
+/* One labelled control; `--grow` takes the slack in a row of them. */
+.sr-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sr-field--grow {
+  flex: 1 1 260px;
+}
+
+.sr-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+
+.sr-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .sr-plugin-hint {

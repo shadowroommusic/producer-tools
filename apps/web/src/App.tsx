@@ -38,6 +38,7 @@ import { callTool } from "./lib/mcp";
 import {
   clipFromNotes,
   defaultProject,
+  tracksFromStems,
   type StudioAnalysis,
   lastOpenProject,
   loadProjects,
@@ -79,6 +80,8 @@ const PLUGINS: Array<{ id: string; server: string; label: string; repo: string }
   { id: "analysis", server: "analysis", label: "音频分析去重", repo: "audio-analysis-dedupe" },
   { id: "planner", server: "planner", label: "Set 编排", repo: "set-planner" },
   { id: "generator", server: "generator", label: "音乐生成队列", repo: "shadow-music-generator" },
+  { id: "splitter", server: "splitter", label: "人声分轨", repo: "stem-splitter" },
+  { id: "grabber", server: "grabber", label: "音乐抓取转码", repo: "ShadowMusicGrabber" },
 ];
 
 type Bridge = "connecting" | "online" | "offline";
@@ -1017,6 +1020,93 @@ export function App() {
       }));
   }, []);
 
+  /**
+   * Separate one clip into vocals / drums / bass / other, and put the stems on their own tracks.
+   *
+   * The plugin works as a job (a separation takes minutes; an MCP call must not block), so this
+   * starts it, then polls — updating the transcript row with the stage so the wait is visible — and
+   * when the four files exist they land as four new tracks, each holding one clip the length of the
+   * clip they came from. The original clip keeps playing and is marked as already split.
+   */
+  const splitStems = useCallback(
+    async (clip: { source: string; clipId: string; name: string; start: number; length: number }) => {
+      const id = `separate_stems-${Date.now()}`;
+      beginCallRef.current({
+        id,
+        server: "stem-splitter",
+        name: "separate_stems",
+        status: "running",
+        summary: `${clip.name} · 分离中`,
+        detail: JSON.stringify({ path: clip.source }, null, 2),
+      });
+      const fail = (message: string) => {
+        endCallRef.current(id, { status: "error", summary: message, detail: message });
+        withActiveSession((current) => ({
+          ...current,
+          messages: [
+            { id: `st-${Date.now()}`, role: "notice", title: "分轨失败", text: message, at: Date.now() },
+          ],
+        }));
+      };
+      try {
+        const started = JSON.parse(
+          String(await callTool<string>("splitter", "separate_stems", { path: clip.source })),
+        ) as { job_id?: string; error?: string };
+        if (started.job_id === undefined) throw new Error(started.error ?? "没有拿到 job id");
+        const jobId = started.job_id;
+        // poll until the job stops being "running"; a 4-minute song takes a few minutes on CPU
+        for (let attempt = 0; attempt < 1200; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const status = JSON.parse(
+            String(await callTool<string>("splitter", "stem_job_status", { job_id: jobId })),
+          ) as {
+            status?: string;
+            stage?: string;
+            stems?: Record<string, string>;
+            out_dir?: string;
+            error?: string;
+          };
+          if (status.status === "running") {
+            endCallRef.current(id, {
+              status: "running",
+              summary: `${clip.name} · ${stageLabel(status.stage)}`,
+            });
+            continue;
+          }
+          if (status.status !== "ok" || status.stems === undefined) {
+            throw new Error(status.error ?? `分轨 ${status.status ?? "失败"}`);
+          }
+          const stems = status.stems;
+          const outDir = status.out_dir ?? "";
+          updateProjectRef.current((project) => {
+            const created = tracksFromStems(stems, project.tracks, clip);
+            return {
+              ...project,
+              tracks: [...project.tracks, ...created].map((track) => ({
+                ...track,
+                clips: track.clips.map((entry) =>
+                  entry.id === clip.clipId ? { ...entry, stemsDir: outDir } : entry,
+                ),
+              })),
+            };
+          });
+          endCallRef.current(id, {
+            status: "ok",
+            summary: `${Object.keys(stems).length} 条分轨`,
+            detail: JSON.stringify({ out_dir: outDir, stems }, null, 2),
+          });
+          return true;
+        }
+        throw new Error("分轨超时（40 分钟）");
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        fail(message);
+        return false;
+      }
+    },
+    [withActiveSession],
+  );
+
   /** Notate one audio clip with the melody tool — "turn this clip into MIDI" from the clip menu. */
   const notateClip = useCallback(async (path: string) => {
     const id = `hum_to_midi-${Date.now()}`;
@@ -1418,6 +1508,7 @@ export function App() {
               onPickImport={pickImport}
               onAnalyze={analyzeImport}
               onExportFormats={exportFormats}
+              onSplitStems={splitStems}
               composer={chatInDock ? null : composerFor()}
               onClose={() => {
                 setOpenProjectId(undefined);
@@ -1501,6 +1592,14 @@ function speechText(text: string): string {
     .replace(/(^|\s)[*_]([^*_]+)[*_]/g, "$1$2")
     .replace(/\n{2,}/g, "\n")
     .trim();
+}
+
+/** What the separator's stages are called in the conversation. */
+function stageLabel(stage: string | undefined): string {
+  if (stage === "decode") return "解码中";
+  if (stage === "separate") return "分离中";
+  if (stage === "collect") return "整理分轨";
+  return "排队中";
 }
 
 /** Part names the synth uses, in the workbench's language. */
