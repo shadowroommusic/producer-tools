@@ -30,6 +30,7 @@ import {
   type ProviderProtocol,
 } from "../lib/providers";
 import { deleteCredential, listCredentials, listProviderModels, saveCredential, testRole, type CredentialInfo } from "../lib/providerApi";
+import { createSystemTTS, type VoiceInfo } from "../lib/tts";
 
 const PROTOCOLS: Array<{ id: ProviderProtocol; label: string }> = [
   { id: "openai", label: "OpenAI 兼容（最常见）" },
@@ -83,6 +84,20 @@ export function SettingsPage({
   const [models, setModels] = useState<Record<string, { list: string[]; error?: string; loading?: boolean }>>({});
   /** Per-role test results, keyed by role. */
   const [tests, setTests] = useState<Record<string, { ok: boolean; detail: string; ms?: number } | "running">>({});
+  /** The system voices this machine has, and the one the call will use. */
+  const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  const [voiceId, setVoiceId] = useState(() => window.localStorage.getItem("shadowroom.voice") ?? "");
+
+  useEffect(() => {
+    const tts = createSystemTTS();
+    void tts.voices().then(setVoices);
+  }, []);
+
+  const chooseVoice = useCallback((id: string) => {
+    setVoiceId(id);
+    if (id === "") window.localStorage.removeItem("shadowroom.voice");
+    else window.localStorage.setItem("shadowroom.voice", id);
+  }, []);
 
   const refreshCredentials = useCallback(async () => {
     try {
@@ -325,6 +340,43 @@ export function SettingsPage({
       </section>
 
       {/* ② 角色：谁干什么。对话页只会用「主模型」这一行。 */}
+      <section className="sr-settings-section">
+        <h3 className="sr-settings-h3">通话的声音</h3>
+        <p className="sr-settings-hint">
+          语音通话用哪个音色说话。列表来自这台机器装了的系统语音（macOS 在「系统设置 → 辅助功能 →
+          朗读内容」里可以补装更好听的声音）；桌面包以后会换成自带音色，这里的名字到时候仍然有效。
+        </p>
+        <div className="sr-voice-picker">
+          <select
+            className="sr-input"
+            aria-label="通话音色"
+            value={voiceId}
+            onChange={(event) => chooseVoice(event.target.value)}
+          >
+            <option value="">系统默认</option>
+            {voices.map((voice) => (
+              <option key={voice.id} value={voice.id}>
+                {voice.label} · {voice.lang}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="sr-btn"
+            disabled={voices.length === 0}
+            title={voices.length === 0 ? "这台机器没有可用的系统语音" : "听一下这个音色"}
+            onClick={() =>
+              createSystemTTS().speak("你好，我是 Shadow，这段声音以后就是我在通话里的样子。", {
+                voiceId: voiceId === "" ? undefined : voiceId,
+              })
+            }
+          >
+            试听
+          </button>
+          {voices.length === 0 && <span className="sr-role-empty sr-mono">这台机器没有系统语音，先用默认</span>}
+        </div>
+      </section>
+
       <section className="sr-settings-section">
         <h3 className="sr-settings-h3">角色</h3>
         <p className="sr-settings-hint">

@@ -56,19 +56,16 @@ import {
   type StudioProject,
 } from "./lib/studio";
 import {
-  createBargeIn,
   createTurnDetector,
   saveRecording,
-  speak,
   startCapture,
-  startListening,
-  stopSpeaking,
   voiceInputSupported,
-  type BargeIn,
   type TurnDetector,
   type VoiceCapture,
-  type VoiceSession,
 } from "./lib/voice";
+import { createSystemTTS, splitSentences } from "./lib/tts";
+import { createBrowserSTT, type STTSession } from "./lib/stt";
+import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
 import {
   createSession,
   loadSessions,
@@ -152,7 +149,19 @@ export function App() {
   } | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking">("listening");
-  const voiceSession = useRef<VoiceSession | null>(null);
+  const voiceSession = useRef<STTSession | null>(null);
+  /** One recogniser and one speaker for the whole call — implemented behind the interfaces in
+      `lib/stt.ts` / `lib/tts.ts`, so the desktop build swaps them without touching this logic. */
+  const stt = useRef(createBrowserSTT());
+  const tts = useRef(createSystemTTS());
+  /**
+   * The voice is read at speak time, not held in state: it is chosen in 设置 (another view), and a
+   * call that is already up should pick the new voice for its next sentence instead of needing a
+   * reload. `localStorage` is the single place both views agree on.
+   */
+  const currentVoiceId = () => window.localStorage.getItem("shadowroom.voice") ?? undefined;
+  /** What the user said *while the answer was playing* — the start of their next turn. */
+  const interruptRef = useRef("");
   const capture = useRef<VoiceCapture | null>(null);
   const level = useRef(0);
   /** Project edits from inside an async tool callback; assigned once `updateProject` exists. */
@@ -172,6 +181,15 @@ export function App() {
   const endCallRef = useRef<(id: string, patch: Partial<ToolCall>) => void>(() => undefined);
   const voiceModeRef = useRef(false);
   const voiceStateRef = useRef<"listening" | "thinking" | "speaking">("listening");
+  /** The turn's own `running` flag, read from callbacks that were created before it changed. */
+  const runningRef = useRef(false);
+  /** When the last sentence finished playing — used to ignore the answer's own tail. */
+  const speakEndedAt = useRef(0);
+  runningRef.current = running;
+  /** How much of the current answer has already been handed to the synthesizer. */
+  const spokenUpTo = useRef(0);
+  /** Bumped whenever a new answer starts being spoken, so old callbacks cannot do anything. */
+  const speakingToken = useRef(0);
   voiceModeRef.current = voiceMode;
   /**
    * The call's state lives in the ref (the callbacks below are not re-created on every render), and
@@ -690,7 +708,7 @@ export function App() {
   const [voicePartial, setVoicePartial] = useState("");
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const turnRef = useRef<TurnDetector | null>(null);
-  const bargeRef = useRef<BargeIn | null>(null);
+  const bargeRef = useRef<BargeInDetector | null>(null);
   /** Bumped on every interruption, so a canceled answer's `onend` cannot resume the call twice. */
   const answerToken = useRef(0);
   /**
@@ -717,20 +735,36 @@ export function App() {
     setVoicePartial("");
     // A fresh turn: the endpointer starts from "nothing heard yet".
     turnRef.current?.reset();
-    voiceSession.current = startListening({
+    voiceSession.current = stt.current.start({
       onPartial: (text) => {
         if (!current()) return;
+        /**
+         * Full duplex: the recogniser keeps running while the answer plays. Words heard then belong
+         * to the *next* turn — they are buffered, not discarded, which is what makes "no, wait —"
+         * work without the user having to repeat themselves.
+         */
+        if (voiceStateRef.current === "speaking") {
+          interruptRef.current = text;
+          setVoicePartial(text);
+          return;
+        }
         partialRef.current = text;
         setVoicePartial(text);
+        turnRef.current?.heard(`${heardRef.current} ${text}`.trim());
       },
       onFinal: (text) => {
         if (text === "" || !current()) return;
+        if (voiceStateRef.current === "speaking") {
+          interruptRef.current = interruptRef.current === "" ? text : `${interruptRef.current} ${text}`;
+          return;
+        }
         // A finished phrase is *not* the end of the turn: pausing mid-sentence must not cut the user
         // off, so the text accumulates and the endpointer decides when the turn is over.
         heardRef.current = heardRef.current === "" ? text : `${heardRef.current} ${text}`;
         partialRef.current = "";
         setVoicePartial("");
         setVoiceNotice(null);
+        turnRef.current?.heard(heardRef.current);
       },
       onEnd: () => {
         if (!current()) return;
@@ -743,7 +777,9 @@ export function App() {
         setVoiceNotice(
           message === "not-allowed" || message === "audio-capture"
             ? "拿不到麦克风：在系统设置里允许浏览器使用麦克风。"
-            : `语音识别出错：${message}`,
+            : message === "network"
+              ? "这台环境连不上语音识别服务：Chrome 的识别要联网，桌面包会改用本地识别。现在可以打字继续。"
+              : `语音识别出错：${message}`,
         );
       },
     });
@@ -761,7 +797,11 @@ export function App() {
       turnRef.current?.reset();
       return;
     }
-    stopListening();
+    /**
+     * Note what is *not* here: stopping the recogniser. The call listens through the answer now, so
+     * the user can start talking at any moment — `interruptRef` holds those words until the barge-in
+     * detector decides they were meant for us.
+     */
     setVoicePartial("");
     moveVoice("thinking");
     const wav = capture.current?.takeWav() ?? null;
@@ -780,16 +820,44 @@ export function App() {
     }
     capture.current = recorder;
     setVoiceNotice(null);
-    turnRef.current = createTurnDetector({ onTurnEnd: () => finishRef.current() });
-    bargeRef.current = createBargeIn({
-      onSpeak: () => {
+    /**
+     * The endpointer waits less after a finished sentence ("好的。") and more after a dangling
+     * conjunction ("但是…"), which is the difference between a call that feels quick and one that
+     * cuts people off mid-thought.
+     */
+    turnRef.current = createTurnDetector({
+      onTurnEnd: () => finishRef.current(),
+      silenceMs: () => turnSilenceMs(`${heardRef.current} ${partialRef.current}`.trim()),
+    });
+    bargeRef.current = createBargeInDetector({
+      /**
+       * A small rise: hold the answer for a moment without giving it up. `speechSynthesis.pause()`
+       * exists, so this is cheap — and a cough or a chair creak no longer cancels the sentence.
+       */
+      onPause: () => {
         if (voiceStateRef.current !== "speaking") return;
-        // The user talked over the answer: stop it and listen from here.
+        window.speechSynthesis?.pause?.();
+        window.setTimeout(() => {
+          if (voiceStateRef.current === "speaking") window.speechSynthesis?.resume?.();
+        }, 700);
+      },
+      /**
+       * A real sentence: the answer is cancelled, the agent is told to stop generating, and whatever
+       * the user already said becomes the start of their turn instead of being thrown away.
+       */
+      onCancel: () => {
+        if (voiceStateRef.current !== "speaking" && voiceStateRef.current !== "thinking") return;
         answerToken.current += 1;
-        stopSpeaking();
+        tts.current.cancel();
         capture.current?.takeWav(); // the answer's tail is not part of the next request
+        controller?.abort();
+        if (store.activeId !== undefined) void interruptTurn(store.activeId);
+        const heard = interruptRef.current.trim();
+        interruptRef.current = "";
+        heardRef.current = heard === "" ? heardRef.current : heard === heardRef.current ? heard : `${heard} ${heardRef.current}`.trim();
+        partialRef.current = "";
+        setVoiceNotice("（打断了，接着说）");
         moveVoice("listening");
-        listenRef.current();
       },
     });
     setVoiceMode(true);
@@ -800,7 +868,8 @@ export function App() {
   const hangUp = useCallback(() => {
     stopListening();
     answerToken.current += 1;
-    stopSpeaking();
+    speakingToken.current += 1;
+    tts.current.cancel();
     capture.current?.stop();
     capture.current = null;
     turnRef.current = null;
@@ -827,24 +896,59 @@ export function App() {
     };
   }, [voiceMode]);
 
-  // When the turn is done, speak the answer and go back to listening — the call never stops.
+  /**
+   * Speaking the answer, sentence by sentence as it streams.
+   *
+   * Waiting for the whole answer is the single biggest latency in a call — the model keeps writing
+   * while the first sentence is already in the user's ear. Each sentence is spoken in order; when the
+   * turn ends, whatever is left (an answer that never ended with punctuation) is spoken too, and then
+   * the call goes back to plain listening.
+   */
   useEffect(() => {
-    if (!voiceMode || voiceState !== "thinking" || running) return;
-    const answer = lastAssistant?.role === "assistant" ? lastAssistant.text.trim() : "";
-    if (answer === "") {
+    if (!voiceMode) return;
+    if (voiceState === "thinking" && running) return;
+    const answer = lastAssistant?.role === "assistant" ? speechText(lastAssistant.text.trim()) : "";
+    if (answer === "" && voiceState === "thinking") {
       moveVoice("listening");
-      listenRef.current();
       return;
     }
-    const token = answerToken.current + 1;
-    answerToken.current = token;
-    moveVoice("speaking");
-    bargeRef.current?.start(performance.now());
-    speak(speechText(answer), () => {
-      if (!voiceModeRef.current || answerToken.current !== token) return;
-      capture.current?.takeWav(); // drop the audio captured while the answer played
+    if (answer === "") return;
+
+    if (voiceState === "thinking") {
+      spokenUpTo.current = 0;
+      speakingToken.current += 1;
+      moveVoice("speaking");
+      bargeRef.current?.start(performance.now());
+    }
+    if (voiceStateRef.current !== "speaking") return;
+
+    const token = speakingToken.current;
+    const sentences = splitSentences(answer);
+    const finished = !running;
+    /** While the model is still writing, the last piece is a half sentence — do not speak it yet. */
+    const speakable = finished ? sentences : sentences.slice(0, Math.max(0, sentences.length - 1));
+    const next = speakable.slice(spokenUpTo.current);
+    if (next.length === 0) {
+      if (!finished) return;
+      // Nothing left to say: the turn is over, hand the microphone back explicitly.
+      capture.current?.takeWav();
       moveVoice("listening");
-      listenRef.current();
+      speakEndedAt.current = performance.now();
+      return;
+    }
+    spokenUpTo.current = speakable.length;
+    const text = next.join(" ");
+    tts.current.speak(text, {
+      voiceId: currentVoiceId(),
+      onEnd: () => {
+        if (!voiceModeRef.current || speakingToken.current !== token) return;
+        /** If that was the last piece of a finished answer, the turn is over. */
+        if (!runningRef.current && spokenUpTo.current >= splitSentences(answer).length) {
+          capture.current?.takeWav();
+          moveVoice("listening");
+          speakEndedAt.current = performance.now();
+        }
+      },
     });
   }, [lastAssistant, running, voiceMode, voiceState]);
 

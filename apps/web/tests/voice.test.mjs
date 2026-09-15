@@ -9,7 +9,9 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBargeIn, createTurnDetector } from "../src/lib/voice.ts";
+import { createTurnDetector } from "../src/lib/voice.ts";
+import { createBargeInDetector, turnSilenceMs } from "../src/lib/bargein.ts";
+import { rankVoices, splitSentences } from "../src/lib/tts.ts";
 
 /** One animation frame is ~16 ms; build a trace out of (duration, level) segments. */
 function frames(ms, level) {
@@ -81,10 +83,13 @@ test("a room with nobody talking never opens a turn", () => {
   assert.deepEqual(events, []);
 });
 
-test("an answer does not interrupt itself, and the user talking over it does", () => {
-  const over = (segments) => {
+test("an answer does not interrupt itself, but a sentence over it cancels it", () => {
+  const run = (segments) => {
     const events = [];
-    const detector = createBargeIn({ onSpeak: () => events.push("interrupt") });
+    const detector = createBargeInDetector({
+      onPause: () => events.push("pause"),
+      onCancel: () => events.push("cancel"),
+    });
     detector.start(0);
     let now = 0;
     for (const [ms, level] of segments) {
@@ -96,9 +101,9 @@ test("an answer does not interrupt itself, and the user talking over it does", (
     return events;
   };
 
-  // An answer that pauses between words: the pauses are its own, not an interruption.
+  // The answer's own shape: loud, quiet between words, loud again. Nothing fires.
   assert.deepEqual(
-    over([
+    run([
       [3000, 0.22],
       [250, 0.03],
       [250, 0.22],
@@ -109,24 +114,35 @@ test("an answer does not interrupt itself, and the user talking over it does", (
     [],
   );
 
-  // The same answer, but the user comes in over it.
-  assert.deepEqual(
-    over([
-      [2000, 0.22],
-      [250, 0.03],
-      [250, 0.22],
-      [250, 0.03],
-      [500, 0.5],
-    ]),
-    ["interrupt"],
-  );
+  // A short bump above the baseline holds the answer (a cough), without cancelling it.
+  const paused = run([[2000, 0.22], [150, 0.32], [400, 0.03]]);
+  assert.deepEqual(paused, ["pause"]);
 
-  // Headphones: nothing leaks in, and a normal voice still gets through.
-  assert.deepEqual(
-    over([
-      [2000, 0.01],
-      [500, 0.2],
-    ]),
-    ["interrupt"],
-  );
+  // Talking over it cancels: the level is well above the answer's own leakage for 200 ms.
+  const cancelled = run([[2000, 0.22], [250, 0.03], [250, 0.22], [500, 0.5]]);
+  assert.equal(cancelled.includes("cancel"), true);
+});
+
+test("the endpointer waits less after a finished sentence and more after a dangling word", () => {
+  assert.ok(turnSilenceMs("好，就这样。") < turnSilenceMs("我觉得这个"));
+  assert.ok(turnSilenceMs("但是") > turnSilenceMs("我觉得这个"));
+  assert.ok(turnSilenceMs("好，就这样。") >= 300, "but never instant: a pause is still a pause");
+});
+
+test("an answer is spoken sentence by sentence, not in one breath", () => {
+  assert.deepEqual(splitSentences("第一句。第二句！第三句？"), ["第一句。", "第二句！", "第三句？"]);
+  assert.deepEqual(splitSentences("一句话\n下一行"), ["一句话", "下一行"]);
+  assert.deepEqual(splitSentences("   "), []);
+});
+
+test("the nicest voices a machine has come first, and nothing invented", () => {
+  const available = [
+    { voiceURI: "v1", name: "Some Robot", lang: "zh-CN" },
+    { voiceURI: "v2", name: "Tingting", lang: "zh-CN" },
+    { voiceURI: "v3", name: "Meijia", lang: "zh-CN" },
+    { voiceURI: "v4", name: "Samantha", lang: "en-US" },
+  ];
+  assert.deepEqual(rankVoices(available, "zh").map((voice) => voice.label), ["Tingting", "Meijia", "Some Robot"]);
+  assert.deepEqual(rankVoices(available, "en").map((voice) => voice.label), ["Samantha"]);
+  assert.deepEqual(rankVoices([], "zh"), [], "a machine with no voices says so instead of guessing");
 });

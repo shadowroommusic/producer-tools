@@ -1089,6 +1089,17 @@
   color: var(--sr-ok, #34d399);
 }
 
+/* 通话的声音: one select and one 试听 button — the list is whatever this machine has. */
+.sr-voice-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sr-voice-picker .sr-input {
+  min-width: 260px;
+}
+
 .sr-studio-record {
   gap: 6px;
 }
