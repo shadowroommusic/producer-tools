@@ -137,6 +137,145 @@ function wavDurationMs(buffer) {
   return Math.round((dataBytes / byteRate) * 1000);
 }
 
+
+/**
+ * A local Responses→Chat adapter.
+ *
+ * This Codex build speaks only the Responses wire (`wire_api = "chat"` is rejected outright), while most
+ * providers — MiniMax, DeepSeek, the whole OpenAI-compatible field — speak `/chat/completions`. So the
+ * bridge runs a tiny server on loopback, points Codex at it, and translates in both directions:
+ * Responses request → chat request, chat SSE deltas → Responses SSE events.
+ *
+ * Text and function calls both cross over: an agent that cannot call tools could not make music.
+ */
+async function startChatAdapter(provider, credential) {
+  const base = provider.baseUrl.replace(/\/+$/, "");
+  const headers = { "content-type": "application/json", ...(credential === null ? {} : { authorization: `Bearer ${credential.value}` }), ...(provider.headers ?? {}) };
+  const server = createServer(async (request, response) => {
+    const send = (code, body, type = "application/json") => {
+      response.writeHead(code, { "content-type": type });
+      response.end(body);
+    };
+    try {
+      if (request.method === "GET" && request.url === "/v1/models") {
+        const answer = await fetch(`${base}/models`, { headers });
+        send(answer.status, await answer.text());
+        return;
+      }
+      if (request.method !== "POST" || request.url !== "/v1/responses") {
+        send(404, JSON.stringify({ error: "adapter: only /v1/responses and /v1/models" }));
+        return;
+      }
+      const body = JSON.parse((await readJsonBody(request, 8 * 1024 * 1024)) ?? "{}");
+      /** Responses `input` items → chat messages. */
+      const input = Array.isArray(body.input) ? body.input : [];
+      const messages = [];
+      if (typeof body.instructions === "string" && body.instructions !== "") messages.push({ role: "system", content: body.instructions });
+      for (const item of input) {
+        if (item?.type === "function_call_output") {
+          messages.push({ role: "tool", tool_call_id: item.call_id ?? item.id, content: String(item.output ?? "") });
+          continue;
+        }
+        const content = Array.isArray(item?.content) ? item.content : [];
+        const text = content.map((part) => part?.text ?? "").join("");
+        if (item?.type === "function_call") {
+          messages.push({ role: "assistant", content: null, tool_calls: [{ id: item.call_id ?? item.id, type: "function", function: { name: item.name, arguments: item.arguments ?? "{}" } }] });
+          continue;
+        }
+        messages.push({ role: item?.role === "assistant" ? "assistant" : "user", content: text });
+      }
+      const tools = Array.isArray(body.tools)
+        ? body.tools
+            .filter((tool) => tool?.type === "function")
+            .map((tool) => ({
+              type: "function",
+              function: { name: tool.name, description: tool.description ?? "", parameters: tool.parameters ?? { type: "object", properties: {} } },
+            }))
+        : undefined;
+      const chat = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: body.model,
+          messages,
+          stream: true,
+          ...(tools === undefined || tools.length === 0 ? {} : { tools }),
+          ...(body.temperature === undefined ? {} : { temperature: body.temperature }),
+        }),
+      });
+      if (!chat.ok) {
+        send(chat.status, await chat.text());
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      const emit = (type, payload) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
+      const id = `resp-${Date.now().toString(36)}`;
+      emit("response.created", { response: { id, model: body.model ?? "", status: "in_progress", output: [] } });
+      let opened = false;
+      let text = "";
+      const calls = new Map();
+      const reader = chat.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "" || payload === "[DONE]") continue;
+          let chunk;
+          try {
+            chunk = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          const delta = chunk?.choices?.[0]?.delta ?? {};
+          if (typeof delta.content === "string" && delta.content !== "") {
+            if (!opened) {
+              opened = true;
+              emit("response.output_item.added", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "in_progress", content: [] } });
+            }
+            text += delta.content;
+            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: delta.content });
+          }
+          for (const call of delta.tool_calls ?? []) {
+            const index = call.index ?? 0;
+            if (!calls.has(index)) {
+              calls.set(index, { id: call.id ?? `call-${index}`, name: call.function?.name ?? "", arguments: "" });
+              emit("response.output_item.added", { output_index: index + (opened ? 1 : 0), item: { id: call.id ?? `call-${index}`, type: "function_call", call_id: call.id ?? `call-${index}`, name: call.function?.name ?? "", arguments: "" } });
+            }
+            const state = calls.get(index);
+            if (typeof call.function?.arguments === "string") {
+              state.arguments += call.function.arguments;
+              emit("response.function_call_arguments.delta", { item_id: state.id, output_index: index + (opened ? 1 : 0), delta: call.function.arguments });
+            }
+          }
+        }
+      }
+      if (opened) {
+        emit("response.output_text.done", { item_id: "msg-1", output_index: 0, content_index: 0, text });
+        emit("response.output_item.done", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] } });
+      }
+      for (const [index, call] of calls) {
+        emit("response.output_item.done", { output_index: index + (opened ? 1 : 0), item: { id: call.id, type: "function_call", call_id: call.id, name: call.name, arguments: call.arguments } });
+      }
+      emit("response.completed", { response: { id, model: body.model ?? "", status: "completed", output: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } });
+      response.end();
+    } catch (error) {
+      if (!response.headersSent) send(500, JSON.stringify({ error: String(error?.message ?? error) }));
+      else response.end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  console.log(`[agent] chat adapter for ${provider.label} on http://127.0.0.1:${port}/v1`);
+  return { baseUrl: `http://127.0.0.1:${port}/v1`, close: () => server.close() };
+}
+
 /**
  * A file name that is safe to write, without mangling the name.
  *
@@ -315,6 +454,8 @@ class Agent {
     this.codexHome = null;
     /** Extra environment for that core — the provider's key, never written to disk. */
     this.extraEnv = {};
+    /** The loopback adapter currently serving the configured provider, if any. */
+    this.adapter = null;
   }
 
   get connected() {
@@ -344,18 +485,26 @@ class Agent {
       this.codexHome = null;
       this.extraEnv = {};
     } else {
+      this.adapter?.close();
+      this.adapter = null;
       const id = String(provider.id ?? "custom").replace(/[^a-zA-Z0-9_-]/g, "-");
       const home = join(CREDENTIALS_DIR, `codex-${id}`);
       mkdirSync(home, { recursive: true, mode: 0o700 });
       const envKey = `SHADOWROOM_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_KEY`;
       const credential = provider.credentialRef ? resolveCredential(provider.credentialRef) : null;
+      /**
+       * Every provider goes through the adapter: even a Responses-native one would have to be probed to
+       * know otherwise, and the adapter is a loopback hop away. `base_url` in the config points at it.
+       */
+      const adapter = await startChatAdapter(provider, credential);
+      this.adapter = adapter;
       const lines = [
         `model = ${JSON.stringify(provider.model ?? "")}`,
         `model_provider = ${JSON.stringify(id)}`,
         "",
         `[model_providers.${id}]`,
         `name = ${JSON.stringify(provider.label ?? id)}`,
-        `base_url = ${JSON.stringify(provider.baseUrl ?? "")}`,
+        `base_url = ${JSON.stringify(adapter.baseUrl)}`,
         // This Codex build accepts only the Responses wire ("`wire_api = \"chat\"` is no longer
         // supported" — measured), so every provider is reached through the bridge's adapter below.
         `wire_api = "responses"`,
