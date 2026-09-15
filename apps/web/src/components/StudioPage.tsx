@@ -638,6 +638,19 @@ export function StudioPage({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const pendingStartRef = useRef<number | null>(null);
+  /**
+   * The click track that is currently running, if any.
+   *
+   * It used to be a local `const` inside `startRecording`, which meant the only thing that could stop
+   * it was the recorder's own `onstop`. Cancel during the count-in (which never reaches `onstop`) left
+   * the clicks playing forever — and every further attempt left one more, so they stacked up. One ref,
+   * stopped on every exit path, is the whole fix.
+   */
+  const metronomeRef = useRef<ReturnType<typeof createMetronome> | null>(null);
+  const stopClicks = useCallback(() => {
+    metronomeRef.current?.stop();
+    metronomeRef.current = null;
+  }, []);
 
   const startRecording = useCallback(async () => {
     if (recording !== null || onSaveRecording === undefined) return;
@@ -649,7 +662,9 @@ export function StudioPage({
 
       const beatSeconds = 60 / Math.max(1, project.bpm);
       const clicks = metronomeOn || countIn;
+      stopClicks(); // never two click tracks, whatever happened before
       const metronome = createMetronome({ context, destination: context.destination, bpm: project.bpm });
+      metronomeRef.current = metronome;
       const t0 = clicks ? metronome.start() : context.currentTime;
       const beginsAt = countIn ? t0 + beatSeconds * 4 : t0;
       const delayMs = Math.max(0, (beginsAt - context.currentTime) * 1000);
@@ -668,7 +683,7 @@ export function StudioPage({
           if (event.data.size > 0) chunksRef.current.push(event.data);
         };
         recorder.onstop = () => {
-          metronome.stop();
+          stopClicks();
           releaseMicrophone();
           const blob = new Blob(chunksRef.current, { type: recorder.mimeType === "" ? "audio/webm" : recorder.mimeType });
           const clock = new Date().toISOString().slice(11, 19).replace(/:/g, "-");
@@ -715,9 +730,14 @@ export function StudioPage({
       say(`麦克风没打开：${cause instanceof Error ? cause.message : String(cause)}`);
       setRecording(null);
     }
-  }, [countIn, metronomeOn, onChange, onSaveRecording, playhead, project.bpm, project.tracks, recording, say, selected]);
+  }, [countIn, metronomeOn, onChange, onSaveRecording, playhead, project.bpm, project.tracks, recording, say, selected, stopClicks]);
 
   const stopRecording = useCallback(() => {
+    /**
+     * Silence the clicks first, on every path out: cancelling inside the count-in never reaches the
+     * recorder's `onstop`, and that is exactly how the click track survived being stopped.
+     */
+    stopClicks();
     if (pendingStartRef.current !== null) {
       window.clearTimeout(pendingStartRef.current);
       pendingStartRef.current = null;
@@ -730,7 +750,7 @@ export function StudioPage({
     setRecording(null);
     if (recorder === null || recorder.state === "inactive") return;
     recorder.stop();
-  }, [say]);
+  }, [say, stopClicks]);
 
   /** The seconds counter next to the button, so "am I still recording?" is never a guess. */
   useEffect(() => {
@@ -750,13 +770,14 @@ export function StudioPage({
   useEffect(
     () => () => {
       if (pendingStartRef.current !== null) window.clearTimeout(pendingStartRef.current);
+      stopClicks();
       const recorder = recorderRef.current;
       if (recorder !== null && recorder.state !== "inactive") recorder.stop();
       releaseMicrophone();
       void audioContextRef.current?.close();
       audioContextRef.current = null;
     },
-    [],
+    [stopClicks],
   );
 
   /** Reference files in place through the machine's own file dialog. */
@@ -1163,7 +1184,16 @@ export function StudioPage({
             className="sr-btn sr-studio-click"
             aria-pressed={metronomeOn}
             data-on={metronomeOn || undefined}
-            onClick={() => setMetronomeOn((on) => !on)}
+            onClick={() =>
+              setMetronomeOn((on) => {
+                /**
+                 * Switching it off has to switch it off *now*: a toggle that only affects the next
+                 * take, while the current one keeps clicking, is a switch that lies.
+                 */
+                if (on) stopClicks();
+                return !on;
+              })
+            }
             title="节拍器：录音时按 BPM 打点（click 走音频时钟，不会被录进麦克风）"
           >
             ♩ 节拍器 {metronomeOn ? "开" : "关"}

@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { beatInBar, metronomeTimes } from "../src/lib/metronome.ts";
+import { beatInBar, createMetronome, metronomeTimes } from "../src/lib/metronome.ts";
 
 /** A MediaStream stand-in: tracks with a readyState, and a record of stop() calls. */
 function fakeStream() {
@@ -67,4 +67,40 @@ test("clicks land on the beat, and only inside the window being scheduled", () =
 
 test("every fourth click is the downbeat", () => {
   assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 7].map(beatInBar), [0, 1, 2, 3, 0, 1, 2, 3]);
+});
+
+/** An AudioContext stand-in: counts the clicks that were scheduled. */
+function fakeAudio() {
+  const scheduled = [];
+  const context = {
+    currentTime: 0,
+    destination: {},
+    createOscillator: () => ({
+      type: "",
+      frequency: { value: 0 },
+      connect: (target) => target,
+      start: (at) => scheduled.push(at),
+      stop: () => {},
+    }),
+    createGain: () => ({
+      gain: { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} },
+      connect: (target) => target,
+    }),
+  };
+  return { context, scheduled };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("stopping the click track stops it — nothing is scheduled afterwards", async () => {
+  const { context, scheduled } = fakeAudio();
+  const metronome = createMetronome({ context, destination: context.destination, bpm: 120 });
+  metronome.start();
+  await sleep(70); // a couple of lookahead windows
+  const whileRunning = scheduled.length;
+  assert.ok(whileRunning > 0, "a running click track schedules clicks");
+  metronome.stop();
+  assert.equal(metronome.running, false);
+  await sleep(160);
+  assert.equal(scheduled.length, whileRunning, "the click track went quiet the moment it stopped");
 });
