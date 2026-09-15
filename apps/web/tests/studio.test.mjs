@@ -11,8 +11,13 @@ import {
   clipNoteRange,
   newNoteId,
   nudgeNotes,
+  duplicateSection,
+  insertBars,
   notesRevision,
   quantiseNotes,
+  removeSection,
+  repeatLastSection,
+  structureRevision,
   trackFromImport,
   trackNameFromImport,
   tracksFromStems,
@@ -157,4 +162,112 @@ test("a note revision changes exactly when a note changes", () => {
   assert.notEqual(notesRevision([...notes, { id: "c", midi: 67, start_ms: 1000, end_ms: 1200 }]), revision);
   // order is not a change: the piano roll sorts, the revision must not care
   assert.equal(notesRevision([...notes].reverse()), revision);
+});
+
+/** A small arrangement: intro 4 bars (drums), drop 8 bars (drums + bass), outro 4 bars. */
+function arrangement() {
+  return {
+    id: "p1",
+    name: "结构",
+    updatedAt: 0,
+    bpm: 124,
+    key: "8A",
+    bars: 16,
+    sections: [
+      { id: "a", name: "intro", start: 0, bars: 4 },
+      { id: "b", name: "drop", start: 4, bars: 8 },
+      { id: "c", name: "outro", start: 12, bars: 4 },
+    ],
+    tracks: [
+      { id: "t1", name: "鼓", muted: false, soloed: false, volume: 80, clips: [
+        { id: "c1", name: "intro-drums", start: 0, length: 4, source: "/a.wav" },
+        { id: "c2", name: "drop-drums", start: 4, length: 8, source: "/b.wav" },
+        { id: "c3", name: "outro-drums", start: 12, length: 4, source: "/c.wav" },
+      ] },
+      { id: "t2", name: "贝斯", muted: false, soloed: false, volume: 80, clips: [
+        { id: "c4", name: "drop-bass", start: 4, length: 8, source: "/d.wav" },
+      ] },
+    ],
+  };
+}
+
+test("inserting bars pushes the arrangement right and leaves a named gap", () => {
+  const next = insertBars(arrangement(), 12, 8, "breakdown");
+  assert.equal(next.bars, 24);
+  // the outro moved; the drop did not
+  assert.deepEqual(
+    next.sections.map((section) => [section.name, section.start, section.bars]),
+    [
+      ["intro", 0, 4],
+      ["drop", 4, 8],
+      ["breakdown", 12, 8],
+      ["outro", 20, 4],
+    ],
+  );
+  assert.deepEqual(
+    next.tracks[0].clips.map((clip) => clip.start),
+    [0, 4, 20],
+  );
+  // the bass only played the drop, so it stays put
+  assert.deepEqual(next.tracks[1].clips.map((clip) => clip.start), [4]);
+});
+
+test("inserting inside a section grows it instead of splitting it", () => {
+  const next = insertBars(arrangement(), 8, 4);
+  assert.deepEqual(
+    next.sections.map((section) => [section.name, section.start, section.bars]),
+    [
+      ["intro", 0, 4],
+      ["drop", 4, 12],
+      ["outro", 16, 4],
+    ],
+  );
+  // clips after the insertion point still move
+  assert.deepEqual(next.tracks[0].clips.map((clip) => clip.start), [0, 4, 16]);
+});
+
+test("repeating a section copies its clips and reuses the same audio files", () => {
+  const next = duplicateSection(arrangement(), "b");
+  assert.equal(next.bars, 24);
+  const drums = next.tracks[0].clips;
+  assert.deepEqual(drums.map((clip) => clip.start), [0, 4, 12, 20]);
+  const copy = drums.find((clip) => clip.start === 12);
+  assert.equal(copy.source, "/b.wav", "a repeat is a reference, not a second render");
+  assert.notEqual(copy.id, "c2");
+  assert.deepEqual(
+    next.sections.map((section) => [section.name, section.start, section.bars]),
+    [
+      ["intro", 0, 4],
+      ["drop", 4, 8],
+      ["drop", 12, 8],
+      ["outro", 20, 4],
+    ],
+  );
+  // the bass repeat came along too
+  assert.deepEqual(next.tracks[1].clips.map((clip) => clip.start), [4, 12]);
+});
+
+test("repeating the last section is the one-click version", () => {
+  const next = repeatLastSection(arrangement());
+  assert.equal(next.bars, 20);
+  assert.deepEqual(next.tracks[0].clips.map((clip) => clip.start), [0, 4, 12, 16]);
+});
+
+test("removing a section deletes its clips and pulls the rest left", () => {
+  const next = removeSection(arrangement(), "b");
+  assert.equal(next.bars, 8);
+  assert.deepEqual(next.sections.map((section) => [section.name, section.start]), [["intro", 0], ["outro", 4]]);
+  assert.deepEqual(next.tracks[0].clips.map((clip) => clip.start), [0, 4]);
+  assert.equal(next.tracks[1].clips.length, 0, "the bass lived in the drop");
+});
+
+test("the structure revision notices every structural change", () => {
+  const base = structureRevision(arrangement());
+  assert.equal(structureRevision(arrangement()), base);
+  assert.notEqual(structureRevision(insertBars(arrangement(), 8, 4)), base);
+  assert.notEqual(structureRevision(duplicateSection(arrangement(), "a")), base);
+  assert.notEqual(structureRevision(removeSection(arrangement(), "c")), base);
+  const moved = arrangement();
+  moved.tracks[0].clips[0].start = 1;
+  assert.notEqual(structureRevision(moved), base, "dragging a clip changes the arrangement");
 });

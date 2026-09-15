@@ -152,7 +152,163 @@ export type StudioAnalysis = { bpm?: number; key?: string; camelot?: string; con
  * It is what turns the ruler from "N bars" into "a song": the studio draws the boundaries and the
  * names, so a render the agent arranged from a sentence looks arranged.
  */
-export type StudioSection = { name: string; bars: number; start: number };
+export type StudioSection = { id?: string; name: string; bars: number; start: number };
+
+/**
+ * Structure editing: inserting bars, repeating a section, cutting one out.
+ *
+ * The rules come from the arrangement itself, so they are pure functions over a project — the menus,
+ * the agent's tool and the tests all describe the same three moves:
+ *
+ * - **insert** pushes everything at or after the insertion point to the right, extends the section it
+ *   lands inside, and leaves a gap the user can fill;
+ * - **duplicate** copies a section's clips (same audio files — a repeat is a reference, not a second
+ *   render) and inserts the copy right after it;
+ * - **remove** deletes the clips inside a section and pulls everything after it to the left.
+ *
+ * Sections are labels, not containers: dragging a clip never moves them (that is what makes the
+ * strip trustworthy), while these three operations move them deliberately.
+ */
+
+/** Give every section a stable id, so menus, agent calls and undo all name the same thing. */
+export function withSectionIds(project: StudioProject): StudioProject {
+  if (project.sections === undefined || project.sections.length === 0) return project;
+  if (project.sections.every((section) => section.id !== undefined)) return project;
+  return {
+    ...project,
+    sections: project.sections.map((section, index) => ({
+      ...section,
+      id: section.id ?? `sec-${index}-${Math.round(section.start * 100)}`,
+    })),
+  };
+}
+
+/** A revision for the arrangement (sections + clip placement), used to refuse stale agent edits. */
+export function structureRevision(project: { bars: number; sections?: StudioSection[]; tracks: StudioTrack[] }): string {
+  let hash = 0x811c9dc5;
+  const text = [
+    `bars:${project.bars}`,
+    ...(project.sections ?? []).map((section) => `s:${section.name}:${section.start}:${section.bars}`),
+    ...project.tracks.flatMap((track) =>
+      track.clips.map((clip) => `c:${track.name}:${clip.name}:${clip.start}:${clip.length}`),
+    ),
+  ].join("|");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `r${hash.toString(36)}`;
+}
+
+/** Shift every clip and section at or after `atBar` to the right. */
+function shiftFrom(project: StudioProject, atBar: number, count: number): StudioProject {
+  return {
+    ...project,
+    bars: project.bars + count,
+    sections: project.sections?.map((section) =>
+      section.start >= atBar
+        ? { ...section, start: section.start + count }
+        : section.start + section.bars > atBar
+          ? { ...section, bars: section.bars + count }
+          : section,
+    ),
+    tracks: project.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => (clip.start >= atBar ? { ...clip, start: clip.start + count } : clip)),
+    })),
+  };
+}
+
+/**
+ * Insert empty bars: a breakdown to fill, or room for a new section.
+ * @param project - the project to change.
+ * @param atBar - where the gap starts.
+ * @param count - how many bars to insert.
+ * @param name - what to call the new section (defaults to `段落 N`).
+ */
+export function insertBars(project: StudioProject, atBar: number, count: number, name?: string): StudioProject {
+  const at = Math.max(0, Math.round(atBar));
+  const bars = Math.max(1, Math.round(count));
+  const shifted = shiftFrom(withSectionIds(project), at, bars);
+  const sections = [...(shifted.sections ?? [])];
+  const inside = sections.find((section) => section.start < at && section.start + section.bars > at);
+  if (inside !== undefined) return shifted; // grew the section it landed in
+  sections.push({
+    id: `sec-${at}-${bars}-${sections.length}`,
+    name: name?.trim() || `段落 ${sections.length + 1}`,
+    start: at,
+    bars,
+  });
+  sections.sort((a, b) => a.start - b.start);
+  return { ...shifted, sections };
+}
+
+/**
+ * Repeat a section right after itself — the same clips, the same audio files.
+ *
+ * Reusing the files is deliberate: "再来一遍副歌" is an arrangement decision, and a second render
+ * would cost time and could come out slightly different.
+ * @param project - the project to change.
+ * @param sectionId - which section to repeat.
+ * @returns the project with the copy inserted, or the project unchanged when the id is unknown.
+ */
+export function duplicateSection(project: StudioProject, sectionId: string): StudioProject {
+  const withIds = withSectionIds(project);
+  const source = (withIds.sections ?? []).find((section) => section.id === sectionId);
+  if (source === undefined) return project;
+  const from = source.start;
+  const to = source.start + source.bars;
+  const shifted = shiftFrom(withIds, to, source.bars);
+  const stamp = Date.now().toString(36);
+  const copies = shifted.tracks.map((track) => {
+    const originals = track.clips.filter((clip) => clip.start >= from && clip.start < to);
+    return {
+      ...track,
+      clips: [
+        ...track.clips,
+        ...originals.map((clip, index) => ({
+          ...clip,
+          id: `${clip.id}-x${stamp}${index}`,
+          name: clip.name,
+          start: clip.start + source.bars,
+        })),
+        // keep the lane readable (and every "first clip" assumption honest) after a repeat
+      ].sort((a, b) => a.start - b.start),
+    };
+  });
+  const sections = [...(shifted.sections ?? []), { ...source, id: `${source.id}-x${stamp}`, start: to, bars: source.bars }];
+  sections.sort((a, b) => a.start - b.start);
+  return { ...shifted, tracks: copies, sections };
+}
+
+/** Delete a section: its clips go away and everything after it moves left. */
+export function removeSection(project: StudioProject, sectionId: string): StudioProject {
+  const withIds = withSectionIds(project);
+  const target = (withIds.sections ?? []).find((section) => section.id === sectionId);
+  if (target === undefined) return project;
+  const from = target.start;
+  const to = target.start + target.bars;
+  return {
+    ...withIds,
+    bars: Math.max(1, withIds.bars - target.bars),
+    sections: (withIds.sections ?? [])
+      .filter((section) => section.id !== sectionId)
+      .map((section) => (section.start >= to ? { ...section, start: section.start - target.bars } : section)),
+    tracks: withIds.tracks.map((track) => ({
+      ...track,
+      clips: track.clips
+        .filter((clip) => clip.start < from || clip.start >= to)
+        .map((clip) => (clip.start >= to ? { ...clip, start: clip.start - target.bars } : clip)),
+    })),
+  };
+}
+
+/** Repeat the last section — the one-click version of "再来一遍". */
+export function repeatLastSection(project: StudioProject): StudioProject {
+  const withIds = withSectionIds(project);
+  const last = [...(withIds.sections ?? [])].sort((a, b) => a.start - b.start).at(-1);
+  return last === undefined ? project : duplicateSection(withIds, last.id as string);
+}
 
 /** Bars per second at 4/4 — the bridge between wall-clock audio and the bar grid. */
 export function barsPerSecond(bpm: number): number {

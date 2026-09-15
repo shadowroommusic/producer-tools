@@ -1506,15 +1506,19 @@ export function App() {
   );
 
   /** Remember the project as it is right now — the point a drag or an edit can return to. */
+  /**
+   * Remember the project as it is right now — the point the next edit can return to.
+   *
+   * The snapshot is taken from the state this render already has, and pushed in a single updater:
+   * the first version called `setHistory` from *inside* a `setProjects` updater, and React's
+   * StrictMode runs those twice — which is how an undo came out as a no-op (measured: two undos
+   * behaved like one).
+   */
   const beginEdit = useCallback(() => {
-    setProjects((current) => {
-      const project = current.find((entry) => entry.id === openProjectId);
-      if (project !== undefined) {
-        setHistory((previous) => ({ past: [...previous.past.slice(-49), project], future: [] }));
-      }
-      return current;
-    });
-  }, [openProjectId]);
+    const project = projects.find((entry) => entry.id === openProjectId);
+    if (project === undefined) return;
+    setHistory((previous) => ({ past: [...previous.past.slice(-49), project], future: [] }));
+  }, [openProjectId, projects]);
 
   const updateProject = useCallback(
     (patch: (project: StudioProject) => StudioProject, options?: { transient?: boolean }) => {
@@ -1531,38 +1535,32 @@ export function App() {
   updateProjectRef.current = (patch) => updateProject(patch);
 
   const undo = useCallback(() => {
-    setHistory((previous) => {
-      const previousProject = previous.past.at(-1);
-      if (previousProject === undefined) return previous;
-      setProjects((current) =>
-        current.map((project) =>
-          project.id === previousProject.id
-            ? { ...previousProject, updatedAt: Date.now() }
-            : project,
-        ),
-      );
-      const currentProject = projects.find((project) => project.id === previousProject.id);
-      return {
-        past: previous.past.slice(0, -1),
-        future: currentProject === undefined ? previous.future : [currentProject, ...previous.future].slice(0, 50),
-      };
+    const previousProject = history.past.at(-1);
+    if (previousProject === undefined) return;
+    const currentProject = projects.find((project) => project.id === previousProject.id);
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === previousProject.id ? { ...previousProject, updatedAt: Date.now() } : project,
+      ),
+    );
+    setHistory({
+      past: history.past.slice(0, -1),
+      future: currentProject === undefined ? history.future : [currentProject, ...history.future].slice(0, 50),
     });
-  }, [projects]);
+  }, [history, projects]);
 
   const redo = useCallback(() => {
-    setHistory((previous) => {
-      const nextProject = previous.future[0];
-      if (nextProject === undefined) return previous;
-      setProjects((current) =>
-        current.map((project) => (project.id === nextProject.id ? { ...nextProject, updatedAt: Date.now() } : project)),
-      );
-      const currentProject = projects.find((project) => project.id === nextProject.id);
-      return {
-        past: currentProject === undefined ? previous.past : [...previous.past.slice(-49), currentProject],
-        future: previous.future.slice(1),
-      };
+    const nextProject = history.future[0];
+    if (nextProject === undefined) return;
+    const currentProject = projects.find((project) => project.id === nextProject.id);
+    setProjects((current) =>
+      current.map((project) => (project.id === nextProject.id ? { ...nextProject, updatedAt: Date.now() } : project)),
+    );
+    setHistory({
+      past: currentProject === undefined ? history.past : [...history.past.slice(-49), currentProject],
+      future: history.future.slice(1),
     });
-  }, [projects]);
+  }, [history, projects]);
 
   // Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (or Ctrl+Y) while a Studio project is open.
   useEffect(() => {

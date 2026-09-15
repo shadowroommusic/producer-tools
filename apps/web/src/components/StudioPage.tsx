@@ -16,7 +16,12 @@ import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
   MAX_TRACKS,
   barsPerSecond,
+  duplicateSection,
+  insertBars,
   notesRevision,
+  removeSection,
+  repeatLastSection,
+  structureRevision,
   withNoteIds,
   fileUrl,
   isPlayable,
@@ -122,6 +127,16 @@ export function StudioPage({
   const [importing, setImporting] = useState(false);
   /** Clips whose separation is running right now. */
   const [splitting, setSplitting] = useState<string[]>([]);
+  /**
+   * The structure menu: right-click the bar ruler to insert bars, right-click a section to repeat or
+   * delete it. Sections are labels (dragging clips never moves them), so the menu is the one place
+   * that changes the song's shape deliberately.
+   */
+  const [structureMenu, setStructureMenu] = useState<
+    | { kind: "ruler"; bar: number; x: number; y: number }
+    | { kind: "section"; sectionId: string; x: number; y: number }
+    | null
+  >(null);
   /** The clip whose notes the piano roll is editing (at most one: the editor shows one clip). */
   const [editing, setEditing] = useState<{ trackId: string; clipId: string } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -963,8 +978,14 @@ export function StudioPage({
                       left: section.start * barPx,
                       width: Math.max(barPx, section.bars * barPx) - 1,
                     }}
-                    title={`${section.name} · ${section.bars} 小节 · 点一下跳到段落开头`}
+                    title={`${section.name} · ${section.bars} 小节 · 点一下跳到段落开头，右键可以再来一遍或删掉`}
+                    data-section-id={section.id}
                     onClick={() => seek(section.start)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      if (section.id === undefined) return;
+                      setStructureMenu({ kind: "section", sectionId: section.id, x: event.clientX, y: event.clientY });
+                    }}
                   >
                     <span className="sr-studio-section-name">{section.name}</span>
                     <span className="sr-studio-section-bars sr-mono">{section.bars}</span>
@@ -977,6 +998,12 @@ export function StudioPage({
               onPointerDown={(event) => {
                 const box = event.currentTarget.getBoundingClientRect();
                 seek((event.clientX - box.left) / barPx);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                const box = event.currentTarget.getBoundingClientRect();
+                const bar = Math.max(0, Math.round((event.clientX - box.left) / barPx));
+                setStructureMenu({ kind: "ruler", bar, x: event.clientX, y: event.clientY });
               }}
             >
               {grid.map((bar) => (
@@ -1081,6 +1108,78 @@ export function StudioPage({
       )}
 
       {/* Right-click actions on a clip. */}
+      {structureMenu !== null && (
+        <>
+          <div className="sr-menu-backdrop" onPointerDown={() => setStructureMenu(null)} />
+          <div
+            className="sr-menu sr-clip-menu"
+            style={{ left: structureMenu.x, top: structureMenu.y }}
+            role="menu"
+            aria-label="结构"
+          >
+            <p className="sr-menu-title sr-mono">
+              {structureMenu.kind === "ruler" ? `第 ${structureMenu.bar + 1} 小节` : "这一段"}
+            </p>
+            {structureMenu.kind === "ruler" ? (
+              [4, 8, 16].map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  onClick={() => {
+                    onChange((current) => insertBars(current, structureMenu.bar, count));
+                    setStructureMenu(null);
+                  }}
+                >
+                  <span className="sr-menu-label">在这里插入 {count} 小节</span>
+                  <span className="sr-menu-hint sr-mono">后面所有内容整体右移</span>
+                </button>
+              ))
+            ) : (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  onClick={() => {
+                    onChange((current) => duplicateSection(current, structureMenu.sectionId));
+                    setStructureMenu(null);
+                  }}
+                >
+                  <span className="sr-menu-label">再来一遍这一段</span>
+                  <span className="sr-menu-hint sr-mono">复制片段，用的是同一批音频文件</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item sr-menu-item--danger"
+                  onClick={() => {
+                    onChange((current) => removeSection(current, structureMenu.sectionId));
+                    setStructureMenu(null);
+                  }}
+                >
+                  <span className="sr-menu-label">删掉这一段</span>
+                  <span className="sr-menu-hint sr-mono">里面的片段一起删，后面的内容左移</span>
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item"
+              onClick={() => {
+                onChange((current) => repeatLastSection(current));
+                setStructureMenu(null);
+              }}
+            >
+              <span className="sr-menu-label">再来一遍最后一段</span>
+              <span className="sr-menu-hint sr-mono">整首歌整体变成…A A</span>
+            </button>
+          </div>
+        </>
+      )}
+
       {menu !== null &&
         (() => {
           const track = project.tracks.find((entry) => entry.id === menu.trackId);
