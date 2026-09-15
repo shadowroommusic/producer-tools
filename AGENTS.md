@@ -1,5 +1,14 @@
 # Agent notes — ShadowRoom
 
+> **先读工作区根目录的三件套**（`~/Documents/ShadowRoom/`）：
+> `AGENTS.md`（全局规则、命令、护栏、与 DeepSeek 的分工）、`STATUS.md`（进度、验证证据、待办、
+> 已知问题、上次交接）、`DECISIONS.md`（架构决策与被否掉的方案）。本文件是 producer-tools 仓库
+> 自己的约定与决策。
+>
+> 更新仪式：每完成一个**可验证单元**（一个功能跑通并验证）就更新 `STATUS.md`；跨仓库接口或架构
+> 决策变了更新 `DECISIONS.md`；踩到坑写进根目录 `AGENTS.md` 的"踩过的坑"。提交时带上这些改动。
+
+
 Repo conventions and the current roadmap, for anyone (human or agent) picking this up later.
 
 ## Repo map
