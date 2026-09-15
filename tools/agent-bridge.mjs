@@ -311,6 +311,10 @@ class Agent {
     this.approvals = new Map(); // bridge approval id → the app-server request waiting for a decision
     this.nextApprovalId = 1;
     this.models = null; // cached `model/list`
+    /** When set, the core runs with this CODEX_HOME (see `useProvider`). */
+    this.codexHome = null;
+    /** Extra environment for that core — the provider's key, never written to disk. */
+    this.extraEnv = {};
   }
 
   get connected() {
@@ -326,9 +330,57 @@ class Agent {
     return this.starting;
   }
 
+  /**
+   * Point every thread at a provider from Settings.
+   *
+   * The per-thread `config` route did not work — this Codex build ignored `model_providers` passed that
+   * way and answered with its own backend (measured). Its *config file* is the documented route, so the
+   * bridge writes one (`$CODEX_HOME/config.toml`), restarts the core with that `CODEX_HOME` and the key in
+   * its environment. One provider at a time is enough while this is being proven; switching is a restart
+   * of the core, about a second.
+   */
+  async useProvider(provider) {
+    if (provider === null) {
+      this.codexHome = null;
+      this.extraEnv = {};
+    } else {
+      const id = String(provider.id ?? "custom").replace(/[^a-zA-Z0-9_-]/g, "-");
+      const home = join(CREDENTIALS_DIR, `codex-${id}`);
+      mkdirSync(home, { recursive: true, mode: 0o700 });
+      const envKey = `SHADOWROOM_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_KEY`;
+      const credential = provider.credentialRef ? resolveCredential(provider.credentialRef) : null;
+      const lines = [
+        `model = ${JSON.stringify(provider.model ?? "")}`,
+        `model_provider = ${JSON.stringify(id)}`,
+        "",
+        `[model_providers.${id}]`,
+        `name = ${JSON.stringify(provider.label ?? id)}`,
+        `base_url = ${JSON.stringify(provider.baseUrl ?? "")}`,
+        // This Codex build accepts only the Responses wire ("`wire_api = \"chat\"` is no longer
+        // supported" — measured), so every provider is reached through the bridge's adapter below.
+        `wire_api = "responses"`,
+        `env_key = ${JSON.stringify(envKey)}`,
+        "",
+      ];
+      writeFileSync(join(home, "config.toml"), lines.join("\n"), { mode: 0o600 });
+      this.codexHome = home;
+      this.extraEnv = credential === null ? {} : { [envKey]: credential.value };
+      console.log(`[agent] provider → ${provider.label} (${provider.model}) · CODEX_HOME=${home}`);
+    }
+    const child = this.child;
+    this.child = null;
+    this.threads.clear();
+    if (child !== null) child.kill();
+    await this.start();
+    return { provider: provider?.id ?? null, codexHome: this.codexHome };
+  }
+
   async #boot() {
     if (!existsSync(CODEX)) throw new Error(`codex binary not found: ${CODEX}`);
-    const child = spawn(CODEX, ["app-server"], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env } });
+    const child = spawn(CODEX, ["app-server"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...(this.extraEnv ?? {}), ...(this.codexHome === null || this.codexHome === undefined ? {} : { CODEX_HOME: this.codexHome }) },
+    });
     this.child = child;
     this.threads.clear();
     this.stderr = [];
@@ -814,6 +866,31 @@ const http = createServer(async (request, response) => {
         json(response, 200, { models });
       } catch (cause) {
         json(response, 200, { models: [], error: `连不上：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
+      return;
+    }
+
+    /**
+     * Run the agent on a provider the user configured (writes a CODEX_HOME and restarts the core).
+     * `{provider: null}` goes back to the built-in one.
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/use-provider") {
+      const body = await readJsonBody(request, 64 * 1024);
+      const provider =
+        body.provider !== null && typeof body.provider === "object" && typeof body.provider.baseUrl === "string"
+          ? {
+              id: body.provider.id,
+              label: body.provider.label,
+              baseUrl: body.provider.baseUrl,
+              model: String(body.provider.model ?? ""),
+              credentialRef: body.provider.credentialRef ?? null,
+              wireApi: body.provider.wireApi,
+            }
+          : null;
+      try {
+        json(response, 200, await agent.useProvider(provider));
+      } catch (error) {
+        json(response, 500, { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
