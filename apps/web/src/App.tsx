@@ -304,8 +304,37 @@ export function App() {
     saveSessions(store);
   }, [store]);
 
+  /**
+   * 工程存不上必须说出来。
+   *
+   * `localStorage` 大约 5MB，写满时 `setItem` 抛异常；以前这里静默失败，用户看到的是「改了半天，
+   * 刷新回到上一个状态」。失败只在第一次说一次（存回去成功后重新武装），不然每敲一下都会刷屏。
+   */
+  const saveFailed = useRef(false);
+  const [storageBlocked, setStorageBlocked] = useState(false);
   useEffect(() => {
-    saveProjects(projects);
+    const ok = saveProjects(projects);
+    setStorageBlocked(!ok);
+    if (ok) {
+      saveFailed.current = false;
+      return;
+    }
+    if (saveFailed.current) return;
+    saveFailed.current = true;
+    withActiveSession((current) => ({
+      ...current,
+      messages: [
+        ...current.messages,
+        {
+          id: `save-${Date.now()}`,
+          role: "notice",
+          title: "工程没存上",
+          text: "本地存储写不进去了（通常是被 5MB 配额占满）。先「导出音频」备份，再删掉几条不用的轨道或旧工程。",
+          at: Date.now(),
+        },
+      ],
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects]);
 
   // Come back to the same page after a reload.
@@ -1480,6 +1509,56 @@ export function App() {
     [withActiveSession],
   );
 
+  /**
+   * 适配器内部跑出来的媒体调用（插件是我们自己执行的，Codex 看不到），要落成 Studio 轨道。
+   *
+   * 桥在 `/api/agent/media-events` 里记着它们，这里轮询新的那几条，然后**走和 Codex 工具卡片完全
+   * 相同的吸收路径**——不另写一套解析，避免两条路慢慢跑偏。
+   */
+  const mediaCursor = useRef(0);
+  /**
+   * 第一次取数只用来对齐游标：桥里可能还躺着上一次会话的事件，重放它们会让一个刚打开的工程
+   * 凭空多出几轨。真正要吸收的是这一轮之后新产生的事件。
+   */
+  const mediaCursorReady = useRef(false);
+  useEffect(() => {
+    if (!running && mediaCursor.current === 0) return;
+    let cancelled = false;
+    const take = async () => {
+      try {
+        const answer = (await fetch(`/api/agent/media-events?since=${mediaCursor.current}`).then((response) => response.json())) as {
+          events?: Array<{ id: number; server: string; tool: string; ok: boolean; text: string }>;
+          next?: number;
+        };
+        if (cancelled || answer.events === undefined) return;
+        if (!mediaCursorReady.current) {
+          mediaCursorReady.current = true;
+          mediaCursor.current = Math.max(mediaCursor.current, Number(answer.next ?? 0));
+          return;
+        }
+        for (const event of answer.events) {
+          mediaCursor.current = Math.max(mediaCursor.current, event.id);
+          absorbRef.current({
+            id: `media-${event.id}`,
+            server: event.server,
+            name: event.tool,
+            status: event.ok ? "ok" : "error",
+            summary: event.tool,
+            detail: JSON.stringify({ result: { content: [{ text: event.text }] } }),
+          });
+        }
+      } catch {
+        /* the bridge is down; the next tick tries again */
+      }
+    };
+    void take();
+    const timer = window.setInterval(() => void take(), running ? 2500 : 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [running]);
+
   const absorbToolResult = useCallback(
     (call: ToolCall) => {
 
@@ -2261,6 +2340,7 @@ export function App() {
               onSaveRecording={uploadRecording}
               onNoteContextChange={setNoteContext}
               rendering={rendering}
+              storageBlocked={storageBlocked}
               composer={chatInDock ? null : composerFor()}
               onClose={() => {
                 setOpenProjectId(undefined);

@@ -118,6 +118,11 @@ export function SettingsPage({
   /** 供应商 TTS 的音色 id（存 localStorage，通话朗读时读同一个键）。 */
   const [providerVoice, setProviderVoice] = useState(() => window.localStorage.getItem("shadowroom.tts.voice") ?? "");
   const [previewing, setPreviewing] = useState(false);
+  /** 这家 TTS 列出来的音色（能列就列，列不到就让人手填 —— 见 loadProviderVoices）。 */
+  const [providerVoices, setProviderVoices] = useState<Array<{ id: string; name: string }>>([]);
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceListState, setVoiceListState] = useState<"idle" | "loading" | "done">("idle");
 
   const refreshCredentials = useCallback(async () => {
     try {
@@ -133,6 +138,122 @@ export function SettingsPage({
   useEffect(() => {
     void createSystemTTS().voices().then(setVoices);
   }, []);
+
+  /**
+   * 这家 TTS 有哪些音色可选。
+   *
+   * MiniMax `get_voice` / ElevenLabs `/voices` 能列；OpenAI 兼容那类没有列表端点，桥会给一串
+   * 预设名并附一句说明。**列不到就退回手填**，不把「取不到列表」变成「不能选音色」。
+   */
+  const loadProviderVoices = useCallback(
+    async (target: { baseUrl: string; protocol: string; credentialRef: string | null }) => {
+      setVoiceListState("loading");
+      setVoiceError(null);
+      setVoiceNote(null);
+      try {
+        const response = await fetch("/api/agent/providers/voices", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            baseUrl: target.baseUrl,
+            credentialRef: target.credentialRef,
+            protocolName: target.protocol,
+          }),
+        });
+        const payload = (await response.json()) as {
+          voices?: Array<{ id?: string; name?: string }>;
+          note?: string;
+          error?: string;
+        };
+        if (payload.error !== undefined) throw new Error(payload.error);
+        setProviderVoices(
+          (payload.voices ?? [])
+            .map((voice) => ({ id: String(voice.id ?? ""), name: String(voice.name ?? voice.id ?? "") }))
+            .filter((voice) => voice.id !== ""),
+        );
+        if (typeof payload.note === "string") setVoiceNote(payload.note);
+        setVoiceListState("done");
+      } catch (cause) {
+        setProviderVoices([]);
+        setVoiceError(cause instanceof Error ? cause.message : String(cause));
+        setVoiceListState("done");
+      }
+    },
+    [],
+  );
+
+  /** 选中一个音色：只写一处状态，通话朗读读的是同一个键。 */
+  const chooseProviderVoice = useCallback((id: string) => {
+    setProviderVoice(id);
+    if (id === "") window.localStorage.removeItem("shadowroom.tts.voice");
+    else window.localStorage.setItem("shadowroom.tts.voice", id);
+  }, []);
+
+  /**
+   * 试听：合成走 bridge（key 不出本机），播放走 WebAudio —— 这样「听到的」和通话里用的
+   * 完全是同一条链路，不会出现「试听好听、通话还是系统音」这种幻觉。
+   */
+  const previewProviderVoice = useCallback(
+    async (voiceId: string) => {
+      const tts = roleTarget(settings, "tts");
+      if (tts === undefined) return;
+      const target = capabilityTarget(tts.provider, "tts");
+      setPreviewing(true);
+      try {
+        const response = await fetch("/api/agent/providers/tts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            text: "你好，我是 Shadow，这段声音以后就是我在通话里的样子。",
+            baseUrl: target.baseUrl,
+            credentialRef: tts.provider.credentialRef,
+            protocol: target.protocol,
+            model: tts.model,
+            ...(voiceId === "" ? {} : { voice: voiceId }),
+          }),
+        });
+        const payload = (await response.json()) as { audio?: string; error?: string };
+        if (payload.audio === undefined) throw new Error(payload.error ?? "没有音频返回");
+        const binary = atob(payload.audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        const context = new AudioContext();
+        const buffer = await context.decodeAudioData(bytes.buffer);
+        const source = context.createBufferSource();
+        source.buffer = buffer;
+        source.connect(context.destination);
+        source.start();
+        setNotice(`试听：${tts.provider.name} · ${voiceId === "" ? "默认音色" : voiceId}｜${Math.round(buffer.duration * 10) / 10} 秒`);
+      } catch (cause) {
+        setNotice(`试听失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        setPreviewing(false);
+      }
+    },
+    [settings],
+  );
+
+  /**
+   * 配好 TTS 就自动读一次音色列表：用户打开这一页应该看到「可以挑的声音」，而不是一个要他
+   * 自己猜的输入框。换供应商 / 换模型 / 换 key 都会重读。
+   */
+  const ttsRole = useMemo(() => roleTarget(settings, "tts"), [settings]);
+  const ttsVoiceKey =
+    ttsRole === undefined
+      ? null
+      : `${capabilityTarget(ttsRole.provider, "tts").baseUrl}|${capabilityTarget(ttsRole.provider, "tts").protocol}|${ttsRole.provider.credentialRef ?? ""}`;
+  useEffect(() => {
+    if (ttsRole === undefined) {
+      setProviderVoices([]);
+      setVoiceNote(null);
+      setVoiceError(null);
+      setVoiceListState("idle");
+      return;
+    }
+    const target = capabilityTarget(ttsRole.provider, "tts");
+    void loadProviderVoices({ baseUrl: target.baseUrl, protocol: target.protocol, credentialRef: ttsRole.provider.credentialRef });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsVoiceKey]);
 
   const credentialFor = useCallback((name: string | null) => credentials.find((entry) => entry.name === name), [credentials]);
   const editingProvider = editing === "new" ? null : settings.providers.find((entry) => entry.id === editing) ?? null;
@@ -455,57 +576,69 @@ export function SettingsPage({
                     <p className="sr-role-test sr-mono" data-ok={true}>
                       当前：{tts.provider.name} · {tts.model}
                     </p>
+                    {/*
+                      音色列表：以前这里只有一个「音色 id」输入框——用户不知道该填什么，于是永远
+                      用默认音色。能列就列出来，点一下选中，旁边试听。
+                    */}
+                    <div className="sr-voice-list-head">
+                      <span className="sr-field-label sr-mono">音色</span>
+                      <button
+                        type="button"
+                        className="sr-btn"
+                        disabled={voiceListState === "loading"}
+                        onClick={() => void loadProviderVoices({ baseUrl: target.baseUrl, protocol: target.protocol, credentialRef: tts.provider.credentialRef })}
+                      >
+                        {voiceListState === "loading" ? "读取中…" : providerVoices.length === 0 ? "读取音色列表" : "重新读取"}
+                      </button>
+                    </div>
+                    {voiceError !== null && <p className="sr-role-test sr-mono">读不到音色列表：{voiceError}（下面照样可以手填）</p>}
+                    {voiceNote !== null && <p className="sr-role-test sr-mono">{voiceNote}</p>}
+                    {providerVoices.length > 0 && (
+                      <ul className="sr-voice-list" aria-label="供应商音色">
+                        {providerVoices.map((voice) => {
+                          const chosen = providerVoice === voice.id;
+                          return (
+                            <li key={voice.id} className="sr-voice-row" data-chosen={chosen || undefined}>
+                              <button
+                                type="button"
+                                className="sr-voice-pick"
+                                aria-pressed={chosen}
+                                onClick={() => chooseProviderVoice(voice.id)}
+                              >
+                                <span className="sr-voice-dot" aria-hidden="true" />
+                                <span className="sr-voice-name">{voice.name}</span>
+                                <span className="sr-voice-id sr-mono">{voice.id}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="sr-btn"
+                                disabled={previewing}
+                                onClick={() => void previewProviderVoice(voice.id)}
+                              >
+                                试听
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                     <label className="sr-field sr-field--wide">
-                      <span className="sr-field-label sr-mono">音色 id（这家 TTS 的音色名，例如 MiniMax 的 voice_id）</span>
+                      <span className="sr-field-label sr-mono">
+                        音色 id（上面挑一个，或在这里手填 —— 留空用这家默认音色）
+                      </span>
                       <div className="sr-key-row">
                         <input
                           className="sr-input"
                           spellCheck={false}
                           value={providerVoice}
                           placeholder="留空用这家默认音色"
-                          onChange={(event) => {
-                            setProviderVoice(event.target.value);
-                            if (event.target.value === "") window.localStorage.removeItem("shadowroom.tts.voice");
-                            else window.localStorage.setItem("shadowroom.tts.voice", event.target.value);
-                          }}
+                          onChange={(event) => chooseProviderVoice(event.target.value)}
                         />
                         <button
                           type="button"
                           className="sr-btn sr-btn--accent"
                           disabled={previewing}
-                          onClick={async () => {
-                            setPreviewing(true);
-                            try {
-                              const response = await fetch("/api/agent/providers/tts", {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: JSON.stringify({
-                                  text: "你好，我是 Shadow，这段声音以后就是我在通话里的样子。",
-                                  baseUrl: target.baseUrl,
-                                  credentialRef: tts.provider.credentialRef,
-                                  protocol: target.protocol,
-                                  model: tts.model,
-                                  ...(providerVoice === "" ? {} : { voice: providerVoice }),
-                                }),
-                              });
-                              const payload = (await response.json()) as { audio?: string; error?: string };
-                              if (payload.audio === undefined) throw new Error(payload.error ?? "没有音频返回");
-                              const binary = atob(payload.audio);
-                              const bytes = new Uint8Array(binary.length);
-                              for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-                              const context = new AudioContext();
-                              const buffer = await context.decodeAudioData(bytes.buffer);
-                              const source = context.createBufferSource();
-                              source.buffer = buffer;
-                              source.connect(context.destination);
-                              source.start();
-                              setNotice(`试听：${tts.provider.name} 返回 ${Math.round(buffer.duration * 10) / 10} 秒音频`);
-                            } catch (cause) {
-                              setNotice(`试听失败：${cause instanceof Error ? cause.message : String(cause)}`);
-                            } finally {
-                              setPreviewing(false);
-                            }
-                          }}
+                          onClick={() => void previewProviderVoice(providerVoice)}
                         >
                           {previewing ? "合成中…" : "试听"}
                         </button>

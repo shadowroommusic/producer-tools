@@ -649,11 +649,18 @@ export function loadProjects(): StudioProject[] {
   }
 }
 
-export function saveProjects(projects: StudioProject[]): void {
+/**
+ * 存工程。**返回值是给 UI 用的**：localStorage 大约 5MB，写满时 `setItem` 会抛异常，而以前这里
+ * 静默吞掉——用户看到的是「改了半天，刷新回到上一个状态」。现在把失败说出来（见 App 的
+ * `saveFailed` 提示），至少不会假装存上了。
+ */
+export function saveProjects(projects: StudioProject[]): boolean {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ projects } satisfies StudioStore));
+    return true;
   } catch {
-    /* storage blocked: the in-memory projects still work */
+    /* Storage blocked or full: the in-memory projects still work, but the caller must say so. */
+    return false;
   }
 }
 

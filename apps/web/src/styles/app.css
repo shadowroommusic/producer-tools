@@ -1337,6 +1337,84 @@
   white-space: nowrap;
 }
 
+/* 供应商音色：一行一个，左边点选，右边试听。 */
+.sr-voice-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.sr-voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.sr-voice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: var(--sr-radius-sm);
+}
+
+.sr-voice-row[data-chosen] {
+  background: color-mix(in srgb, var(--sr-accent) 12%, transparent);
+}
+
+.sr-voice-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-voice-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--sr-border-strong);
+}
+
+.sr-voice-row[data-chosen] .sr-voice-dot {
+  border-color: var(--sr-accent);
+  background: var(--sr-accent);
+}
+
+.sr-voice-name {
+  flex: none;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-voice-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sr-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sr-text-12);
+}
+
 .sr-studio-record {
   gap: 6px;
 }
@@ -1481,6 +1559,12 @@
   padding: 4px 16px 6px;
   color: var(--sr-label-caption);
   font-size: 10px;
+}
+
+/* 存不上是危险状态，不是脚注：让它显眼一点。 */
+.sr-studio-hint--warn {
+  color: var(--sr-danger, #f87171);
+  font-size: var(--sr-text-13);
 }
 
 /* One sentence about something that just happened (an audio track has no notes to edit, the track

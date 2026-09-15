@@ -267,13 +267,19 @@ async function runChatRound({ base, headers, model, messages, tools, temperature
  * `/api/call` 只认前者——第一版直接拿仓库名去调，桥返回 404「unknown server」。
  */
 let serverIdCache = null;
+/** `shadow_music_generator` / `shadow-music-generator` / `ShadowMusicGrabber` 只是同一家的三种写法。 */
+const normalizeServerName = (value) => String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 async function pluginServerId(name) {
   try {
     if (serverIdCache === null) {
       const listed = await fetch(`${MCP_BRIDGE_URL}/api/servers`).then((response) => response.json());
-      serverIdCache = new Map((listed?.servers ?? []).map((server) => [String(server.repo ?? server.id), String(server.id)]));
+      serverIdCache = new Map();
+      for (const server of listed?.servers ?? []) {
+        serverIdCache.set(normalizeServerName(server.id), String(server.id));
+        if (server.repo !== undefined) serverIdCache.set(normalizeServerName(server.repo), String(server.id));
+      }
     }
-    return serverIdCache.get(String(name)) ?? String(name);
+    return serverIdCache.get(normalizeServerName(name)) ?? String(name);
   } catch {
     return String(name);
   }
@@ -301,7 +307,7 @@ async function callPluginTool(target, rawArguments) {
      */
     const ok = response.ok && typeof payload?.result === "string" && payload.isError !== true;
     const text = typeof payload?.result === "string" ? payload.result : `调用失败（HTTP ${response.status}）：${JSON.stringify(payload).slice(0, 500)}`;
-    console.log(`[adapter] ${target.server}.${target.tool} ${ok ? "ok" : "failed"} (${payload?.ms ?? "?"}ms)`);
+    console.log(`[adapter] ${target.server}.${target.tool} ${ok ? "ok" : "failed"} (${payload?.ms ?? "?"}ms) result=${JSON.stringify(text.slice(0, 200))}`);
     return { ok, text };
   } catch (cause) {
     return { ok: false, text: `调用 ${target.server}.${target.tool} 失败：${cause instanceof Error ? cause.message : String(cause)}` };
@@ -314,8 +320,12 @@ async function callPluginTool(target, rawArguments) {
  * 这些调用发生在适配器内部，Codex 看不到，所以「生成的东西出现在时间线上」得靠这条通道。
  */
 function noteMediaEvent(entry) {
-  if (!/render_song|render_part|separate_stems|generate_music/.test(entry.name ?? "")) return;
-  MEDIA_EVENTS.push({ id: MEDIA_EVENTS.length + 1, at: Date.now(), ...entry });
+  if (!/render_song|render_part|separate_stems|generate_music/.test(entry.tool ?? "")) return;
+  /**
+   * 存**完整结果文本**：Studio 用和 Codex 工具卡片同一套解析（路径、bpm、段落、各声部），
+   * 截断过的 preview 只够人看，不够落盘。
+   */
+  MEDIA_EVENTS.push({ id: MEDIA_EVENTS.length + 1, at: Date.now(), server: entry.server, tool: entry.tool, ok: entry.ok, text: entry.resultText ?? "" });
   if (MEDIA_EVENTS.length > 50) MEDIA_EVENTS.shift();
 }
 
@@ -504,7 +514,7 @@ async function startChatAdapter(provider, credential) {
         for (const call of outcome.toolCalls) {
           const target = nameMap.get(call.name);
           const result = await callPluginTool(target, call.arguments);
-          executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, preview: result.text.slice(0, 200) });
+          executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, resultText: result.text });
           messagesForRound = [
             ...messagesForRound,
             { role: "assistant", content: null, tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] },
@@ -1387,6 +1397,62 @@ const http = createServer(async (request, response) => {
     }
 
     /**
+     * 一家 TTS 供应商到底有哪些音色。
+     *
+     * 用户的原话是「通话与声音里面的那些声音跟人机一样」——系统音色是兜底，不是选择。能列音色的家
+     * 就把它们列出来给人挑：MiniMax 的 `POST /v1/get_voice` 一次给系统音色 + 克隆音色，ElevenLabs
+     * 的 `GET /voices`。OpenAI 兼容那一类没有列表端点，给官方预设名并说明可以手填。
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/providers/voices") {
+      const body = await readJsonBody(request, 64 * 1024);
+      const provider = { baseUrl: String(body.baseUrl ?? "").trim(), reference: body.credentialRef ?? null };
+      const protocol = String(body.protocolName ?? body.protocol ?? "openai");
+      if (provider.baseUrl === "") {
+        json(response, 400, { error: "缺少端点" });
+        return;
+      }
+      try {
+        if (protocol === "minimax-t2a") {
+          const { response: answer } = await callProvider(provider, "/v1/get_voice", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ voice_type: "all" }),
+          });
+          if (!answer.ok) throw new Error(await providerFailure(answer));
+          const payload = await answer.json();
+          const system = Array.isArray(payload?.system_voice) ? payload.system_voice : [];
+          const cloned = Array.isArray(payload?.voice_cloning) ? payload.voice_cloning : [];
+          const voices = [
+            ...system.map((row) => ({ id: String(row?.voice_id ?? ""), name: String(row?.voice_name ?? row?.voice_id ?? "") })),
+            ...cloned.map((row) => ({ id: String(row?.voice_id ?? ""), name: `${row?.voice_name ?? row?.voice_id}（我的克隆）`, cloned: true })),
+          ].filter((voice) => voice.id !== "");
+          console.log(`[agent] voices ${protocol} → ${voices.length}`);
+          json(response, 200, { voices, source: "provider" });
+          return;
+        }
+        if (protocol === "elevenlabs-tts") {
+          const { response: answer } = await callProvider({ ...provider, protocol: "elevenlabs" }, "/voices", { method: "GET" });
+          if (!answer.ok) throw new Error(await providerFailure(answer));
+          const payload = await answer.json();
+          const voices = (Array.isArray(payload?.voices) ? payload.voices : [])
+            .map((row) => ({ id: String(row?.voice_id ?? ""), name: String(row?.name ?? row?.voice_id ?? "") }))
+            .filter((voice) => voice.id !== "");
+          json(response, 200, { voices, source: "provider" });
+          return;
+        }
+        /** OpenAI 的 /audio/speech 只有固定那几个音色名，没有列表端点；自建服务同理。 */
+        json(response, 200, {
+          voices: ["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((id) => ({ id, name: id })),
+          source: "preset",
+          note: "这类语音接口没有「列出音色」的端点，上面是官方预设名；自建服务可以直接手填 voice id。",
+        });
+      } catch (cause) {
+        json(response, 200, { error: `取音色失败：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
+      return;
+    }
+
+    /**
      * Synthesize speech through a configured provider and hand the audio back.
      *
      * The call used to speak through the system voice, which gave us neither the user's chosen voice
@@ -1418,6 +1484,16 @@ const http = createServer(async (request, response) => {
       } catch (cause) {
         json(response, 200, { error: `合成失败：${cause instanceof Error ? cause.message : String(cause)}` });
       }
+      return;
+    }
+
+    /**
+     * 适配器内部执行过的媒体工具调用（Studio 轮询它，把生成出来的音频落成轨道）。
+     */
+    if (request.method === "GET" && url.pathname === "/api/agent/media-events") {
+      const since = Number(url.searchParams.get("since") ?? "0");
+      const events = MEDIA_EVENTS.filter((event) => event.id > since);
+      json(response, 200, { events, next: MEDIA_EVENTS.length === 0 ? since : MEDIA_EVENTS[MEDIA_EVENTS.length - 1].id });
       return;
     }
 

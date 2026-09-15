@@ -84,6 +84,7 @@ export function StudioPage({
   onExportFormats,
   onSplitStems,
   onNoteContextChange,
+  storageBlocked = false,
   rendering = [],
 }: {
   project: StudioProject;
@@ -111,6 +112,11 @@ export function StudioPage({
   onAnalyze?: (path: string, context: { wasEmpty: boolean }) => Promise<StudioAnalysis | null>;
   /** Which export containers this machine can actually write, from the generator plugin. */
   onExportFormats?: () => Promise<ExportFormat[]>;
+  /**
+   * 本地存储写不进去（配额满）时为 true —— 时间线上要常驻一行提示，因为这时候「改了什么都不会
+   * 留下」，用户必须知道。
+   */
+  storageBlocked?: boolean;
   /**
    * The clip the piano roll has open, or null when it is closed. The App attaches it to the next
    * message so the agent can edit those notes without guessing at state it cannot see.
@@ -1557,6 +1563,11 @@ export function StudioPage({
 
       {composer !== null && <div className="sr-studio-composer">{composer}</div>}
       <div className="sr-studio-audio" ref={audioHost} hidden />
+      {storageBlocked === true && (
+        <p className="sr-studio-hint sr-studio-hint--warn" role="status">
+          工程没存上：本地存储满了，现在改什么都留不下 —— 先「导出音频」备份，再删掉几条不用的轨道。
+        </p>
+      )}
       {anySoloTrack !== undefined && (
         <p className="sr-studio-hint sr-mono">独奏中：{anySoloTrack.name}</p>
       )}
