@@ -16,6 +16,7 @@ import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
   MAX_TRACKS,
   barsPerSecond,
+  notesRevision,
   withNoteIds,
   fileUrl,
   isPlayable,
@@ -64,6 +65,7 @@ export function StudioPage({
   onAnalyze,
   onExportFormats,
   onSplitStems,
+  onNoteContextChange,
 }: {
   project: StudioProject;
   /** Functional update: handlers must never write from a captured snapshot. */
@@ -88,6 +90,11 @@ export function StudioPage({
   onAnalyze?: (path: string, context: { wasEmpty: boolean }) => Promise<StudioAnalysis | null>;
   /** Which export containers this machine can actually write, from the generator plugin. */
   onExportFormats?: () => Promise<ExportFormat[]>;
+  /**
+   * The clip the piano roll has open, or null when it is closed. The App attaches it to the next
+   * message so the agent can edit those notes without guessing at state it cannot see.
+   */
+  onNoteContextChange?: (context: { clipId: string; clipName: string; notes: StudioNote[]; revision: string } | null) => void;
   /**
    * Separate one clip into vocals / drums / bass / other (the stem-splitter plugin). Resolves when
    * the job has finished; the stems land on their own tracks through the App's absorber.
@@ -276,6 +283,28 @@ export function StudioPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  // Tell the App which notes the piano roll is showing, so a message can carry them.
+  useEffect(() => {
+    if (onNoteContextChange === undefined) return;
+    if (editing === null) {
+      onNoteContextChange(null);
+      return;
+    }
+    const clip = project.tracks
+      .find((track) => track.id === editing.trackId)
+      ?.clips.find((entry) => entry.id === editing.clipId);
+    if (clip === undefined || (clip.notes?.length ?? 0) === 0) {
+      onNoteContextChange(null);
+      return;
+    }
+    onNoteContextChange({
+      clipId: clip.id,
+      clipName: clip.name,
+      notes: clip.notes ?? [],
+      revision: notesRevision(clip.notes ?? []),
+    });
+  }, [editing, onNoteContextChange, project.tracks]);
 
   /** Play one note through the same synth the transport uses, so editing has a sound. */
   const audition = useCallback((midi: number, durationMs: number) => {

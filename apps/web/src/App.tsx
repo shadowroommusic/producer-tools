@@ -38,8 +38,10 @@ import { callTool } from "./lib/mcp";
 import {
   clipFromNotes,
   defaultProject,
+  notesRevision,
   tracksFromStems,
   type StudioAnalysis,
+  type StudioNote,
   lastOpenProject,
   loadProjects,
   newClip,
@@ -129,6 +131,13 @@ export function App() {
     past: [],
     future: [],
   });
+  /** The clip the piano roll has open: notes the next message should carry as context. */
+  const [noteContext, setNoteContext] = useState<{
+    clipId: string;
+    clipName: string;
+    notes: StudioNote[];
+    revision: string;
+  } | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking">("listening");
   const voiceSession = useRef<VoiceSession | null>(null);
@@ -352,9 +361,29 @@ export function App() {
       setRunning(false);
     };
 
+    /**
+     * What the agent actually receives: the user's words plus, when the piano roll is open, the notes
+     * it is looking at. The clip cannot be read from the agent's side — the app owns that state — so
+     * it travels with the message, together with the revision the edit must match.
+     */
+    const outgoing =
+      noteContext === null
+        ? text
+        : [
+            text,
+            "",
+            "[clip_context]",
+            `clip_id: ${noteContext.clipId}`,
+            `clip_name: ${noteContext.clipName}`,
+            `revision: ${noteContext.revision}`,
+            `notes: ${JSON.stringify(noteContext.notes.map(({ id, midi, start_ms, end_ms, velocity }) => ({ id, pitch: midi, start_ms, end_ms, velocity: velocity ?? 100 })))}`,
+            "[/clip_context]",
+            "（用户在钢琴卷帘里打开了这个片段；改音符请用 shadow-music-generator 的 transform_notes，把上面的 notes 原样传进去。）",
+          ].join("\n");
+
     void sendTurn(
       sessionId,
-      text,
+      outgoing,
       (event) => {
         if (event.type === "delta") {
           appendDelta(event.text);
@@ -508,7 +537,7 @@ export function App() {
         }
       });
     },
-    [agent, attachments, draft, modelId, patchSession, running, store.activeId, store.sessions],
+    [agent, attachments, draft, modelId, noteContext, patchSession, running, store.activeId, store.sessions],
   );
 
   const stop = useCallback(() => {
@@ -833,9 +862,97 @@ export function App() {
    * with its notes, and a `render_song` / `render_part` result becomes one track per part pointing at
    * the rendered stem. No button, no second step — the song grows out of the same sentence.
    */
+  /**
+   * Apply a `transform_notes` result to the clip it names.
+   *
+   * The agent's edit only lands if the revision it was given still matches the clip: if the user
+   * moved a note while the model was thinking, their work wins and the edit is reported as stale
+   * rather than silently overwriting it. One edit = one undo step, and the result says what changed.
+   */
+  const applyNoteEdit = useCallback(
+    (call: ToolCall) => {
+      const notice = (title: string, text: string) =>
+        withActiveSession((current) => ({
+          ...current,
+          messages: [...current.messages, { id: `nt-${Date.now()}`, role: "notice", title, text, at: Date.now() }],
+        }));
+      try {
+        const wrapper = JSON.parse(call.detail ?? "{}") as { result?: { content?: Array<{ text?: string }> } };
+        const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
+          clip_id?: string;
+          revision?: string;
+          notes?: StudioNote[];
+          diff_summary?: string;
+          affected_count?: number;
+        };
+        if (parsed.clip_id === undefined || parsed.notes === undefined) throw new Error("结果里没有片段或音符");
+        /**
+         * The tool speaks `pitch` (MIDI parlance), the studio's notes speak `midi` — the first version
+         * forgot to translate and wrote notes without a pitch at all (measured: `[null, null, null]`
+         * in the clip and a `NaN` in the piano roll's layout).
+         */
+        const incoming = parsed.notes as unknown as Array<Record<string, unknown>>;
+        const translated: StudioNote[] = incoming.map((note) => ({
+          ...(typeof note.id === "string" ? { id: note.id } : {}),
+          midi: Math.max(0, Math.min(127, Number(note.midi ?? note.pitch ?? 60))),
+          start_ms: Math.max(0, Number(note.start_ms ?? 0)),
+          end_ms: Math.max(1, Number(note.end_ms ?? 0)),
+          velocity: Math.max(1, Math.min(127, Number(note.velocity ?? 100))),
+        }));
+        if (translated.length === 0) throw new Error("结果里没有音符");
+        let stale = false;
+        let applied = false;
+        updateProjectRef.current((project) => {
+          const track = project.tracks.find((entry) => entry.clips.some((clip) => clip.id === parsed.clip_id));
+          const clip = track?.clips.find((entry) => entry.id === parsed.clip_id);
+          if (clip === undefined) {
+            stale = true;
+            return project;
+          }
+          const current = notesRevision(clip.notes ?? []);
+          if (parsed.revision !== undefined && parsed.revision !== current) {
+            stale = true;
+            return project;
+          }
+          applied = true;
+          return {
+            ...project,
+            tracks: project.tracks.map((entry) =>
+              entry.id === track?.id
+                ? {
+                    ...entry,
+                    clips: entry.clips.map((item) =>
+                      item.id === parsed.clip_id ? { ...item, notes: translated } : item,
+                    ),
+                  }
+                : entry,
+            ),
+          };
+        });
+        // `updateProject` runs its patch twice under StrictMode; only report once the state is real
+        if (stale) {
+          notice("音符没改成", "这个片段在你发消息之后被改过，智能体的版本已经过期。再说一次就会用最新音符重算。");
+        } else if (applied) {
+          notice(
+            "音符已更新",
+            `${parsed.diff_summary ?? "已修改"}${parsed.affected_count === undefined ? "" : ` · ${parsed.affected_count} 个音符`}（⌘Z 可撤销）`,
+          );
+        }
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        notice("音符没改成", message);
+      }
+    },
+    [withActiveSession],
+  );
+
   const absorbToolResult = useCallback(
     (call: ToolCall) => {
       if (call.status !== "ok" || openProjectId === undefined) return;
+      if (call.name === "transform_notes") {
+        applyNoteEdit(call);
+        return;
+      }
       if (!["hum_to_midi", "render_song", "render_part"].includes(call.name)) return;
       try {
         const wrapper = JSON.parse(call.detail ?? "{}") as {
@@ -1509,6 +1626,7 @@ export function App() {
               onAnalyze={analyzeImport}
               onExportFormats={exportFormats}
               onSplitStems={splitStems}
+              onNoteContextChange={setNoteContext}
               composer={chatInDock ? null : composerFor()}
               onClose={() => {
                 setOpenProjectId(undefined);

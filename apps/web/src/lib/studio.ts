@@ -85,6 +85,30 @@ export function nudgeNotes(notes: StudioNote[], deltaMs: number, lengthMs: numbe
 }
 
 /**
+ * A cheap, stable revision for a note list.
+ *
+ * It travels with an agent's edit request and comes back with the result: if the user moved a note in
+ * the meantime the revision differs and the app refuses the change instead of overwriting their work.
+ * Derived from the notes themselves — no counter to keep in sync.
+ * @param notes - the clip's notes, in any order.
+ * @returns a short string that changes whenever a note changes.
+ */
+export function notesRevision(notes: StudioNote[]): string {
+  let hash = 0x811c9dc5;
+  const ordered = [...notes].sort(
+    (a, b) => a.start_ms - b.start_ms || a.midi - b.midi || (a.id ?? "").localeCompare(b.id ?? ""),
+  );
+  for (const note of ordered) {
+    const text = `${note.id ?? ""}:${note.midi}:${Math.round(note.start_ms)}:${Math.round(note.end_ms)}:${note.velocity ?? 100};`;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+  }
+  return `r${hash.toString(36)}`;
+}
+
+/**
  * Which keys the piano roll should draw: the notes' own span, padded, and never a sliver.
  *
  * An empty clip still shows a keyboard (middle C up an octave and a half), because a piano roll you

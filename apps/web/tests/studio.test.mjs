@@ -11,6 +11,7 @@ import {
   clipNoteRange,
   newNoteId,
   nudgeNotes,
+  notesRevision,
   quantiseNotes,
   trackFromImport,
   trackNameFromImport,
@@ -141,4 +142,19 @@ test("notes get stable ids, and old ones are filled in without changing the rest
   assert.equal(filled[0].id, "keep");
   assert.equal(typeof filled[1].id, "string");
   assert.equal(filled[1].midi, 62);
+});
+
+test("a note revision changes exactly when a note changes", () => {
+  const notes = [
+    { id: "a", midi: 60, start_ms: 0, end_ms: 400, velocity: 100 },
+    { id: "b", midi: 64, start_ms: 500, end_ms: 900, velocity: 90 },
+  ];
+  const revision = notesRevision(notes);
+  assert.equal(notesRevision(notes.map((note) => ({ ...note }))), revision, "a copy is the same revision");
+  assert.notEqual(notesRevision(notes.map((note) => ({ ...note, midi: 61 }))), revision);
+  assert.notEqual(notesRevision(notes.map((note) => ({ ...note, velocity: 80 }))), revision);
+  assert.notEqual(notesRevision(notes.map((note) => ({ ...note, start_ms: note.start_ms + 1 }))), revision);
+  assert.notEqual(notesRevision([...notes, { id: "c", midi: 67, start_ms: 1000, end_ms: 1200 }]), revision);
+  // order is not a change: the piano roll sorts, the revision must not care
+  assert.equal(notesRevision([...notes].reverse()), revision);
 });
