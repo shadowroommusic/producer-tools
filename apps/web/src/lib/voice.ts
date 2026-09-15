@@ -50,7 +50,7 @@ function recognitionConstructor(): RecognitionConstructor | undefined {
  * (see DECISIONS ADR-018) but very much has a microphone, and a call button that hides itself there
  * would be a lie. What recognition is available is reported inside the call, as a notice.
  */
-export function voiceInputSupported(): boolean {
+export function microphoneSupported(): boolean {
   return typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia !== undefined;
 }
 

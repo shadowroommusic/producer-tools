@@ -60,7 +60,7 @@ import {
   createTurnDetector,
   saveRecording,
   startCapture,
-  voiceInputSupported,
+  microphoneSupported,
   type TurnDetector,
   type VoiceCapture,
 } from "./lib/voice";
@@ -713,7 +713,7 @@ export function App() {
    * The callbacks go through refs: the speech session outlives renders, but it must always reach the
    * *current* submit (the one that knows which session is active).
    */
-  const voiceSupported = voiceInputSupported();
+  const voiceSupported = microphoneSupported();
   const lastAssistant = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant");
   const submitRef = useRef(submit);
   submitRef.current = submit;
