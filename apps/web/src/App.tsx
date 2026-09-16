@@ -1635,9 +1635,11 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [openProjectId, mainView]);
   useEffect(() => {
-    if (!running && mediaCursor.current === 0) return;
+    // 启动条件与「模型回合」解耦（P0 最后一公里）：异步 start_render 的完成事件在回合结束后
+    // 才被 worker 推进来，那时 running 早就 false 了——按 running 门控轮询，事件永远没人取。
+    if (openProjectId === undefined) return;
     let cancelled = false;
     const take = async () => {
       try {
@@ -1677,7 +1679,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [running]);
+  }, [running, openProjectId]);
 
   const absorbToolResult = useCallback(
     (call: ToolCall) => {
