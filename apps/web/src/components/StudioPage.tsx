@@ -55,6 +55,22 @@ import { PianoRoll } from "./PianoRoll";
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
 
+/**
+ * 一首歌最长 10 分钟 —— 用户的原话是「最多只支持做十分钟的歌曲，不是非得生成十分钟，
+ * 而是整个横向长度」。所以上限按**时间**算，不写死成小节数：同样 10 分钟，85 BPM 是 213 小节，
+ * 120 BPM 是 300 小节，写死一个数月数就会在慢歌上不够、在快歌上白给。
+ */
+const MAX_SONG_SECONDS = 600;
+const maxBarsFor = (bpm: number): number => Math.max(4, Math.ceil(MAX_SONG_SECONDS / (240 / Math.max(40, bpm))));
+
+/** 秒 → mm:ss（走带读数用；超过一小时才会用到 h，做成小时也行但没必要）。 */
+function formatClock(seconds: number): string {
+  const safe = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
 /** One container the generator can write, as `list_export_formats` reports it. */
 export type ExportFormat = { id: string; extension: string; lossy: boolean; available: boolean; via: string };
 
@@ -830,6 +846,14 @@ export function StudioPage({
     }
     previousCount.current = count;
   }, [project.tracks.length, say]);
+  /**
+   * 走带读数：小节.拍 + 时间。
+   *
+   * 以前只有一个「1.1」——它其实是**小节.拍**，但看起来像计时器，用户会觉得"读秒有问题"
+   * （尤其工程变长之后，根本看不出还剩多久）。现在两样都给，总长跟着工程算。
+   */
+  const elapsedLabel = formatClock(playhead * secondsPerBar);
+  const totalLabel = formatClock(project.bars * secondsPerBar);
   const positionLabel = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
   const grid = useMemo(() => Array.from({ length: project.bars }, (_, bar) => bar), [project.bars]);
 
@@ -899,7 +923,9 @@ export function StudioPage({
             <IconRedo size={16} />
           </button>
         </div>
-        <div className="sr-transport-position sr-mono">{positionLabel}</div>
+        <div className="sr-transport-position sr-mono" title={`第 ${positionLabel} 小节 · 上限 10:00`}>
+          {positionLabel} · {elapsedLabel} / {totalLabel}
+        </div>
         <div className="sr-transport-fields">
           <label className="sr-transport-field">
             <span className="sr-field-label sr-mono">BPM</span>
@@ -928,11 +954,12 @@ export function StudioPage({
             <input
               className="sr-input sr-input--num"
               value={project.bars}
+              title={`最长 ${maxBarsFor(project.bpm)} 小节（10:00 @ ${project.bpm} BPM）`}
               inputMode="numeric"
               onChange={(event) =>
                 onChange((current) => ({
                   ...current,
-                  bars: Math.max(4, Math.min(128, Number(event.target.value) || current.bars)),
+                  bars: Math.max(4, Math.min(maxBarsFor(current.bpm), Number(event.target.value) || current.bars)),
                 }))
               }
             />
@@ -1867,7 +1894,7 @@ export function StudioPage({
                   }}
                 >
                   <span className="sr-menu-label">在播放头分割</span>
-                  <span className="sr-menu-hint sr-mono">{inside ? `第 ${positionLabel} 小节` : "播放头不在片段里"}</span>
+                  <span className="sr-menu-hint sr-mono">{inside ? `第 ${Math.floor(playhead) + 1} 小节` : "播放头不在片段里"}</span>
                 </button>
                 <button
                   type="button"
