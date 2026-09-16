@@ -3407,3 +3407,106 @@
   font-size: 11px;
   opacity: 0.6;
 }
+
+/* ── 悬浮球 v2：canvas 粒子等离子球 ───────────────────────────────────── */
+.sr-orb {
+  position: fixed;
+  z-index: 60;
+  /* 球体始终按 72px 布局占位；说话/干活时用 transform 放大到 96px，不引起布局抖动。 */
+  width: 72px;
+  height: 72px;
+  user-select: none;
+  touch-action: none;
+  transform-origin: center;
+}
+
+.sr-orb--active {
+  transform: scale(1.3333); /* 72 → 96 */
+}
+
+.sr-orb--dragging {
+  opacity: 0.7; /* 拖动中 70% 透明（规格） */
+}
+
+.sr-orb-ball {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  cursor: grab;
+}
+
+.sr-orb-ball:active {
+  cursor: grabbing;
+}
+
+.sr-orb-canvas {
+  position: absolute;
+  inset: -12px; /* 粒子扩散脉冲会画出 72px 之外，画布留边 */
+  width: 96px;
+  height: 96px;
+  pointer-events: none;
+}
+
+/* 展开的小面板：锚在球上方，毛玻璃 + 1px 描边 + 圆角 16，开合 180ms（scale 0.96→1 + 淡入）。 */
+.sr-orb-panel {
+  position: absolute;
+  right: 0;
+  bottom: 80px;
+  width: 240px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--sr-label-tertiary) 35%, transparent);
+  background: color-mix(in srgb, var(--sr-bg, #0b0b0f) 78%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  display: grid;
+  gap: 8px;
+  transform-origin: bottom right;
+  animation: sr-orb-panel-in 180ms ease-out;
+}
+
+@keyframes sr-orb-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-orb-panel {
+    animation: none;
+  }
+}
+
+.sr-orb-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sr-orb-title {
+  font-size: var(--sr-text-14, 14px);
+  font-weight: 600;
+}
+
+.sr-orb-input {
+  display: flex;
+  gap: 6px;
+}
+
+.sr-orb-input .sr-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sr-orb-hint {
+  margin: 0;
+  font-size: 11px;
+  opacity: 0.6;
+}
