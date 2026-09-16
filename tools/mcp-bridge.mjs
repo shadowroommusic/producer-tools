@@ -70,7 +70,15 @@ function pluginEnv() {
   };
 }
 const PROTOCOL_VERSION = "2024-11-05";
-const HANDSHAKE_TIMEOUT_MS = Number(process.env.SHADOWROOM_HANDSHAKE_TIMEOUT_MS ?? 8000);
+/**
+ * 握手 + `tools/list` 的预算。
+ *
+ * 8 秒太小了：分析插件（numpy + 我们的 DSP 代码）在**机器忙的时候**列工具会超过 8 秒，
+ * 桥就把它标成 error / 0 工具——表现是「哼唱转 MIDI、测速测调、节奏提 pattern 全没了」，
+ * 而插件本身是好的（实测：单独跑 initialize 秒回，`tools/list` 在忙时 >8s）。
+ * 默认放到 30 秒，仍可用 `SHADOWROOM_HANDSHAKE_TIMEOUT_MS` 覆盖。
+ */
+const HANDSHAKE_TIMEOUT_MS = Number(process.env.SHADOWROOM_HANDSHAKE_TIMEOUT_MS ?? 30_000);
 const CALL_TIMEOUT_MS = Number(process.env.SHADOWROOM_CALL_TIMEOUT_MS ?? 120_000);
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -105,6 +113,17 @@ const REGISTRY = [
     repo: "stem-splitter",
     label: "人声分轨",
     description: "Separate a finished song into vocals / drums / bass / other (Demucs or a remote command)",
+  },
+  {
+    /**
+     * 第 7 个插件：notes / MIDI → 真乐器音色（FluidSynth + GeneralUser GS）。
+     * `pythonFor()` 会自动用 `_venvs/soundfont-renderer/bin/python`（ZCode 已经装好，
+     * 里面是 conda-forge 的 fluidsynth + pyfluidsynth，音色库首次使用时下载）。
+     */
+    id: "soundfont",
+    repo: "soundfont-renderer",
+    label: "真乐器渲染",
+    description: "Render notes / MIDI into real-instrument stems (FluidSynth + GeneralUser GS)",
   },
   {
     id: "grabber",
