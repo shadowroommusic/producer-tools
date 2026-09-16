@@ -46,6 +46,7 @@ import {
   type StudioTrack,
 } from "../lib/studio";
 import { midiLengthMs, parseMidiSong } from "../lib/midi";
+import { callTool } from "../lib/mcp";
 import { createNotePlayer } from "../lib/synth";
 import { peaksFor } from "../lib/waveform";
 import { createMetronome } from "../lib/metronome";
@@ -181,6 +182,8 @@ export function StudioPage({
   );
   /** Clips whose separation is running right now. */
   const [splitting, setSplitting] = useState<string[]>([]);
+  /** The clip whose「生成钢琴/贝斯/弦乐轨」is rendering right now. */
+  const [generating, setGenerating] = useState<string | null>(null);
   /**
    * The structure menu: right-click the bar ruler to insert bars, right-click a section to repeat or
    * delete it. Sections are labels (dragging clips never moves them), so the menu is the one place
@@ -524,6 +527,68 @@ export function StudioPage({
   const removeClip = (trackId: string, clipId: string) => {
     updateTrack(trackId, (track) => ({ ...track, clips: track.clips.filter((clip) => clip.id !== clipId) }));
     setSelected(null);
+  };
+
+  /** The three voices「用这段生成…」offers. Keys are stable: the menu and the wav suffix use them. */
+  type PartKind = "piano" | "bass" | "strings";
+  const PART_PRESETS: Record<PartKind, { label: string; spec: Record<string, unknown>; octave: number }> = {
+    // 现有合成器的三套音色（不引入新依赖；SoundFont 等用户拍板）。钢琴用 triangle 的软起音，
+    // 贝斯把哼唱整体降八度（哼出来的音高在人声区，bass 要在低八度才像 bass），弦乐用慢起音的 pad。
+    piano: { label: "钢琴", spec: { part: "lead", wave: "triangle", attack: 0.005, release: 0.18, reverb: 0.2, gain: 0.8 }, octave: 0 },
+    bass: { label: "贝斯", spec: { part: "bass", wave: "saw", cutoff: 0.32, gain: 0.7 }, octave: -12 },
+    strings: { label: "弦乐", spec: { part: "pad", wave: "saw", cutoff: 0.5, attack: 0.25, release: 0.5, reverb: 0.3, gain: 0.6 }, octave: 0 },
+  };
+
+  /** Turn one clip's notes into a rendered audio track (MIDI → 单轨音频). */
+  const generatePartTrack = async (clip: StudioClip, kind: PartKind) => {
+    if (generating !== null) return;
+    const notes = clip.notes ?? [];
+    if (notes.length === 0) return;
+    const preset = PART_PRESETS[kind];
+    setGenerating(clip.id);
+    try {
+      const beatMs = 60_000 / project.bpm;
+      const base = clip.name.trim().replace(/\s+/g, "-") || "part";
+      const written = await callTool<string>(
+        "generator",
+        "render_part",
+        {
+          out_path: `~/Documents/ShadowRoom/recordings/${base}-${kind}-${Date.now().toString(36)}.wav`,
+          bpm: project.bpm,
+          bars: clip.length,
+          ...preset.spec,
+          notes: notes.map((note) => ({
+            midi: Math.max(0, Math.min(127, note.midi + preset.octave)),
+            start: Math.max(0, note.start_ms / beatMs),
+            length: Math.max(0.25, (note.end_ms - note.start_ms) / beatMs),
+          })),
+        },
+      );
+      const parsed = JSON.parse(String(written)) as { path?: string; duration_ms?: number };
+      if (parsed.path === undefined) throw new Error("结果里没有文件");
+      onChange((current) => {
+        const taken = current.tracks.map((track) => track.name);
+        let name = preset.label;
+        for (let index = 2; taken.includes(name) && index < 100; index += 1) name = `${preset.label} ${index}`;
+        return {
+          ...current,
+          tracks: [
+            ...current.tracks,
+            {
+              ...newTrack(name),
+              type: "instrument",
+              color: nextTrackColor(current.tracks),
+              clips: [newClip(`${preset.label} · ${clip.name}`, clip.start, clip.length, parsed.path as string)],
+            },
+          ],
+        };
+      });
+      say(`${preset.label}轨生成好了：${(parsed.path as string).split("/").pop()}（${((parsed.duration_ms ?? 0) / 1000).toFixed(1)}s）`);
+    } catch (cause) {
+      say(`${preset.label}轨没生成：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setGenerating(null);
+    }
   };
 
   /**
@@ -1950,6 +2015,34 @@ export function StudioPage({
                       : `${clip.notes?.length} 个音符 · 钢琴卷帘`}
                   </span>
                 </button>
+                {(
+                  [
+                    { kind: "piano", hint: "三角波软起音，带一点混响" },
+                    { kind: "bass", hint: "哼唱整体降八度的锯齿波" },
+                    { kind: "strings", hint: "慢起音 pad，铺底用" },
+                  ] as const
+                ).map(({ kind, hint }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="menuitem"
+                    className="sr-menu-item"
+                    disabled={(clip.notes?.length ?? 0) === 0 || generating === clip.id}
+                    onClick={() => {
+                      close();
+                      void generatePartTrack(clip, kind);
+                    }}
+                  >
+                    <span className="sr-menu-label">
+                      {generating === clip.id ? "生成中…" : `用这段生成${PART_PRESETS[kind].label}轨`}
+                    </span>
+                    <span className="sr-menu-hint sr-mono">
+                      {(clip.notes?.length ?? 0) === 0
+                        ? "片段里还没有音符（先转 MIDI）"
+                        : `${clip.notes?.length} 个音符 → 一条新音轨 · ${hint}`}
+                    </span>
+                  </button>
+                ))}
                 <button
                   type="button"
                   role="menuitem"
