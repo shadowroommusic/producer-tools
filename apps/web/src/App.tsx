@@ -1377,6 +1377,8 @@ export function App() {
       try {
         const wrapper = JSON.parse(call.detail ?? "{}") as {
           result?: { content?: Array<{ text?: string }> };
+          // Codex 卡片路径的字段是 arguments（toolCallFromItem），media-events 路径是 args。
+          arguments?: { clip_id?: string; out_path?: string };
           args?: { clip_id?: string; out_path?: string };
         };
         const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
@@ -1388,8 +1390,8 @@ export function App() {
           diff_summary?: string;
         };
         // clip_id / 路径优先读结果，结果没带就从这次调用的参数里拿——同一份事实，两个来源，别解析两次。
-        const clipId = parsed.clip_id ?? wrapper.args?.clip_id;
-        const written = parsed.path ?? wrapper.args?.out_path;
+        const clipId = parsed.clip_id ?? wrapper.args?.clip_id ?? wrapper.arguments?.clip_id;
+        const written = parsed.path ?? wrapper.args?.out_path ?? wrapper.arguments?.out_path;
         if (clipId === undefined || written === undefined) {
           throw new Error("结果里没有片段或文件");
         }
@@ -1456,6 +1458,8 @@ export function App() {
       try {
         const wrapper = JSON.parse(call.detail ?? "{}") as {
           result?: { content?: Array<{ text?: string }> };
+          // Codex 卡片路径的字段是 arguments（toolCallFromItem），media-events 路径是 args。
+          arguments?: { clip_id?: string };
           args?: { clip_id?: string };
         };
         const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
@@ -1465,7 +1469,7 @@ export function App() {
           diff_summary?: string;
           affected_count?: number;
         };
-        const clipId = wrapper.args?.clip_id;
+        const clipId = parsed.clip_id ?? wrapper.args?.clip_id ?? wrapper.arguments?.clip_id;
         if (clipId === undefined || parsed.notes === undefined) throw new Error("结果里没有片段或音符");
         /**
          * The tool speaks `pitch` (MIDI parlance), the studio's notes speak `midi` — the first version
