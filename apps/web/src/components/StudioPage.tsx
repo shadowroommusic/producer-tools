@@ -21,6 +21,7 @@ import {
   canAddTracks,
   defaultTrackName,
   duplicateSection,
+  fadeGain,
   insertBars,
   notesRevision,
   overflowNotice,
@@ -229,6 +230,12 @@ export function StudioPage({
   const secondsPerBar = 1 / barsPerSecond(project.bpm);
   const anySolo = project.tracks.some((track) => track.soloed);
   const audible = (track: StudioTrack) => !track.muted && (anySolo ? track.soloed : true);
+  /**
+   * Final gain of one clip at a playhead position: fader × mute/solo × fade envelope. The same shape
+   * the plugin applies on export (fadeGain), so 试听和导出走同一条规则.
+   */
+  const clipVolume = (track: StudioTrack, clip: StudioClip, bar: number) =>
+    (audible(track) ? Math.min(1, track.volume / 100) : 0) * fadeGain(clip, bar, project.bpm);
 
   const moveTo = (bar: number) => {
     position.current = bar;
@@ -264,12 +271,12 @@ export function StudioPage({
   /** Volumes follow the faders, mute and solo. */
   useEffect(() => {
     for (const track of project.tracks) {
-      const level = audible(track) ? Math.min(1, track.volume / 100) : 0;
       for (const clip of track.clips) {
         const element = players.current.get(clip.id);
-        if (element !== undefined) element.volume = level;
+        if (element !== undefined) element.volume = clipVolume(track, clip, position.current);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.tracks, anySolo]);
 
   /** Park every player on the playhead: pause, seek, and restart whatever is under it. */
@@ -296,12 +303,13 @@ export function StudioPage({
         const element = players.current.get(clip.id);
         if (element === undefined) continue;
         const inside = bar >= clip.start && bar < clip.start + clip.length;
-        const level = audible(track) ? Math.min(1, track.volume / 100) : 0;
-        element.volume = level;
+        // Fader × fade envelope at the current playhead — the envelope only moves because this runs
+        // every rAF tick while playing.
+        element.volume = clipVolume(track, clip, bar);
         if (inside) {
           const offset = Math.max(0, (bar - clip.start) * secondsPerBar);
           if (Math.abs(element.currentTime - offset) > 0.15) element.currentTime = offset;
-          if (play && element.paused && level > 0) void element.play().catch(() => undefined);
+          if (play && element.paused && element.volume > 0) void element.play().catch(() => undefined);
           if (!play && !element.paused) element.pause();
         } else if (!element.paused) {
           element.pause();
@@ -1121,6 +1129,10 @@ export function StudioPage({
                       path: clip.source,
                       start: clip.start,
                       bars: clip.length,
+                      // Same envelope the transport plays (fadeGain): the export must not be a
+                      // different rule than what the user heard.
+                      ...(clip.fadeIn === undefined ? {} : { fade_in: clip.fadeIn }),
+                      ...(clip.fadeOut === undefined ? {} : { fade_out: clip.fadeOut }),
                       ...(clip.notes === undefined ? {} : { notes: clip.notes }),
                     })),
                 })),
@@ -1481,6 +1493,7 @@ export function StudioPage({
                     key={clip.id}
                     clip={clip}
                     barPx={barPx}
+                    bpm={project.bpm}
                     peaks={waves[clip.id]}
                     selected={selected?.clipId === clip.id}
                     onSelect={() => {
@@ -1755,6 +1768,43 @@ export function StudioPage({
                   type="button"
                   role="menuitem"
                   className="sr-menu-item"
+                  disabled={!isPlayable(clip.source)}
+                  onClick={() => {
+                    changeClip(track.id, clip.id, (current) => ({
+                      ...current,
+                      // Clicking an active fade again clears it — the menu item is the toggle.
+                      ...(current.fadeIn ? { fadeIn: undefined } : { fadeIn: 0.5 }),
+                    }));
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">{clip.fadeIn ? "取消淡入" : "淡入 0.5s"}</span>
+                  <span className="sr-menu-hint sr-mono">
+                    {!isPlayable(clip.source) ? "只有音频片段能淡入" : clip.fadeIn ? "当前 0.5s · 再点一次取消" : "开头 0.5 秒线性升起"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!isPlayable(clip.source)}
+                  onClick={() => {
+                    changeClip(track.id, clip.id, (current) => ({
+                      ...current,
+                      ...(current.fadeOut ? { fadeOut: undefined } : { fadeOut: 0.5 }),
+                    }));
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">{clip.fadeOut ? "取消淡出" : "淡出 0.5s"}</span>
+                  <span className="sr-menu-hint sr-mono">
+                    {!isPlayable(clip.source) ? "只有音频片段能淡出" : clip.fadeOut ? "当前 0.5s · 再点一次取消" : "结尾 0.5 秒线性落下"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
                   disabled={!inside}
                   onClick={() => {
                     const round = (value: number) => Math.round(value * 100) / 100;
@@ -1882,6 +1932,7 @@ export function StudioPage({
 function Clip({
   clip,
   barPx,
+  bpm,
   peaks,
   selected,
   onSelect,
@@ -1899,6 +1950,8 @@ function Clip({
 }: {
   clip: StudioClip;
   barPx: number;
+  /** Project tempo, so fade markers can be drawn at their real width in pixels. */
+  bpm: number;
   peaks?: number[];
   selected: boolean;
   onSelect: () => void;
@@ -2020,6 +2073,21 @@ function Clip({
       }}
     >
       <span className="sr-clip-name">{clip.name}</span>
+      {/* Fade markers: a wedge over the ramped stretch, so a fade is visible where it acts. */}
+      {(clip.fadeIn ?? 0) > 0 && (
+        <span
+          className="sr-clip-fade sr-clip-fade--in"
+          aria-hidden="true"
+          style={{ width: Math.max(6, (clip.fadeIn as number) * barsPerSecond(bpm) * barPx) }}
+        />
+      )}
+      {(clip.fadeOut ?? 0) > 0 && (
+        <span
+          className="sr-clip-fade sr-clip-fade--out"
+          aria-hidden="true"
+          style={{ width: Math.max(6, (clip.fadeOut as number) * barsPerSecond(bpm) * barPx) }}
+        />
+      )}
       {peaks !== undefined && (
         <span className="sr-clip-wave" aria-hidden="true">
           {peaks.map((peak, index) => (

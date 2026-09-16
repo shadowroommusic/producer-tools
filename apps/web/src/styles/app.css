@@ -2124,6 +2124,26 @@
   opacity: 0.75;
 }
 
+/* Fade markers: a wedge spanning the ramped stretch, hugging the clip's edge. */
+.sr-clip-fade {
+  position: absolute;
+  top: 0;
+  height: 12px;
+  background: var(--sr-accent);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.sr-clip-fade--in {
+  left: 0;
+  clip-path: polygon(0 100%, 0 0, 100% 0);
+}
+
+.sr-clip-fade--out {
+  right: 0;
+  clip-path: polygon(0 100%, 100% 100%, 100% 0);
+}
+
 /* Clip context menu: a floating list at the pointer. */
 .sr-menu-backdrop {
   position: fixed;

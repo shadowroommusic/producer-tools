@@ -21,6 +21,10 @@ export type StudioClip = {
   analysis?: StudioAnalysis;
   /** Where a separation job put this clip's stems — marks the clip as already split. */
   stemsDir?: string;
+  /** Fade-in length in seconds, from the clip's first sample. Unset or 0 = no fade. */
+  fadeIn?: number;
+  /** Fade-out length in seconds, ending at the clip's last sample. Unset or 0 = no fade. */
+  fadeOut?: number;
   /**
    * Set when the arrangement changed under this clip and its audio has not caught up yet.
    *
@@ -613,7 +617,36 @@ export function tracksFromStems(
   return created;
 }
 
-/** A project that already looks like a DAW: three labelled tracks, empty clips, 16 bars. */
+/**
+ * The linear gain envelope of one clip at a playhead position, from its fades (0–1).
+ *
+ * One function, not two: 试听和导出必须是同一条规则（第一原则），so both the transport's
+ * `element.volume` and the plugin's mixdown multiply by *this* shape — a linear ramp over
+ * `fadeIn` seconds from the clip's first sample, and over `fadeOut` seconds into its last.
+ * Fades that reach past the clip's far edge simply clamp, never go negative.
+ * @param clip - the clip whose fades to apply.
+ * @param bar - the playhead, in bars.
+ * @param bpm - project tempo, bridging bars and seconds.
+ * @returns the gain multiplier at that position (1 when the clip has no fades).
+ */
+export function fadeGain(clip: Pick<StudioClip, "start" | "length" | "fadeIn" | "fadeOut">, bar: number, bpm: number): number {
+  const barsPerSec = barsPerSecond(bpm);
+  let gain = 1;
+  const fadeInBars = Math.max(0, (clip.fadeIn ?? 0) * barsPerSec);
+  if (fadeInBars > 0 && bar < clip.start + fadeInBars) {
+    gain = Math.min(gain, Math.max(0, (bar - clip.start) / fadeInBars));
+  }
+  const fadeOutBars = Math.max(0, (clip.fadeOut ?? 0) * barsPerSec);
+  if (fadeOutBars > 0) {
+    const end = clip.start + clip.length;
+    if (bar > end - fadeOutBars) {
+      gain = Math.min(gain, Math.max(0, (end - bar) / fadeOutBars));
+    }
+  }
+  return gain;
+}
+
+
 export function defaultProject(): StudioProject {
   return {
     id: newId("project"),
@@ -632,6 +665,17 @@ export function defaultProject(): StudioProject {
       { ...newTrack("Bass"), type: "instrument", color: 1 },
       { ...newTrack("Synth"), type: "instrument", color: 2 },
     ],
+  };
+}
+
+export function snapshotProject(project: StudioProject, now: number = Date.now()): StudioProject {
+  const stamp = new Date(now);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return {
+    ...project,
+    id: newId("project"),
+    name: `${project.name}（快照 ${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}:${pad(stamp.getMinutes())}）`,
+    updatedAt: now,
   };
 }
 

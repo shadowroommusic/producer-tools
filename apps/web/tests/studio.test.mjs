@@ -17,6 +17,7 @@ import {
   defaultTrackName,
   duplicateSection,
   drumVoice,
+  fadeGain,
   nextTrackColor,
   overflowNotice,
   trackColor,
@@ -361,4 +362,16 @@ test("automatic additions may overflow to the hard limit, not past it", () => {
   assert.equal(canAddTracks(many(11), 4), true, "11 + 4 lands exactly on the hard limit of 15");
   assert.equal(canAddTracks(many(12), 4), false, "12 + 4 would pass 15");
   assert.equal(canAddTracks(many(TRACK_OVERFLOW_LIMIT), 1), false);
+});
+
+test("fadeGain is the one linear envelope both playback and export share", () => {
+  const bpm = 120; // 0.5 s = 0.25 bars
+  const clip = { start: 4, length: 4, fadeIn: 0.5, fadeOut: 0.5 };
+  assert.equal(fadeGain({ start: 4, length: 4 }, 4, bpm), 1, "no fades means full gain everywhere");
+  assert.equal(fadeGain(clip, 4, bpm), 0, "the fade-in starts at silence");
+  assert.equal(Math.abs(fadeGain(clip, 4.125, bpm) - 0.5) < 1e-5, true, "half-way through a 0.5 s fade-in");
+  assert.equal(fadeGain(clip, 4.5, bpm), 1, "after the fade-in the clip plays at full gain");
+  assert.equal(Math.abs(fadeGain(clip, 7.875, bpm) - 0.5) < 1e-5, true, "half-way through a 0.5 s fade-out");
+  assert.equal(fadeGain(clip, 8, bpm), 0, "the fade-out ends at silence");
+  assert.equal(fadeGain(clip, 10, bpm), 0, "past the clip the gain is zero, not negative");
 });
