@@ -26,6 +26,11 @@ export type StudioClip = {
   /** Fade-out length in seconds, ending at the clip's last sample. Unset or 0 = no fade. */
   fadeOut?: number;
   /**
+   * A gain ramp across the whole clip (0–1 at its edges): 渐强 is `{from: 0, to: 1}`, 渐弱 the
+   * reverse. It is the clip-level answer to "副歌进来时整体渐强 4 小节".
+   */
+  ramp?: { from: number; to: number };
+  /**
    * Set when the arrangement changed under this clip and its audio has not caught up yet.
    *
    * The structure tools never re-render anything by themselves: "加一个 breakdown" means the timeline
@@ -646,7 +651,38 @@ export function fadeGain(clip: Pick<StudioClip, "start" | "length" | "fadeIn" | 
   return gain;
 }
 
+/**
+ * The gain of one clip's ramp at a playhead position (0–1), or 1 when it has no ramp.
+ *
+ * Linear from `ramp.from` at the clip's first sample to `ramp.to` at its last — the same line the
+ * plugin draws on export, so 试听和导出 stay one rule (第一原则).
+ */
+export function rampGain(
+  clip: Pick<StudioClip, "start" | "length" | "ramp">,
+  bar: number,
+): number {
+  const ramp = clip.ramp;
+  if (ramp === undefined) return 1;
+  const t = clip.length <= 0 ? 1 : (bar - clip.start) / clip.length;
+  const clamped = Math.max(0, Math.min(1, t));
+  return ramp.from + (ramp.to - ramp.from) * clamped;
+}
 
+/**
+ * The one envelope a clip plays (and exports) with: fade edges × whole-clip ramp.
+ * @param clip - the clip whose envelope to evaluate.
+ * @param bar - the playhead, in bars.
+ * @param bpm - project tempo, bridging bars and seconds.
+ */
+export function clipGain(
+  clip: Pick<StudioClip, "start" | "length" | "fadeIn" | "fadeOut" | "ramp">,
+  bar: number,
+  bpm: number,
+): number {
+  return fadeGain(clip, bar, bpm) * rampGain(clip, bar);
+}
+
+/** A project that already looks like a DAW: three labelled tracks, empty clips, 16 bars. */
 export function defaultProject(): StudioProject {
   return {
     id: newId("project"),
@@ -668,6 +704,18 @@ export function defaultProject(): StudioProject {
   };
 }
 
+/**
+ * 另存快照：the same project under a new id and a stamped name.
+ *
+ * A snapshot is an ordinary project in the same list — not a second storage key, not a history
+ * stack — because the project list must have exactly one truth (第一原则). Opening, deleting and
+ * undo work on it exactly like on any other project; the only differences are the fresh id and
+ * the `（快照 MM-DD HH:mm）` name that says what it preserves.
+ * @param project - the project to freeze.
+ * @param now - wall-clock milliseconds; defaults to now, injectable for tests.
+ * @returns a shallow-copied project with a new id (tracks/clips are shared by reference, like
+ *   every other project copy in this app — edits replace objects, they never mutate in place).
+ */
 export function snapshotProject(project: StudioProject, now: number = Date.now()): StudioProject {
   const stamp = new Date(now);
   const pad = (value: number): string => String(value).padStart(2, "0");

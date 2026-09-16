@@ -14,6 +14,8 @@ import {
   TRACK_COLORS,
   TRACK_OVERFLOW_LIMIT,
   canAddTracks,
+  clipGain,
+  rampGain,
   defaultTrackName,
   duplicateSection,
   drumVoice,
@@ -385,4 +387,19 @@ test("a snapshot is the same project under a new id and a stamped name", () => {
   assert.equal(snap.tracks, project.tracks, "the content is the same object; edits replace, never mutate");
   assert.equal(snap.bpm, project.bpm);
   assert.equal(snap.updatedAt, new Date("2026-09-16T22:30:00").getTime());
+});
+
+test("rampGain draws one line across the clip, and clipGain multiplies it with fades", () => {
+  const up = { start: 0, length: 4, ramp: { from: 0, to: 1 } };
+  const down = { start: 0, length: 4, ramp: { from: 1, to: 0 } };
+  assert.equal(rampGain({ start: 0, length: 4 }, 2), 1, "no ramp means full gain");
+  assert.equal(rampGain(up, 0), 0, "渐强 starts at silence");
+  assert.equal(rampGain(up, 2), 0.5, "half-way up the ramp");
+  assert.equal(rampGain(up, 4), 1, "渐强 ends at full gain");
+  assert.equal(rampGain(down, 4), 0, "渐弱 ends at silence");
+  assert.equal(rampGain(up, 10), 1, "past the clip the ramp clamps to its end value");
+  // 0.5 s fade-in at 120 BPM = 0.25 bars: at bar 1.125 the fade has just ended, the ramp is at 0.28.
+  const both = { start: 0, length: 4, fadeIn: 0.5, ramp: { from: 0, to: 1 } };
+  assert.equal(clipGain(both, 1.125, 120), 0.28125);
+  assert.equal(clipGain(both, 0, 120), 0, "the fade still owns the very first sample");
 });

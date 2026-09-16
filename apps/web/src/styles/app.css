@@ -2144,6 +2144,15 @@
   clip-path: polygon(0 100%, 100% 100%, 100% 0);
 }
 
+/* Ramp (渐强/渐弱): a translucent wedge over the whole clip, rising or falling. */
+.sr-clip-ramp {
+  position: absolute;
+  inset: 0;
+  background: var(--sr-accent);
+  opacity: 0.18;
+  pointer-events: none;
+}
+
 /* Clip context menu: a floating list at the pointer. */
 .sr-menu-backdrop {
   position: fixed;
@@ -2504,6 +2513,25 @@
 .sr-project-delete:hover {
   background: color-mix(in srgb, var(--sr-danger) 14%, transparent);
   color: var(--sr-danger);
+}
+
+/* 快照按钮：和删除并排，但它是安全动作——亮 accent 而不是 danger。 */
+.sr-project-snapshot {
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+}
+
+.sr-project-snapshot:hover {
+  background: color-mix(in srgb, var(--sr-accent) 14%, transparent);
+  color: var(--sr-accent);
+}
+
+.sr-project-snapshot:disabled {
+  opacity: 0.4;
 }
 
 .sr-plugin-pane {

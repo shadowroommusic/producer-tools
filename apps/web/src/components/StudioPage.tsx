@@ -19,9 +19,9 @@ import {
   barsFromMilliseconds,
   barsPerSecond,
   canAddTracks,
+  clipGain,
   defaultTrackName,
   duplicateSection,
-  fadeGain,
   insertBars,
   notesRevision,
   overflowNotice,
@@ -231,11 +231,11 @@ export function StudioPage({
   const anySolo = project.tracks.some((track) => track.soloed);
   const audible = (track: StudioTrack) => !track.muted && (anySolo ? track.soloed : true);
   /**
-   * Final gain of one clip at a playhead position: fader × mute/solo × fade envelope. The same shape
-   * the plugin applies on export (fadeGain), so 试听和导出走同一条规则.
+   * Final gain of one clip at a playhead position: fader × mute/solo × fade/ramp envelope. The same
+   * shape the plugin applies on export (clipGain), so 试听和导出走同一条规则.
    */
   const clipVolume = (track: StudioTrack, clip: StudioClip, bar: number) =>
-    (audible(track) ? Math.min(1, track.volume / 100) : 0) * fadeGain(clip, bar, project.bpm);
+    (audible(track) ? Math.min(1, track.volume / 100) : 0) * clipGain(clip, bar, project.bpm);
 
   const moveTo = (bar: number) => {
     position.current = bar;
@@ -1133,6 +1133,7 @@ export function StudioPage({
                       // different rule than what the user heard.
                       ...(clip.fadeIn === undefined ? {} : { fade_in: clip.fadeIn }),
                       ...(clip.fadeOut === undefined ? {} : { fade_out: clip.fadeOut }),
+                      ...(clip.ramp === undefined ? {} : { ramp: clip.ramp }),
                       ...(clip.notes === undefined ? {} : { notes: clip.notes }),
                     })),
                 })),
@@ -1770,6 +1771,49 @@ export function StudioPage({
                   className="sr-menu-item"
                   disabled={!isPlayable(clip.source)}
                   onClick={() => {
+                    changeClip(track.id, clip.id, (current) => {
+                      const up = current.ramp !== undefined && current.ramp.from < current.ramp.to;
+                      return {
+                        ...current,
+                        // Clicking again clears it; 渐强 is silence→full across the whole clip.
+                        ...(up ? { ramp: undefined } : { ramp: { from: 0, to: 1 } }),
+                      };
+                    });
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">{clip.ramp && clip.ramp.from < clip.ramp.to ? "取消渐强" : "渐强（0→1）"}</span>
+                  <span className="sr-menu-hint sr-mono">
+                    {!isPlayable(clip.source) ? "只有音频片段能渐强" : clip.ramp && clip.ramp.from < clip.ramp.to ? "当前整段 0→1 · 再点一次取消" : "整段线性升起，导出同样生效"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!isPlayable(clip.source)}
+                  onClick={() => {
+                    changeClip(track.id, clip.id, (current) => {
+                      const down = current.ramp !== undefined && current.ramp.from > current.ramp.to;
+                      return {
+                        ...current,
+                        ...(down ? { ramp: undefined } : { ramp: { from: 1, to: 0 } }),
+                      };
+                    });
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">{clip.ramp && clip.ramp.from > clip.ramp.to ? "取消渐弱" : "渐弱（1→0）"}</span>
+                  <span className="sr-menu-hint sr-mono">
+                    {!isPlayable(clip.source) ? "只有音频片段能渐弱" : clip.ramp && clip.ramp.from > clip.ramp.to ? "当前整段 1→0 · 再点一次取消" : "整段线性落下，导出同样生效"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!isPlayable(clip.source)}
+                  onClick={() => {
                     changeClip(track.id, clip.id, (current) => ({
                       ...current,
                       // Clicking an active fade again clears it — the menu item is the toggle.
@@ -2086,6 +2130,19 @@ function Clip({
           className="sr-clip-fade sr-clip-fade--out"
           aria-hidden="true"
           style={{ width: Math.max(6, (clip.fadeOut as number) * barsPerSecond(bpm) * barPx) }}
+        />
+      )}
+      {clip.ramp !== undefined && (
+        <span
+          className="sr-clip-ramp"
+          aria-hidden="true"
+          data-up={clip.ramp.to > clip.ramp.from || undefined}
+          style={{
+            clipPath:
+              clip.ramp.to > clip.ramp.from
+                ? "polygon(0 100%, 100% 0, 100% 100%)"
+                : "polygon(0 0, 100% 0, 100% 100%)",
+          }}
         />
       )}
       {peaks !== undefined && (
