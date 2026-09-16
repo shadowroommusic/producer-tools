@@ -61,6 +61,7 @@ import {
   newTrack,
   rememberOpenProject,
   saveProjects,
+  snapshotProject,
   type StudioProject,
 } from "./lib/studio";
 import {
@@ -1539,10 +1540,28 @@ export function App() {
    */
   const mediaCursor = useRef(0);
   /**
-   * 第一次取数只用来对齐游标：桥里可能还躺着上一次会话的事件，重放它们会让一个刚打开的工程
-   * 凭空多出几轨。真正要吸收的是这一轮之后新产生的事件。
+   * 对齐游标：桥里可能还躺着上一次会话的事件，重放它们会让一个刚打开的工程凭空多出几轨。
+   * 对齐**只在页面刚打开时做一次**（挂在下面那个 effect 上），并且必须一次就成功——如果失败，
+   * 就留到下一次成功时对齐并且**立刻再取一次**，否则「对齐」和「第一次真正取数」之间发生的事件
+   * 会被静默吃掉（实测过一次：渲染写了文件，时间线却一条轨都没多）。
    */
   const mediaCursorReady = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const answer = (await fetch("/api/agent/media-events?since=0").then((response) => response.json())) as { next?: number };
+        if (cancelled || typeof answer.next !== "number") return;
+        mediaCursor.current = Math.max(mediaCursor.current, answer.next);
+        mediaCursorReady.current = true;
+      } catch {
+        /* 桥还没起来：交给轮询那条路，它会先对齐、再立刻取一次 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     if (!running && mediaCursor.current === 0) return;
     let cancelled = false;
@@ -1556,7 +1575,7 @@ export function App() {
         if (!mediaCursorReady.current) {
           mediaCursorReady.current = true;
           mediaCursor.current = Math.max(mediaCursor.current, Number(answer.next ?? 0));
-          return;
+          return take();
         }
         for (const event of answer.events) {
           mediaCursor.current = Math.max(mediaCursor.current, event.id);
@@ -2325,6 +2344,16 @@ export function App() {
           openProject === undefined ? (
             <StudioProjects
               projects={[...projects].sort((a, b) => b.updatedAt - a.updatedAt).map(summarize)}
+              /**
+               * 另存快照：原样复制一份新的工程。撤销栈只活在当前会话里，而「想试试别的 bass 又
+               * 怕回不去」是真需求 —— 快照就是那个回得去的地方（StudioProjects 里那颗按钮）。
+               */
+              onSnapshot={(id) => {
+                setProjects((current) => {
+                  const source = current.find((project) => project.id === id);
+                  return source === undefined ? current : [...current, snapshotProject(source)];
+                });
+              }}
               onCreate={() => {
                 const created = defaultProject();
                 setProjects((current) => [created, ...current]);
