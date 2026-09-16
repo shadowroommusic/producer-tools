@@ -3412,16 +3412,16 @@
 .sr-orb {
   position: fixed;
   z-index: 60;
-  /* 球体始终按 72px 布局占位；说话/干活时用 transform 放大到 96px，不引起布局抖动。 */
-  width: 72px;
-  height: 72px;
+  /* 球体始终按 88px 布局占位；说话/干活时用 transform 放大到 112px，不引起布局抖动。 */
+  width: 88px;
+  height: 88px;
   user-select: none;
   touch-action: none;
   transform-origin: center;
 }
 
 .sr-orb--active {
-  transform: scale(1.3333); /* 72 → 96 */
+  transform: scale(1.2727); /* 88 → 112 */
 }
 
 .sr-orb--dragging {
@@ -3430,8 +3430,8 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 72px;
-  height: 72px;
+  width: 88px;
+  height: 88px;
   border-radius: 50%;
   cursor: grab;
 }
@@ -3442,10 +3442,17 @@
 
 .sr-orb-canvas {
   position: absolute;
-  inset: -12px; /* 粒子扩散脉冲会画出 72px 之外，画布留边 */
-  width: 96px;
-  height: 96px;
+  inset: -14px; /* 脉冲波纹会画出球体之外，画布留边 */
+  width: 116px;
+  height: 116px;
   pointer-events: none;
+}
+/* 面板出现时球上移到面板上方（规格 4）。 */
+.sr-orb--expanded {
+  transform: translateY(-120px);
+}
+.sr-orb--expanded.sr-orb--active {
+  transform: translateY(-120px) scale(1.2727);
 }
 
 /* 展开的小面板：锚在球上方，毛玻璃 + 1px 描边 + 圆角 16，开合 180ms（scale 0.96→1 + 淡入）。 */
@@ -3453,7 +3460,7 @@
   position: absolute;
   right: 0;
   bottom: 80px;
-  width: 240px;
+  width: 320px;
   padding: 10px;
   border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--sr-label-tertiary) 35%, transparent);

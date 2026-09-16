@@ -12,13 +12,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
-import { PALETTES, OrbParticles } from "../lib/orb-particles";
+import { PALETTES, FluidOrb } from "../lib/orb-particles";
 
 export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working";
 
 const POSITION_KEY = "shadowroom.orb.position";
-const ORB_SIZE = 72;
-const ACTIVE_SIZE = 96;
+const ORB_SIZE = 88;
+const ACTIVE_SIZE = 112;
 const DRAG_THRESHOLD = 4;
 
 function loadPosition(): { x: number; y: number } | null {
@@ -60,7 +60,7 @@ export function ButlerOrb({
   const latch = useRef(new SpeechLatch(1500));
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const particlesRef = useRef<OrbParticles | null>(null);
+  const particlesRef = useRef<FluidOrb | null>(null);
   const rafRef = useRef<number | null>(null);
   const levelRef = useRef(0);
   /** 内核半径的 120ms 平滑值。 */
@@ -75,7 +75,9 @@ export function ButlerOrb({
     setLocalDraft("");
   });
 
-  const effectiveMode: OrbMode = mode ?? (micOn && voiceActive ? "listening" : "idle");
+  // QA/测试覆盖口：localStorage.qa-orb-force 优先于自动判定（生产环境不会设这个键）。
+  const forced = (typeof window !== "undefined" ? window.localStorage.getItem("qa-orb-force") : null) as OrbMode | null;
+  const effectiveMode: OrbMode = mode ?? forced ?? (micOn && voiceActive ? "listening" : "idle");
   const showWorking = effectiveMode === "working";
   const paletteKey = effectiveMode === "listening" ? "listening" : effectiveMode === "speaking" ? "speaking" : "idle";
   const active = effectiveMode !== "idle";
@@ -141,7 +143,7 @@ export function ButlerOrb({
     if (canvas === null) return;
     const context = canvas.getContext("2d");
     if (context === null) return;
-    const particles = particlesRef.current ?? (particlesRef.current = new OrbParticles());
+    const particles = particlesRef.current ?? (particlesRef.current = new FluidOrb());
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const render = (now: number) => {
       // P0 防线：canvas API 吃到 NaN/Infinity 会整帧抛错（createRadialGradient: non-finite），
