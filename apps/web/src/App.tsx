@@ -529,18 +529,40 @@ export function App() {
      * it travels with the message, together with the revision the edit must match.
      */
     const openProject = projects.find((project) => project.id === openProjectId);
+    /**
+     * 工程随每条消息一起过去 —— **音频文件在智能体那边读不到，只有前端知道**。
+     *
+     * 以前只在「有段落」时才带上下文，于是刷新一下页面说「导出这首」「把 bass 再暗一点」，
+     * 智能体手里既没有片段路径也没有 render_spec，只能瞎猜或反问。现在只要工程是打开的，
+     * 轨道、片段（路径 / 起点 / 长度 / spec）、段落全都跟着走；段落为空时也不影响导出与改单轨。
+     */
     const arrangementContext =
-      openProject === undefined || (openProject.sections?.length ?? 0) === 0
+      openProject === undefined
         ? []
         : [
             "",
-            "[structure_context]",
+            "[arrangement_context]",
+            `project: ${openProject.name} · ${openProject.bpm} BPM · ${openProject.bars} 小节${openProject.key === undefined ? "" : ` · ${openProject.key}`}`,
             `revision: ${structureRevision(openProject)}`,
-            `bars: ${openProject.bars}`,
             `sections: ${JSON.stringify((openProject.sections ?? []).map((section) => ({ id: section.id, name: section.name, start: section.start, bars: section.bars })))}`,
-            `tracks: ${JSON.stringify(openProject.tracks.map((track) => ({ name: track.name, clips: track.clips.map((clip) => ({ id: clip.id, start: clip.start, length: clip.length })) })))}`,
-            "[/structure_context]",
-            "（要改结构就调 shadow-music-generator 的 arrange：把上面的 bars/sections/tracks 原样传进去、operations 写操作、revision 回传；它会把每个片段的新位置算好，前端落盘。不要自己算位置。）",
+            `tracks: ${JSON.stringify(
+              openProject.tracks.map((track) => ({
+                name: track.name,
+                type: trackTypeOf(track),
+                volume: track.volume,
+                clips: track.clips.map((clip) => ({
+                  id: clip.id,
+                  name: clip.name,
+                  start: clip.start,
+                  length: clip.length,
+                  ...(clip.source === undefined || clip.source === "" ? {} : { path: clip.source }),
+                  ...(clip.render === undefined ? {} : { render_spec: clip.render }),
+                  ...(clip.notes === undefined ? {} : { notes: clip.notes.length }),
+                })),
+              })),
+            )}`,
+            "[/arrangement_context]",
+            "（上面就是当前工程的全部内容：导出整首用 mix_arrangement（tracks 结构 {name, gain(0-1), clips:[{path, start(小节), bars}]}）、导出分轨用 export_stems、导出 MIDI 用 export_midi；只改一条轨用 regenerate_part（render_spec 原样传、clip_id 必填）；改结构用 arrange（bars/sections/tracks 原样传、operations 写操作、revision 回传，别自己算位置）。）",
           ];
     /**
      * Point the core at the provider this choice belongs to (or back at the built-in one) before the
