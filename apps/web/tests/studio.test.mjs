@@ -28,6 +28,7 @@ import {
   quantiseNotes,
   removeSection,
   repeatLastSection,
+  snapshotProject,
   structureRevision,
   trackFromImport,
   trackNameFromImport,
@@ -374,4 +375,14 @@ test("fadeGain is the one linear envelope both playback and export share", () =>
   assert.equal(Math.abs(fadeGain(clip, 7.875, bpm) - 0.5) < 1e-5, true, "half-way through a 0.5 s fade-out");
   assert.equal(fadeGain(clip, 8, bpm), 0, "the fade-out ends at silence");
   assert.equal(fadeGain(clip, 10, bpm), 0, "past the clip the gain is zero, not negative");
+});
+
+test("a snapshot is the same project under a new id and a stamped name", () => {
+  const project = { id: "project-1", name: "Demo", updatedAt: 1, bpm: 128, key: "8A", bars: 16, tracks: [] };
+  const snap = snapshotProject(project, new Date("2026-09-16T22:30:00").getTime());
+  assert.notEqual(snap.id, project.id, "a snapshot must have its own id");
+  assert.equal(snap.name, "Demo（快照 09-16 22:30）");
+  assert.equal(snap.tracks, project.tracks, "the content is the same object; edits replace, never mutate");
+  assert.equal(snap.bpm, project.bpm);
+  assert.equal(snap.updatedAt, new Date("2026-09-16T22:30:00").getTime());
 });

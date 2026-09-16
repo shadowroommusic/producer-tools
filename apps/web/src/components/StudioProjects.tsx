@@ -36,13 +36,16 @@ export function StudioProjects({
   onOpen,
   onCreate,
   onDelete,
+  onSnapshot,
 }: {
   projects: ProjectSummary[];
   onOpen: (id: string) => void;
   onCreate: () => void;
   onDelete: (id: string) => void;
+  /** 另存快照：把当前工程原样复制成一个新工程（换 id、名字带时间戳）。 */
+  onSnapshot?: (id: string) => void;
 }) {
-  const [latest, ...rest] = projects;
+  const [latest] = projects;
 
   return (
     <div className="sr-page">
@@ -96,7 +99,9 @@ export function StudioProjects({
             <span className="sr-page-section-meta sr-mono">{projects.length} 个</span>
           </div>
           <div className="sr-project-list">
-            {[...(latest ? rest : [])].map((project) => (
+            {/* 全部工程也列出最新的那个：它是用户最想「先存一份再改」的工程，不能只在这里看到
+                其它的。上面的大卡片是「继续」，这里是完整的清单。 */}
+            {projects.map((project) => (
               <div key={project.id} className="sr-project-row">
                 <button type="button" className="sr-project-open" onClick={() => onOpen(project.id)}>
                   <span className="sr-project-row-title">{project.name}</span>
@@ -104,6 +109,16 @@ export function StudioProjects({
                     {project.bpm} BPM · {project.trackCount} 轨 · {project.clipCount} 片段 ·{" "}
                     {timeAgo(project.updatedAt)}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  className="sr-project-snapshot sr-mono"
+                  disabled={onSnapshot === undefined}
+                  title={onSnapshot === undefined ? "另存快照" : "原样复制成一个新工程，改坏了随时回来"}
+                  aria-label={`另存快照 ${project.name}`}
+                  onClick={() => onSnapshot?.(project.id)}
+                >
+                  另存快照
                 </button>
                 <button
                   type="button"
