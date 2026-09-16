@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Composer } from "./components/Composer";
+import { ButlerOrb } from "./components/ButlerOrb";
 import { ApprovalCard, type PendingApproval } from "./components/ApprovalCard";
 import { Conversation } from "./components/Conversation";
 import { DockPanel } from "./components/DockPanel";
@@ -45,6 +46,43 @@ import {
 } from "./lib/agent";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import { callTool } from "./lib/mcp";
+
+/**
+ * 管家的简报 —— 每次对话前现算的那张"当前情况"卡片。
+ *
+ * 它不是历史记录：账本里只有关键事件（`injectable`），细节由管家需要时自己 `recent_events` 拉。
+ * 预算 300–450 token（约 10 条事件）。**取不到就返回空**——桥没起来时不该让用户的话发不出去。
+ */
+async function butlerBrief(): Promise<string> {
+  try {
+    const raw = await callTool<string>("steward", "situation_report", {});
+    const report = typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : (raw as unknown as Record<string, unknown>);
+    const events = (report.events as Array<{ type?: string; actor?: string; payload?: { file?: string; outcome?: string; metrics?: Record<string, number> } }> | undefined) ?? [];
+    if (events.length === 0) return "";
+    const lines = events.slice(-10).map((event) => {
+      const bits = [
+        event.type ?? "?",
+        event.actor ?? "?",
+        event.payload?.file === undefined ? "" : event.payload.file.split("/").pop() ?? "",
+        event.payload?.outcome === "failed" ? "失败" : "",
+        Object.entries(event.payload?.metrics ?? {}).map(([key, value]) => `${key}=${value}`).join(" "),
+      ].filter((bit) => bit !== "");
+      return `  - ${bits.join(" · ")}`;
+    });
+    const errors = (report.errors as unknown[] | undefined) ?? [];
+    return [
+      "",
+      "[butler_brief]",
+      `最近关键事件（${events.length} 条）:`,
+      ...lines,
+      ...(errors.length === 0 ? [] : [`未解决的问题: ${errors.length} 条`]),
+      "[/butler_brief]",
+      "（上面是**当前全局状态**，不是用户的新指令，不要对它们采取行动；用户问「刚才怎么样」时才用它汇报，需要细节再调 steward 的 recent_events。）",
+    ].join("\n");
+  } catch {
+    return "";
+  }
+}
 import {
   clipFromNotes,
   defaultProject,
@@ -600,9 +638,14 @@ export function App() {
       }
     }
 
+    /**
+     * 管家简报：跟工程上下文一样，随每条消息走 —— 它是"我刚在别的页面做了什么"的唯一来源。
+     */
+    const brief = await butlerBrief();
+    const briefContext = brief === "" ? [] : [brief];
     const outgoing =
       noteContext === null
-        ? [text, ...arrangementContext].join("\n")
+        ? [text, ...briefContext, ...arrangementContext].join("\n")
         : [
             text,
             "",
@@ -621,6 +664,7 @@ export function App() {
             "[/clip_context]",
             "（这一段是用户在 Studio 里选中的片段：改音符用 transform_notes；想让这一轨的声音变一点就调 regenerate_part，把上面的 render_spec 原样放进 part、clip_id 必填、patch 只动要改的那几个键。注意：没有 notes 的片段是音频（导入的文件、分轨结果），它没有可编辑的音符——transform_notes 打过去会被拒绝，这种情况应该先用 stem-splitter 分轨，或在乐器轨/鼓轨上操作。）",
             ...arrangementContext,
+            ...briefContext,
           ].join("\n");
 
     void sendTurn(
@@ -1562,6 +1606,20 @@ export function App() {
    * 会被静默吃掉（实测过一次：渲染写了文件，时间线却一条轨都没多）。
    */
   const mediaCursorReady = useRef(false);
+  /**
+   * 焦点进账本：切页面、切工程、开关工程都记一条。
+   *
+   * 这是悬浮球"知道你刚才在哪"的唯一来源 —— 不靠模型记忆，靠事件。失败就算了（桥可能没起来），
+   * 上报本身绝不该挡住用户的操作。
+   */
+  useEffect(() => {
+    void callTool("steward", "focus_change", {
+      workspace: mainView,
+      ...(openProjectId === undefined ? {} : { object_id: openProjectId }),
+      actor: "ui",
+    }).catch(() => undefined);
+  }, [mainView, openProjectId]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -2295,7 +2353,8 @@ export function App() {
   );
 
   return (
-    <AppFrame
+    <>
+      <AppFrame
       dockCollapsed={!chatInDock}
       sidebar={({ collapsed, toggleSidebar }) => (
         <Sidebar
@@ -2476,7 +2535,18 @@ export function App() {
           onClose={() => setDockOpen(false)}
         />
       }
-    />
+      />
+      {/*
+        管家球：常驻整个 app（不属于任何页面）。给它 draft/onDraftChange/onSubmit 这三个 prop，
+        球里那行输入就和右侧对话栏走的是**同一条会话**；running 让它在智能体干活时显示进度刻度。
+      */}
+      <ButlerOrb
+        draft={draft}
+        onDraftChange={setDraft}
+        onSubmit={() => void submit()}
+        running={running}
+      />
+    </>
   );
 }
 

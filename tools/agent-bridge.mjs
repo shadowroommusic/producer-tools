@@ -693,6 +693,12 @@ const PLUGIN_REPOS = [
   "set-planner",
   "shadow-music-generator",
   "stem-splitter",
+  /**
+   * 这两个是后加的，一开始漏在这份清单外——它们的工具因此**对模型不可见**（桥里有、模型调不到）：
+   * soundfont-renderer = 真乐器音色；steward = 管家账本（situation_report / recent_events）。
+   */
+  "soundfont-renderer",
+  "steward",
   "ShadowMusicGrabber",
 ];
 
@@ -1499,6 +1505,31 @@ const http = createServer(async (request, response) => {
       const since = Number(url.searchParams.get("since") ?? "0");
       const events = MEDIA_EVENTS.filter((event) => event.id > since);
       json(response, 200, { events, next: MEDIA_EVENTS.length === 0 ? since : MEDIA_EVENTS[MEDIA_EVENTS.length - 1].id });
+      return;
+    }
+
+    /**
+     * 后台作业（异步渲染）把"做完了"推回来。
+     *
+     * 契约是"不给模型轮询工具"：generator 的 worker 自己按退避表盯着作业，终态用这条 POST 进来，
+     * 事件形状刻意做成**一次普通的 render_song 工具调用**，所以前端那条吸收路径零学习成本就落轨。
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/media-events") {
+      const body = await readJsonBody(request, 2 * 1024 * 1024);
+      const id = MEDIA_EVENTS.length === 0 ? 1 : MEDIA_EVENTS[MEDIA_EVENTS.length - 1].id + 1;
+      const event = {
+        id,
+        at: Date.now(),
+        server: String(body.server ?? "unknown"),
+        tool: String(body.tool ?? "unknown"),
+        ok: body.ok !== false,
+        text: typeof body.text === "string" ? body.text : "",
+        ...(body.args === undefined ? {} : { args: body.args }),
+      };
+      MEDIA_EVENTS.push(event);
+      if (MEDIA_EVENTS.length > 50) MEDIA_EVENTS.shift();
+      console.log(`[agent] media event ← ${event.server}.${event.tool} ok=${event.ok} id=${event.id}`);
+      json(response, 200, { id, accepted: true });
       return;
     }
 
