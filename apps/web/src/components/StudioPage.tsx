@@ -18,6 +18,8 @@ import {
   TRACK_COLORS,
   barsFromMilliseconds,
   barsPerSecond,
+  clipBarsFromDuration,
+  tempoMismatchNotice,
   canAddTracks,
   clipGain,
   defaultTrackName,
@@ -256,6 +258,25 @@ export function StudioPage({
   const clipVolume = (track: StudioTrack, clip: StudioClip, bar: number) =>
     (audible(track) ? Math.min(1, track.volume / 100) : 0) * clipGain(clip, bar, project.bpm);
 
+  /**
+   * A stable handle on `onChange` for effects that must not re-run when the callback identity moves:
+   * they patch one clip (transiently) and nothing else.
+   */
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const changeClipByRef = useCallback(
+    (clipId: string, patch: (clip: StudioClip) => StudioClip, options?: { transient?: boolean }) => {
+      onChangeRef.current((current) => ({
+        ...current,
+        tracks: current.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) => (clip.id === clipId ? patch(clip) : clip)),
+        })),
+      }), options);
+    },
+    [],
+  );
+
   const moveTo = (bar: number) => {
     position.current = bar;
     setPlayhead(bar);
@@ -337,6 +358,19 @@ export function StudioPage({
     }
   };
 
+  /**
+   * 内容的真实末尾（小节）：全部片段里最远的 `start + length`。
+   *
+   * 走带以它为终点（任务 9：「音乐播完了黄线才到中间」——在空白区里继续跑的走带是在报错误的时间）。
+   * 没有任何片段时回落到工程长度，保持空工程可以照常预滚动。
+   */
+  const contentEndBars = useMemo(() => {
+    const end = project.tracks
+      .flatMap((track) => track.clips)
+      .reduce((far, clip) => Math.max(far, clip.start + clip.length), 0);
+    return end > 0 ? end : project.bars;
+  }, [project.tracks, project.bars]);
+
   // The transport: one rAF loop that advances the playhead and drags the players with it.
   useEffect(() => {
     if (!playing) {
@@ -348,9 +382,14 @@ export function StudioPage({
       const elapsed = (now - previous) / 1000;
       previous = now;
       let next = position.current + elapsed * barsPerSecond(project.bpm);
-      if (next >= project.bars) {
-        syncPlayers(0, false);
-        next = 0;
+      // 播到内容的真实末尾就停（不是工程网格的末尾）：「音乐播完了黄线还在跑」就是从这来的。
+      if (next >= contentEndBars) {
+        setPlaying(false);
+        next = contentEndBars;
+        position.current = next;
+        setPlayhead(next);
+        syncPlayers(next, false);
+        return; // 不再请求下一帧：走带停在内容末尾
       }
       position.current = next;
       setPlayhead(next);
@@ -363,7 +402,7 @@ export function StudioPage({
       frame.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, project.bpm, project.bars, project.tracks, anySolo]);
+  }, [playing, project.bpm, project.bars, project.tracks, anySolo, contentEndBars]);
 
   useEffect(
     () => () => {
@@ -460,6 +499,56 @@ export function StudioPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.tracks]);
+
+  /**
+   * Measure every clip's audio once (browser metadata probe) and record its real duration.
+   *
+   * 任务 9：片段长度要以「声音的实际时长 × 当前 BPM」为准。测量是 **transient**（不进撤销栈）：
+   * 它不改用户排的布局，只是把文件本来多长这一事实写到 clip 上。
+   */
+  const probedDuration = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    for (const clip of project.tracks.flatMap((track) => track.clips)) {
+      if (!isPlayable(clip.source) || clip.duration_ms !== undefined) continue;
+      if (probedDuration.current.has(clip.id)) continue;
+      probedDuration.current.set(clip.id, 0); // 在途标记：一个片段只探测一次
+      const probe = new Audio(fileUrl(clip.source as string));
+      probe.addEventListener("loadedmetadata", () => {
+        if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
+        const ms = Math.round(probe.duration * 1000);
+        probedDuration.current.set(clip.id, ms);
+        changeClipByRef(clip.id, (current) => ({ ...current, duration_ms: ms }), { transient: true });
+      });
+      probe.addEventListener("error", () => probedDuration.current.delete(clip.id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.tracks]);
+
+  /**
+   * 工程 BPM 变化时，把带时长的片段长度按新 BPM 重算（渲染返回的 bars 只当兜底）。
+   *
+   * 音频按它自己的速度播：BPM 变了，小节数不改的话视觉长度和声音长度就分家了——这正是用户
+   * 看到的「黄线和听到的对不上」的第二种来源。同 BPM 的重算是无操作（round 之后相等）。
+   */
+  const previousBpm = useRef(project.bpm);
+  useEffect(() => {
+    if (previousBpm.current === project.bpm) return;
+    previousBpm.current = project.bpm;
+    let changed = false;
+    onChange((current) => {
+      const tracks = current.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => {
+          const bars = clipBarsFromDuration(clip, current.bpm);
+          if (bars === undefined || Math.abs(bars - clip.length) < 0.01) return clip;
+          changed = true;
+          return { ...clip, length: bars };
+        }),
+      }));
+      return changed ? { ...current, tracks } : current;
+    }, { transient: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.bpm]);
 
   const updateTrack = (trackId: string, patch: (track: StudioTrack) => StudioTrack) => {
     onChange((current) => ({
@@ -2137,6 +2226,7 @@ function Clip({
   rendering?: boolean;
 }) {
   const badge = analysisBadge(clip.analysis);
+  const tempoNotice = tempoMismatchNotice(clip, bpm);
   const drag = useRef<{
     originX: number;
     start: number;
@@ -2276,6 +2366,7 @@ function Clip({
       <span className="sr-clip-meta sr-mono">
         {Number(clip.length.toFixed(2))} 小节
         {badge !== "" && <span className="sr-clip-badge"> · {badge}</span>}
+        {tempoNotice && <span className="sr-clip-badge sr-clip-badge--stale" title={tempoNotice}> · ⚠ {tempoNotice}</span>}
         {splitting && <span className="sr-clip-badge"> · 分轨中…</span>}
         {rendering && <span className="sr-clip-badge"> · 重渲染中…</span>}
         {clip.renderStale !== undefined && (

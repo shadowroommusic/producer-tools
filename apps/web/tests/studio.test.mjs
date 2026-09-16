@@ -14,8 +14,10 @@ import {
   TRACK_COLORS,
   TRACK_OVERFLOW_LIMIT,
   canAddTracks,
+  clipBarsFromDuration,
   clipGain,
   rampGain,
+  tempoMismatchNotice,
   defaultTrackName,
   duplicateSection,
   drumVoice,
@@ -402,4 +404,27 @@ test("rampGain draws one line across the clip, and clipGain multiplies it with f
   const both = { start: 0, length: 4, fadeIn: 0.5, ramp: { from: 0, to: 1 } };
   assert.equal(clipGain(both, 1.125, 120), 0.28125);
   assert.equal(clipGain(both, 0, 120), 0, "the fade still owns the very first sample");
+});
+
+test("clipBarsFromDuration derives the length from real audio at the CURRENT tempo", () => {
+  // 15 s 音频 @128 BPM = 8 bars（渲染时的快照）
+  const clip = { duration_ms: 15000, length: 8, render: { bars: 8 } };
+  assert.equal(clipBarsFromDuration(clip, 128), 8);
+  // 工程 BPM 改成 96：同一段音频按新速度要占更多小节，渲染返回的 8 不再可信
+  assert.equal(clipBarsFromDuration(clip, 96), 6, "BPM 越低每小节越长，同一段音频占的小节数变少");
+  // 时长缺失时才兜底到 render.bars / 现有 length
+  assert.equal(clipBarsFromDuration({ length: 6 }, 128), 6);
+  assert.equal(clipBarsFromDuration({ render: { bars: 5 } }, 128), 5);
+  assert.equal(clipBarsFromDuration({}, 128), undefined);
+});
+
+test("tempoMismatchNotice only speaks when the tempos really differ (>5%)", () => {
+  const rendered = { render: { bpm: 128 } };
+  assert.equal(tempoMismatchNotice(rendered, 128), undefined);
+  assert.equal(tempoMismatchNotice(rendered, 130), undefined, "3% 之内算一致");
+  assert.equal(tempoMismatchNotice({}, 128), undefined, "没有渲染记录就没得说");
+  assert.equal(
+    tempoMismatchNotice(rendered, 96),
+    "这段是按 128 BPM 渲染的，当前工程 96 BPM",
+  );
 });

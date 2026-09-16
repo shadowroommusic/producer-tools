@@ -26,6 +26,13 @@ export type StudioClip = {
   /** Fade-out length in seconds, ending at the clip's last sample. Unset or 0 = no fade. */
   fadeOut?: number;
   /**
+   * The audio's real duration in milliseconds, measured by the browser once the file is known.
+   *
+   * 片段的视觉长度要跟声音的实际长度对上（任务 9）：工程 BPM 变了就用它反算新的小节数，
+   * 渲染时返回的 `render.bars` 只当时长未知时的兜底。
+   */
+  duration_ms?: number;
+  /**
    * A gain ramp across the whole clip (0–1 at its edges): 渐强 is `{from: 0, to: 1}`, 渐弱 the
    * reverse. It is the clip-level answer to "副歌进来时整体渐强 4 小节".
    */
@@ -338,6 +345,46 @@ export function barsPerSecond(bpm: number): number {
  */
 export function barsFromMilliseconds(ms: number, bpm: number): number {
   return Math.max(1, Math.ceil((ms / 1000) * barsPerSecond(bpm)));
+}
+
+/**
+ * A clip's length in bars derived from its **audio's real duration** at the current project tempo.
+ *
+ * 渲染返回的 `bars` 是渲染时的快照（渲染 BPM 下的长度），工程 BPM 一变它就不再等于声音的实际
+ * 长度——用户看到的「黄线走完音乐没播完」就是这类错位（任务 9）。所以片段落轨/重算时以
+ * `duration_ms` 按当前 BPM 反算，`bars` 只在时长缺失时兜底。
+ * @param clip - the clip whose audio duration and snapshot bars are known.
+ * @param bpm - the *project's* tempo now (not the tempo it was rendered at).
+ * @returns the length in bars the clip should occupy on the current grid.
+ */
+export function clipBarsFromDuration(
+  clip: { duration_ms?: number; length?: number; render?: { bars?: number } },
+  bpm: number,
+): number | undefined {
+  if (typeof clip.duration_ms === "number" && clip.duration_ms > 0) {
+    return Math.max(1, Math.round((clip.duration_ms / 1000) * barsPerSecond(bpm) * 100) / 100);
+  }
+  const fallback = clip.render?.bars ?? clip.length;
+  return typeof fallback === "number" && fallback > 0 ? fallback : undefined;
+}
+
+/**
+ * What to tell the user when a clip's audio was rendered at a different tempo than the project's.
+ *
+ * Both directions mean the same mismatch (声音长度和视觉长度不一致), and the fix is the user's to
+ * choose — re-render, or change the project BPM — so the clip only *says* the fact, never silently
+ * rescales.
+ * @returns the warning line, or `undefined` when the tempos agree (or are unknown).
+ */
+export function tempoMismatchNotice(
+  clip: { render?: { bpm?: number }; duration_ms?: number; length?: number },
+  bpm: number,
+): string | undefined {
+  const renderedBpm = clip.render?.bpm;
+  if (typeof renderedBpm === "number" && renderedBpm > 0 && Math.abs(renderedBpm - bpm) / bpm > 0.05) {
+    return `这段是按 ${Math.round(renderedBpm)} BPM 渲染的，当前工程 ${Math.round(bpm)} BPM`;
+  }
+  return undefined;
 }
 
 /** URL the browser can stream a local file from (the agent bridge serves it). */
