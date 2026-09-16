@@ -212,7 +212,11 @@ export function StudioPage({
   /** A recording in progress: when it started, and how long it has been running. */
   const [recording, setRecording] = useState<{ startedAt: number; metronome: boolean } | null>(null);
   const [recordingMs, setRecordingMs] = useState(0);
-  /** Click track and one-bar count-in, remembered between sessions (a studio habit, not project data). */
+  /** 走带的终点：内容末尾（默认，音乐停音乐该停的地方）或工程网格末尾（老行为，循环空尾）。 */
+  const [playMode, setPlayMode] = useState<"content" | "project">(() =>
+    window.localStorage.getItem("shadowroom.playmode") === "project" ? "project" : "content",
+  );
+    /** Click track and one-bar count-in, remembered between sessions (a studio habit, not project data). */
   const [metronomeOn, setMetronomeOn] = useState(() => window.localStorage.getItem("shadowroom.metronome") === "on");
   const [countIn, setCountIn] = useState(() => window.localStorage.getItem("shadowroom.countin") !== "off");
   const [dragging, setDragging] = useState(false);
@@ -382,14 +386,19 @@ export function StudioPage({
       const elapsed = (now - previous) / 1000;
       previous = now;
       let next = position.current + elapsed * barsPerSecond(project.bpm);
-      // 播到内容的真实末尾就停（不是工程网格的末尾）：「音乐播完了黄线还在跑」就是从这来的。
-      if (next >= contentEndBars) {
-        setPlaying(false);
-        next = contentEndBars;
-        position.current = next;
-        setPlayhead(next);
-        syncPlayers(next, false);
-        return; // 不再请求下一帧：走带停在内容末尾
+      // 播放模式（任务 9 修订）：内容末尾（默认）——音乐停音乐该停的地方，黄线不跑进空白区；
+      // 工程末尾——老行为，越过内容后回到 0 循环（用户明确要看完整网格时用）。
+      if (playMode === "content" ? next >= contentEndBars : next >= project.bars) {
+        if (playMode === "content") {
+          setPlaying(false);
+          next = contentEndBars;
+          position.current = next;
+          setPlayhead(next);
+          syncPlayers(next, false);
+          return; // 不再请求下一帧：走带停在内容末尾
+        }
+        syncPlayers(0, false);
+        next = 0;
       }
       position.current = next;
       setPlayhead(next);
@@ -402,7 +411,7 @@ export function StudioPage({
       frame.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, project.bpm, project.bars, project.tracks, anySolo, contentEndBars]);
+  }, [playing, project.bpm, project.bars, project.tracks, anySolo, contentEndBars, playMode]);
 
   useEffect(
     () => () => {
@@ -517,38 +526,28 @@ export function StudioPage({
         if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
         const ms = Math.round(probe.duration * 1000);
         probedDuration.current.set(clip.id, ms);
-        changeClipByRef(clip.id, (current) => ({ ...current, duration_ms: ms }), { transient: true });
+        // 落轨调和（任务 9 修订版）：length_bars = max(音频时长按当前 BPM 反算, render 声明的 bars)。
+        // 这是唯一改 length 的地方——之后 BPM 再变也**不重算**（音频不随工程 BPM 变速，重算只会把
+        // 尾音截掉、让片段和音频脱节；不一致用片段上的 ⚠ 提示说出来）。
+        onChangeRef.current((current) => ({
+          ...current,
+          tracks: current.tracks.map((track) => ({
+            ...track,
+            clips: track.clips.map((entry) => {
+              if (entry.id !== clip.id) return entry;
+              const derived = clipBarsFromDuration({ ...entry, duration_ms: ms }, current.bpm);
+              const authoritative = Math.max(derived ?? 0, entry.render?.bars ?? entry.length);
+              const reconciled = Math.abs(authoritative - entry.length) >= 0.01 ? authoritative : entry.length;
+              return { ...entry, duration_ms: ms, length: reconciled };
+            }),
+          })),
+        }), { transient: true });
       });
       probe.addEventListener("error", () => probedDuration.current.delete(clip.id));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.tracks]);
 
-  /**
-   * 工程 BPM 变化时，把带时长的片段长度按新 BPM 重算（渲染返回的 bars 只当兜底）。
-   *
-   * 音频按它自己的速度播：BPM 变了，小节数不改的话视觉长度和声音长度就分家了——这正是用户
-   * 看到的「黄线和听到的对不上」的第二种来源。同 BPM 的重算是无操作（round 之后相等）。
-   */
-  const previousBpm = useRef(project.bpm);
-  useEffect(() => {
-    if (previousBpm.current === project.bpm) return;
-    previousBpm.current = project.bpm;
-    let changed = false;
-    onChange((current) => {
-      const tracks = current.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) => {
-          const bars = clipBarsFromDuration(clip, current.bpm);
-          if (bars === undefined || Math.abs(bars - clip.length) < 0.01) return clip;
-          changed = true;
-          return { ...clip, length: bars };
-        }),
-      }));
-      return changed ? { ...current, tracks } : current;
-    }, { transient: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.bpm]);
 
   const updateTrack = (trackId: string, patch: (track: StudioTrack) => StudioTrack) => {
     onChange((current) => ({
@@ -947,6 +946,9 @@ export function StudioPage({
     window.localStorage.setItem("shadowroom.metronome", metronomeOn ? "on" : "off");
   }, [metronomeOn]);
   useEffect(() => {
+    window.localStorage.setItem("shadowroom.playmode", playMode);
+  }, [playMode]);
+  useEffect(() => {
     window.localStorage.setItem("shadowroom.countin", countIn ? "on" : "off");
   }, [countIn]);
 
@@ -1080,6 +1082,19 @@ export function StudioPage({
         <div className="sr-transport-position sr-mono" title={`第 ${positionLabel} 小节 · 上限 10:00`}>
           {positionLabel} · {elapsedLabel} / {totalLabel}
         </div>
+        <button
+          type="button"
+          className="sr-btn sr-transport-playmode"
+          data-project={playMode === "project" || undefined}
+          title={
+            playMode === "content"
+              ? "播到内容末尾就停（默认）。点一下切换成播完整工程网格"
+              : "播完整工程网格（越过内容循环）。点一下切回播到内容末尾"
+          }
+          onClick={() => setPlayMode((mode) => (mode === "content" ? "project" : "content"))}
+        >
+          {playMode === "content" ? "播到内容末尾" : "播到工程末尾"}
+        </button>
         <div className="sr-transport-fields">
           <label className="sr-transport-field">
             <span className="sr-field-label sr-mono">BPM</span>
@@ -1189,6 +1204,23 @@ export function StudioPage({
             onClick={() => setImportOpen((open) => !open)}
           >
             ⋯
+          </button>
+          <button
+            type="button"
+            className="sr-btn sr-studio-trim"
+            disabled={contentEndBars >= project.bars}
+            title={
+              contentEndBars >= project.bars
+                ? "工程长度已经和内容一致"
+                : `把工程从 ${project.bars} 小节裁到内容末尾（${Math.round(contentEndBars)} 小节）——⌘Z 可撤销`
+            }
+            onClick={() => {
+              const target = Math.max(1, Math.ceil(contentEndBars));
+              onChange((current) => ({ ...current, bars: target }));
+              say(`工程裁到 ${target} 小节（⌘Z 可撤销）`);
+            }}
+          >
+            裁剪到内容末尾
           </button>
           <button
             type="button"
@@ -1718,6 +1750,14 @@ export function StudioPage({
                 })}
               </div>
             ))}
+{contentEndBars < project.bars && (
+              <div
+                className="sr-content-end"
+                style={{ left: contentEndBars * barPx }}
+                title={`内容末尾（第 ${Math.round(contentEndBars)} 小节）——右边是空白网格`}
+                aria-hidden="true"
+              />
+            )}
             <div className="sr-playhead" style={{ left: playhead * barPx }} aria-hidden="true" />
           </div>
         </div>

@@ -3159,3 +3159,23 @@
 .sr-dock-composer .sr-menu {
   z-index: 60;
 }
+
+/* 内容末尾标记线（任务 9 修订）：淡色点线，和黄色播放头（实线、亮）一眼区分开。 */
+.sr-content-end {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px dotted color-mix(in srgb, var(--sr-label-tertiary) 55%, transparent);
+  pointer-events: auto;
+  cursor: help;
+  z-index: 3;
+}
+
+.sr-transport-playmode {
+  white-space: nowrap;
+}
+
+.sr-transport-playmode[data-project] {
+  color: var(--sr-accent);
+}
