@@ -144,17 +144,23 @@ export function ButlerOrb({
     const particles = particlesRef.current ?? (particlesRef.current = new OrbParticles());
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const render = (now: number) => {
+      // P0 防线：canvas API 吃到 NaN/Infinity 会整帧抛错（createRadialGradient: non-finite），
+      // rAF 循环里一抛就是**每帧都抛**，控制台瞬间刷屏、球永久黑掉。所有进 canvas 的值先过
+      // Number.isFinite，洗不掉的输入把本帧降级成「保持上一帧」——宁可静止也不崩。
+      if (!Number.isFinite(now)) return;
       const size = active ? ACTIVE_SIZE : ORB_SIZE;
+      if (!Number.isFinite(size) || size <= 0) return;
       if (canvas.width !== size * dpr) {
         canvas.width = size * dpr;
         canvas.height = size * dpr;
       }
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       // 内核半径 120ms 平滑：向目标电平指数逼近。
-      const target = levelRef.current;
-      const dt = Math.min(64, Math.max(4, now - (lastFrameRef.current || now)));
+      const target = Number.isFinite(levelRef.current) ? levelRef.current : 0;
+      const dt = Math.min(64, Math.max(4, Number.isFinite(now - lastFrameRef.current) ? now - lastFrameRef.current : 16));
       lastFrameRef.current = now;
       smoothRef.current += (target - smoothRef.current) * Math.min(1, dt / 120);
+      if (!Number.isFinite(smoothRef.current)) smoothRef.current = 0;
       const palette = PALETTES[paletteKey];
       particles.step(context, size, {
         level: smoothRef.current,
@@ -163,17 +169,20 @@ export function ButlerOrb({
         motion: !reducedMotion.current,
         time: now / 1000,
       });
-      // 中心径向渐变内核（白→色），半径跟平滑后的 RMS。
+      // 中心径向渐变内核（白→色），半径跟平滑后的 RMS。non-finite 一律跳过（保上一帧）。
       const coreRadius = size * (0.10 + smoothRef.current * 0.16);
-      const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, Math.max(coreRadius, 1));
-      gradient.addColorStop(0, `rgba(255,255,255,${0.5 + smoothRef.current * 0.4})`);
-      gradient.addColorStop(1, `rgba(${palette.r},${palette.g},${palette.b},0)`);
-      context.fillStyle = gradient;
-      context.beginPath();
-      context.arc(size / 2, size / 2, coreRadius, 0, Math.PI * 2);
-      context.fill();
+      if (Number.isFinite(coreRadius) && coreRadius > 0) {
+        const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, coreRadius);
+        const coreAlpha = Number.isFinite(0.5 + smoothRef.current * 0.4) ? 0.5 + smoothRef.current * 0.4 : 0.5;
+        gradient.addColorStop(0, `rgba(255,255,255,${coreAlpha.toFixed(3)})`);
+        gradient.addColorStop(1, `rgba(${palette.r},${palette.g},${palette.b},0)`);
+        context.fillStyle = gradient;
+        context.beginPath();
+        context.arc(size / 2, size / 2, coreRadius, 0, Math.PI * 2);
+        context.fill();
+      }
       // 干活：外圈细进度弧 + 弧头发光点。
-      if (showWorking && progress !== undefined) {
+      if (showWorking && progress !== undefined && Number.isFinite(progress)) {
         const clamped = Math.max(0, Math.min(1, progress));
         context.lineWidth = 2;
         context.strokeStyle = "rgba(148,163,184,0.25)";

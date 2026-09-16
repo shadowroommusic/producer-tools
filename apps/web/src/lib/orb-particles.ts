@@ -80,9 +80,12 @@ export class OrbParticles {
     size: number,
     options: { level: number; palette: OrbPalette; mode: "idle" | "listening" | "speaking"; motion: boolean; time: number },
   ): number {
-    const { level, palette, mode, motion, time } = options;
-    const center = size / 2;
-    const baseRadius = size * 0.34;
+    const { level: rawLevel, palette, mode, motion, time: rawTime } = options;
+    // P0 防线：NaN/Infinity 漏进 ctx.arc/fillStyle 会让 rAF 循环每帧抛错。源头洗一遍。
+    const level = Number.isFinite(rawLevel) ? rawLevel : 0;
+    const time = Number.isFinite(rawTime) ? rawTime : 0;
+    const center = Number.isFinite(size / 2) ? size / 2 : 0;
+    const baseRadius = Number.isFinite(size) && size > 0 ? size * 0.34 : 1;
     if (motion) {
       this.rotation += 0.004 + level * 0.01;
       this.drift += 0.003;
