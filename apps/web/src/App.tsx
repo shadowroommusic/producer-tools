@@ -1752,11 +1752,23 @@ export function App() {
               ...project,
               bpm,
               tracks,
-              // A song longer than the project's grid widens the grid: the clips are the truth.
-              bars:
-                typeof parsed.bars === "number" && parsed.bars > 0
-                  ? Math.max(project.bars, Math.ceil(parsed.bars))
-                  : project.bars,
+              /**
+               * 时间线的长度跟着**内容**走，不跟着渲染返回的 bars 走。
+               *
+               * 用户实测过这个 bug：新建工程默认 16 小节，渲染回来的歌只有 8 小节（15 秒），
+               * 于是「音乐都播完了，黄线才走到一半」，读数也显示 00:30 而真实内容只有 15 秒。
+               * 规则：**空工程**落第一次内容时，长度就设成内容长度；已经有内容的工程只扩不缩
+               * （用户手动加长的那部分不能被抹掉）。
+               */
+              bars: (() => {
+                const contentEnd = tracks
+                  .flatMap((track) => track.clips)
+                  .reduce((end, clip) => Math.max(end, clip.start + clip.length), 0);
+                if (contentEnd <= 0) return project.bars;
+                const contentBars = Math.max(1, Math.ceil(contentEnd));
+                const wasEmpty = project.tracks.every((track) => track.clips.length === 0);
+                return wasEmpty ? contentBars : Math.max(project.bars, contentBars);
+              })(),
               ...(sections.length > 0 ? { sections } : {}),
               updatedAt: Date.now(),
             };
