@@ -126,6 +126,16 @@ const REGISTRY = [
     description: "Render notes / MIDI into real-instrument stems (FluidSynth + GeneralUser GS)",
   },
   {
+    /**
+     * 第 8 个插件：管家账本。悬浮球（管家）的"记事本"——工作区只交回执、不碰账本，
+     * 管家用 situation_report / recent_events 读。设计契约见 HANDOFF-for-zcode.md 任务 13。
+     */
+    id: "steward",
+    repo: "steward",
+    label: "管家账本",
+    description: "Event ledger behind the floating orb: receipts from every workspace, a situation report, and focus changes",
+  },
+  {
     id: "grabber",
     repo: "ShadowMusicGrabber",
     label: "音乐抓取转码",
