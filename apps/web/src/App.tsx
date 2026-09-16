@@ -1215,7 +1215,9 @@ export function App() {
         variant={session === undefined || session.messages.length === 0 ? "hero" : "docked"}
         value={draft}
         onChange={setDraft}
-        onSubmit={submit}
+        // 包一层：submit 的第一个参数是 override 文本，而 onClick 会把点击事件对象当实参传进来，
+        // (event).trim 直接抛错——真实用户点「发送」按钮于是毫无反应（回车发送不经过这里）。
+        onSubmit={() => void submit()}
         onStop={stop}
         busy={running}
         mode={mode}
@@ -1373,7 +1375,10 @@ export function App() {
           messages: [...current.messages, { id: `rp-${Date.now()}`, role: "notice", title, text, at: Date.now() }],
         }));
       try {
-        const wrapper = JSON.parse(call.detail ?? "{}") as { result?: { content?: Array<{ text?: string }> } };
+        const wrapper = JSON.parse(call.detail ?? "{}") as {
+          result?: { content?: Array<{ text?: string }> };
+          args?: { clip_id?: string; out_path?: string };
+        };
         const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
           clip_id?: string;
           path?: string;
@@ -1382,12 +1387,15 @@ export function App() {
           bars?: number;
           diff_summary?: string;
         };
-        if (parsed.clip_id === undefined || parsed.path === undefined) {
+        // clip_id / 路径优先读结果，结果没带就从这次调用的参数里拿——同一份事实，两个来源，别解析两次。
+        const clipId = parsed.clip_id ?? wrapper.args?.clip_id;
+        const written = parsed.path ?? wrapper.args?.out_path;
+        if (clipId === undefined || written === undefined) {
           throw new Error("结果里没有片段或文件");
         }
         let applied = false;
         updateProjectRef.current((project) => {
-          const track = project.tracks.find((entry) => entry.clips.some((clip) => clip.id === parsed.clip_id));
+          const track = project.tracks.find((entry) => entry.clips.some((clip) => clip.id === clipId));
           if (track === undefined) return project;
           applied = true;
           return {
@@ -1397,10 +1405,10 @@ export function App() {
                 ? {
                     ...entry,
                     clips: entry.clips.map((clip) =>
-                      clip.id === parsed.clip_id
+                      clip.id === clipId
                         ? {
                             ...clip,
-                            source: parsed.path as string,
+                            source: written,
                             ...(parsed.spec === undefined
                               ? {}
                               : {
@@ -1446,7 +1454,10 @@ export function App() {
           messages: [...current.messages, { id: `nt-${Date.now()}`, role: "notice", title, text, at: Date.now() }],
         }));
       try {
-        const wrapper = JSON.parse(call.detail ?? "{}") as { result?: { content?: Array<{ text?: string }> } };
+        const wrapper = JSON.parse(call.detail ?? "{}") as {
+          result?: { content?: Array<{ text?: string }> };
+          args?: { clip_id?: string };
+        };
         const parsed = JSON.parse(String(wrapper.result?.content?.[0]?.text)) as {
           clip_id?: string;
           revision?: string;
@@ -1454,7 +1465,8 @@ export function App() {
           diff_summary?: string;
           affected_count?: number;
         };
-        if (parsed.clip_id === undefined || parsed.notes === undefined) throw new Error("结果里没有片段或音符");
+        const clipId = wrapper.args?.clip_id;
+        if (clipId === undefined || parsed.notes === undefined) throw new Error("结果里没有片段或音符");
         /**
          * The tool speaks `pitch` (MIDI parlance), the studio's notes speak `midi` — the first version
          * forgot to translate and wrote notes without a pitch at all (measured: `[null, null, null]`
@@ -1475,8 +1487,8 @@ export function App() {
          * `updateProject` is what keeps an edit that did not happen out of the undo stack.
          */
         const openProject = projectsRef.current.find((project) => project.id === openProjectId);
-        const openTrack = openProject?.tracks.find((track) => track.clips.some((clip) => clip.id === parsed.clip_id));
-        const openClip = openTrack?.clips.find((clip) => clip.id === parsed.clip_id);
+        const openTrack = openProject?.tracks.find((track) => track.clips.some((clip) => clip.id === clipId));
+        const openClip = openTrack?.clips.find((clip) => clip.id === clipId);
         if (openTrack !== undefined && openClip !== undefined && (openClip.notes?.length ?? 0) === 0) {
           notice(
             "音符没改成",
@@ -1489,8 +1501,8 @@ export function App() {
         let stale = false;
         let applied = false;
         updateProjectRef.current((project) => {
-          const track = project.tracks.find((entry) => entry.clips.some((clip) => clip.id === parsed.clip_id));
-          const clip = track?.clips.find((entry) => entry.id === parsed.clip_id);
+          const track = project.tracks.find((entry) => entry.clips.some((clip) => clip.id === clipId));
+          const clip = track?.clips.find((entry) => entry.id === clipId);
           if (clip === undefined) {
             stale = true;
             return project;
@@ -1508,7 +1520,7 @@ export function App() {
                 ? {
                     ...entry,
                     clips: entry.clips.map((item) =>
-                      item.id === parsed.clip_id ? { ...item, notes: translated } : item,
+                      item.id === clipId ? { ...item, notes: translated } : item,
                     ),
                   }
                 : entry,
@@ -1568,7 +1580,7 @@ export function App() {
     const take = async () => {
       try {
         const answer = (await fetch(`/api/agent/media-events?since=${mediaCursor.current}`).then((response) => response.json())) as {
-          events?: Array<{ id: number; server: string; tool: string; ok: boolean; text: string }>;
+          events?: Array<{ id: number; server: string; tool: string; ok: boolean; text: string; args?: Record<string, unknown> }>;
           next?: number;
         };
         if (cancelled || answer.events === undefined) return;
@@ -1585,7 +1597,12 @@ export function App() {
             name: event.tool,
             status: event.ok ? "ok" : "error",
             summary: event.tool,
-            detail: JSON.stringify({ result: { content: [{ text: event.text }] } }),
+            // 和 Codex 工具卡片同一个形状，外加 args：clip_id 这类句柄只存在于调用参数里，
+            // 结果文本不一定回显（regenerate_part 曾因此吸收不到）。
+            detail: JSON.stringify({
+              result: { content: [{ text: event.text }] },
+              ...(event.args === undefined ? {} : { args: event.args }),
+            }),
           });
         }
       } catch {

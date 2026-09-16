@@ -308,9 +308,10 @@ async function callPluginTool(target, rawArguments) {
     const ok = response.ok && typeof payload?.result === "string" && payload.isError !== true;
     const text = typeof payload?.result === "string" ? payload.result : `调用失败（HTTP ${response.status}）：${JSON.stringify(payload).slice(0, 500)}`;
     console.log(`[adapter] ${target.server}.${target.tool} ${ok ? "ok" : "failed"} (${payload?.ms ?? "?"}ms) result=${JSON.stringify(text.slice(0, 200))}`);
-    return { ok, text };
+    // args 一起出去：媒体事件要用它携带 clip_id 这类只存在于调用参数里的句柄。
+    return { ok, text, args };
   } catch (cause) {
-    return { ok: false, text: `调用 ${target.server}.${target.tool} 失败：${cause instanceof Error ? cause.message : String(cause)}` };
+    return { ok: false, text: `调用 ${target.server}.${target.tool} 失败：${cause instanceof Error ? cause.message : String(cause)}`, args: {} };
   }
 }
 
@@ -320,12 +321,15 @@ async function callPluginTool(target, rawArguments) {
  * 这些调用发生在适配器内部，Codex 看不到，所以「生成的东西出现在时间线上」得靠这条通道。
  */
 function noteMediaEvent(entry) {
-  if (!/render_song|render_part|separate_stems|generate_music/.test(entry.tool ?? "")) return;
+  // 「改已存在的东西」的三个工具不产出新轨道，但前端要吸收它们的结果（换片段文件 / 改音符 /
+  // 改结构），而它们需要的 clip_id 只在这次调用的参数里——所以白名单和 args 一起加。
+  if (!/render_song|render_part|regenerate_part|separate_stems|generate_music|transform_notes|arrange/.test(entry.tool ?? "")) return;
   /**
    * 存**完整结果文本**：Studio 用和 Codex 工具卡片同一套解析（路径、bpm、段落、各声部），
-   * 截断过的 preview 只够人看，不够落盘。
+   * 截断过的 preview 只够人看，不够落盘。args 同理：regenerate_part 的吸收靠参数里的 clip_id。
    */
-  MEDIA_EVENTS.push({ id: MEDIA_EVENTS.length + 1, at: Date.now(), server: entry.server, tool: entry.tool, ok: entry.ok, text: entry.resultText ?? "" });
+  const id = (MEDIA_EVENTS[MEDIA_EVENTS.length - 1]?.id ?? 0) + 1;
+  MEDIA_EVENTS.push({ id, at: Date.now(), server: entry.server, tool: entry.tool, ok: entry.ok, text: entry.resultText ?? "", args: entry.args ?? {} });
   if (MEDIA_EVENTS.length > 50) MEDIA_EVENTS.shift();
 }
 
@@ -514,7 +518,7 @@ async function startChatAdapter(provider, credential) {
         for (const call of outcome.toolCalls) {
           const target = nameMap.get(call.name);
           const result = await callPluginTool(target, call.arguments);
-          executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, resultText: result.text });
+          executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, resultText: result.text, args: result.args });
           messagesForRound = [
             ...messagesForRound,
             { role: "assistant", content: null, tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] },
