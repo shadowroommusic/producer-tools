@@ -1,25 +1,28 @@
 /**
- * 悬浮球 = 全 app 的管家（v2：canvas 粒子等离子球）。
+ * 悬浮球 v4：玻璃珠（react-three-fiber）+ 一行输入面板 + 点球即通话。
  *
- * 规格（别自由发挥）：约 180 粒子斐波那契球面 + 慢自转 + 2D 透视投影（见 lib/orb-particles.ts）；
- * 空闲 72px、说话/干活 96px（transform 放大，不引起布局抖动）；中心径向渐变内核半径跟 RMS
- * 走（120ms 平滑）；你说=青蓝向外扩散、它说=青绿向内收、空闲 alpha≈0.15 慢漂移；干活外圈细
- * 进度弧 + 弧头发光点；面板毛玻璃、开合 180ms（scale 0.96→1 + 淡入）；拖动 4px 阈值、拖时 70%
- * 透明不展开；单 canvas 单 rAF、粒子 ≤240；prefers-reduced-motion → 静态发光。
+ * 规格：空闲 56px / 说话 72px（transform，布局零抖动）；形态=细玻璃描边环 + 内部小光核 +
+ * 2-3 颗极小高光绕行（OrbGlass.tsx，fresnel shader）；空闲整体 alpha≈0.35；面板**没有标题、
+ * 没有听话开关**——只有一行输入 + 发送 + 一条细把手；文字说明只进 hover tooltip。
+ * 交互：**点一下球立刻进入通话动态**（listening 动画 + 波形，麦克风经 lib/mic.ts 共享流），
+ * 再点一下 / Esc 挂断回静态；面板输入照旧提交到当前工作区的会话（App 传 onSubmit）。
  *
- * 麦克风走 `lib/mic.ts` 共享流（引用计数），**绝不自己 getUserMedia**。
+ * 架构（用户强调）：干活的不是球——球只是管家/调度：它把话交给**当前工作区**的 agent 会话，
+ * 工具执行、落轨、导出都是那条会话在做；球负责「知道全局 + 派活 + 汇报」。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Canvas } from "@react-three/fiber";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
-import { PALETTES, FluidOrb, SPARK_COUNT } from "../lib/orb-particles";
+import { GlassSphere } from "./OrbGlass";
 
 export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working";
 
 const POSITION_KEY = "shadowroom.orb.position";
-const ORB_SIZE = 120;
-const ACTIVE_SIZE = 150;
+const ORB_SIZE = 56;
+const ACTIVE_SIZE = 72;
 const DRAG_THRESHOLD = 4;
+const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
 function loadPosition(): { x: number; y: number } | null {
   try {
@@ -33,295 +36,6 @@ function loadPosition(): { x: number; y: number } | null {
   }
 }
 
-export function ButlerOrb({
-  mode,
-  progress,
-  draft,
-  onDraftChange,
-  onSubmit,
-  running = false,
-}: {
-  /** 外部指定的模式（通话/智能体在跑时由 App 传）；不传时按话音自动：说话=listening，安静=idle。 */
-  mode?: OrbMode;
-  /** 干活中的进度 0–1（外圈细进度弧走满=完成）。 */
-  progress?: number;
-  draft?: string;
-  onDraftChange?: (next: string) => void;
-  onSubmit?: () => void;
-  running?: boolean;
-}) {
-  const [position, setPosition] = useState(() => loadPosition() ?? defaultPosition());
-  const [dragging, setDragging] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [micOn, setMicOn] = useState(false);
-  const [voiceActive, setVoiceActive] = useState(false);
-  const [localDraft, setLocalDraft] = useState("");
-  const meterRef = useRef<VoiceMeter | null>(null);
-  const latch = useRef(new SpeechLatch(1500));
-  const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const particlesRef = useRef<FluidOrb | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const levelRef = useRef(0);
-  /** 内核半径的 120ms 平滑值。 */
-  const smoothRef = useRef(0);
-  const lastFrameRef = useRef(0);
-  const reducedMotion = useRef(false);
-
-  const value = draft ?? localDraft;
-  const setValue = onDraftChange ?? setLocalDraft;
-  const submit = onSubmit ?? (() => {
-    window.dispatchEvent(new CustomEvent("shadowroom:orb-submit", { detail: { text: localDraft } }));
-    setLocalDraft("");
-  });
-
-  // QA/测试覆盖口：localStorage.qa-orb-force 优先于自动判定（生产环境不会设这个键）。
-  const forced = (typeof window !== "undefined" ? window.localStorage.getItem("qa-orb-force") : null) as OrbMode | null;
-  const effectiveMode: OrbMode = mode ?? forced ?? (micOn && voiceActive ? "listening" : "idle");
-  const showWorking = effectiveMode === "working";
-  const paletteKey = effectiveMode === "listening" ? "listening" : effectiveMode === "speaking" ? "speaking" : "idle";
-  const active = effectiveMode !== "idle";
-
-  // prefers-reduced-motion：静态发光（不自转不漂移不呼吸）。
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const sync = () => {
-      reducedMotion.current = query.matches;
-    };
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
-
-  // 共享麦克风：球开着听话才持有引用；流来了建表。
-  useEffect(() => {
-    if (!micOn) return;
-    let cancelled = false;
-    let detach: (() => void) | null = null;
-    void acquireMicrophone()
-      .then((stream) => {
-        if (cancelled) return;
-        const meter = createVoiceMeter(stream);
-        meterRef.current = meter;
-      })
-      .catch(() => undefined);
-    detach = onMicrophoneChange((stream) => {
-      if (stream === null) {
-        meterRef.current?.stop();
-        meterRef.current = null;
-        levelRef.current = 0;
-      }
-    });
-    return () => {
-      cancelled = true;
-      meterRef.current?.stop();
-      meterRef.current = null;
-      detach?.();
-      releaseMicrophone();
-    };
-  }, [micOn]);
-
-  // 话音表 → levelRef + voiceActive（1.5s 静音回待机），采样率 30fps 足够（不占渲染帧）。
-  useEffect(() => {
-    if (!micOn) {
-      setVoiceActive(false);
-      return;
-    }
-    const id = window.setInterval(() => {
-      const meter = meterRef.current;
-      if (meter === null) return;
-      const level = meter.level();
-      levelRef.current = level;
-      setVoiceActive(latch.current.update(level));
-    }, 33);
-    return () => window.clearInterval(id);
-  }, [micOn]);
-
-  // 单 canvas 单 rAF：粒子 + 内核 + 进度弧全在这一个循环里画。
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (canvas === null) return;
-    const context = canvas.getContext("2d");
-    if (context === null) return;
-    const particles = particlesRef.current ?? (particlesRef.current = new FluidOrb());
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const render = (now: number) => {
-      // P0 防线：canvas API 吃到 NaN/Infinity 会整帧抛错（createRadialGradient: non-finite），
-      // rAF 循环里一抛就是**每帧都抛**，控制台瞬间刷屏、球永久黑掉。所有进 canvas 的值先过
-      // Number.isFinite，洗不掉的输入把本帧降级成「保持上一帧」——宁可静止也不崩。
-      if (!Number.isFinite(now)) return;
-      const size = active ? ACTIVE_SIZE : ORB_SIZE;
-      if (!Number.isFinite(size) || size <= 0) return;
-      if (canvas.width !== size * dpr) {
-        canvas.width = size * dpr;
-        canvas.height = size * dpr;
-      }
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // 内核半径 120ms 平滑：向目标电平指数逼近。
-      const target = Number.isFinite(levelRef.current) ? levelRef.current : 0;
-      const dt = Math.min(64, Math.max(4, Number.isFinite(now - lastFrameRef.current) ? now - lastFrameRef.current : 16));
-      lastFrameRef.current = now;
-      smoothRef.current += (target - smoothRef.current) * Math.min(1, dt / 120);
-      if (!Number.isFinite(smoothRef.current)) smoothRef.current = 0;
-      const palette = PALETTES[paletteKey];
-      particles.step(context, size, {
-        level: smoothRef.current,
-        palette,
-        mode: paletteKey,
-        motion: !reducedMotion.current,
-        time: now / 1000,
-      });
-      // 中心径向渐变内核（白→色），半径跟平滑后的 RMS。non-finite 一律跳过（保上一帧）。
-      const coreRadius = size * (0.10 + smoothRef.current * 0.16);
-      if (Number.isFinite(coreRadius) && coreRadius > 0) {
-        const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, coreRadius);
-        const coreAlpha = Number.isFinite(0.5 + smoothRef.current * 0.4) ? 0.5 + smoothRef.current * 0.4 : 0.5;
-        gradient.addColorStop(0, `rgba(255,255,255,${coreAlpha.toFixed(3)})`);
-        gradient.addColorStop(1, `rgba(${palette.r},${palette.g},${palette.b},0)`);
-        context.fillStyle = gradient;
-        context.beginPath();
-        context.arc(size / 2, size / 2, coreRadius, 0, Math.PI * 2);
-        context.fill();
-      }
-      // 干活：外圈细进度弧 + 弧头发光点。
-      if (showWorking && progress !== undefined && Number.isFinite(progress)) {
-        const clamped = Math.max(0, Math.min(1, progress));
-        context.lineWidth = 2;
-        context.strokeStyle = "rgba(148,163,184,0.25)";
-        context.beginPath();
-        context.arc(size / 2, size / 2, size / 2 - 3, 0, Math.PI * 2);
-        context.stroke();
-        const head = -Math.PI / 2 + clamped * Math.PI * 2;
-        context.strokeStyle = "#38BDF8";
-        context.beginPath();
-        context.arc(size / 2, size / 2, size / 2 - 3, -Math.PI / 2, head);
-        context.stroke();
-        context.fillStyle = "#7DD3FC";
-        context.shadowColor = "#38BDF8";
-        context.shadowBlur = 8;
-        context.beginPath();
-        context.arc(size / 2 + Math.cos(head) * (size / 2 - 3), size / 2 + Math.sin(head) * (size / 2 - 3), 3, 0, Math.PI * 2);
-        context.fill();
-        context.shadowBlur = 0;
-      }
-      rafRef.current = window.requestAnimationFrame(render);
-    };
-    rafRef.current = window.requestAnimationFrame(render);
-    return () => {
-      if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    };
-  }, [active, paletteKey, showWorking, progress]);
-
-  // 拖动：4px 阈值区分点/拖。
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
-    dragRef.current = { startX: event.clientX, startY: event.clientY, originX: position.x, originY: position.y, moved: false };
-  };
-  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (drag === null) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) setDragging(true);
-    if (drag.moved || Math.hypot(dx, dy) > DRAG_THRESHOLD) {
-      drag.moved = true;
-      // 拖动中按视口夹取（不许露出窗外）；松手后 snapToViewport 做 12px 角落吸附。
-      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy));
-    }
-  };
-  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    dragRef.current = null;
-    if ((event.currentTarget as HTMLDivElement).hasPointerCapture(event.pointerId)) {
-      (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
-    }
-    const wasDrag = drag?.moved === true;
-    setDragging(false);
-    if (wasDrag) setPosition((current) => snapToViewport(current));
-    if (!wasDrag) setExpanded((open) => !open);
-  };
-
-  useEffect(() => {
-    if (dragging) return;
-    window.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
-  }, [position, dragging]);
-
-  return (
-    <div
-      className={`sr-orb${expanded ? " sr-orb--expanded" : ""}${dragging ? " sr-orb--dragging" : ""}${active ? " sr-orb--active" : ""}`}
-      data-mode={effectiveMode}
-      style={{ left: position.x, top: position.y }}
-    >
-      <div
-        className="sr-orb-ball"
-        role="button"
-        tabIndex={0}
-        aria-label="管家悬浮球"
-        title="管家：点一下展开，拖到别处不碍事"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") setExpanded((open) => !open);
-        }}
-      >
-        <canvas ref={canvasRef} className="sr-orb-canvas" aria-hidden="true" />
-      </div>
-
-      {expanded && (
-        <div className="sr-orb-panel" onPointerDown={(event) => event.stopPropagation()}>
-          <div className="sr-orb-panel-head">
-            <span className="sr-orb-title">管家</span>
-            <button
-              type="button"
-              className="sr-btn"
-              data-on={micOn || undefined}
-              aria-pressed={micOn}
-              onClick={() => setMicOn((on) => !on)}
-              title="开/关话音监听（共享麦克风：通话和录音不受影响）"
-            >
-              {micOn ? "听话中" : "听话"}
-            </button>
-          </div>
-          <form
-            className="sr-orb-input"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (value.trim() === "" || running) return;
-              submit();
-              setValue("");
-            }}
-          >
-            <input
-              className="sr-input"
-              value={value}
-              placeholder={running ? "管家正在干活…" : "跟管家说一句…"}
-              aria-label="跟管家说一句话"
-              onChange={(event) => setValue(event.target.value)}
-            />
-            <button type="submit" className="sr-btn sr-btn--accent" disabled={value.trim() === "" || running}>
-              发送
-            </button>
-          </form>
-          {onSubmit === undefined && (
-            <p className="sr-orb-hint sr-mono">还没接会话（App 挂载时传 onSubmit 即同右侧对话栏）</p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * 默认落脚点：**屏幕中下方**——水平居中、距底 140px。
- *
- * 用户两次推翻角落：先「别压底部输入条」（抬到 bottom:120px），再「缩放药丸也被盖了」
- * （右下正是 − 100% + 那颗）。居中偏下是视觉重心又不与任何控件重叠；位置只认 {x, y} +
- * 容器尺寸，将来换容器（ADR-018 独立窗口）不用重写。
- */
 /** 视口边界夹取：窗口内留 12px 边距，不许只露半个球。 */
 function clampToViewport(x: number, y: number): { x: number; y: number } {
   const margin = 12;
@@ -331,7 +45,7 @@ function clampToViewport(x: number, y: number): { x: number; y: number } {
   };
 }
 
-/** 松手吸附：离任一边缘不足 48px 时直接贴到该边缘的 12px 边距处。 */
+/** 松手吸附：离任一边缘不足 48px 时贴到该边缘的 12px 边距处；再对受保护控件做保护性退避。 */
 function snapToViewport(pos: { x: number; y: number }): { x: number; y: number } {
   const margin = 12;
   const snapDistance = 48;
@@ -346,9 +60,8 @@ function snapToViewport(pos: { x: number; y: number }): { x: number; y: number }
 }
 
 /**
- * 保护性退避：吸附点若与页面受保护控件（底部输入框、发送、缩放药丸、导入/导出/录音）相交，
- * 沿「远离该控件中心」的方向逐步退让，每步 24px、最多 12 步——用户可拖到任意位置，但松手后
- * 球永远不会停在控件上面。控件清单集中在这一个数组（ADR-018 换容器时同步改这里）。
+ * 保护性退避：吸附点若与受保护控件（新建会话/导入/导出/录音/缩放药丸/底部输入框/发送）相交，
+ * 垂直退、退不动整行扫描，直到无相交——球永不停在控件上。
  */
 function avoidProtected(next: { x: number; y: number }): { x: number; y: number } {
   const selectors = [
@@ -385,17 +98,15 @@ function avoidProtected(next: { x: number; y: number }): { x: number; y: number 
   }
   const awayX = Math.sign(next.x + ORB_SIZE / 2 - (nearest.x + nearest.w / 2)) || -1;
   const awayY = Math.sign(next.y + ORB_SIZE / 2 - (nearest.y + nearest.h / 2)) || -1;
-  // 两阶段退让：先沿 awayY 垂直退（顶/底边界会挡住，那时换水平）；再整行水平扫描——
-  // 右上角实测：垂直被顶后行扫描把球推到输入框右侧的空位（awayX 只决定扫描起点方向）。
   let candidate = { ...next };
+  // 垂直优先退让，顶住后整行水平扫描。
   for (let step = 0; step < 24; step += 1) {
     const moved = clampToViewport(candidate.x, candidate.y + awayY * 24);
-    if (moved.y === candidate.y) break; // 该方向被边界顶住
+    if (moved.y === candidate.y) break;
     candidate = moved;
     if (!hits(candidate)) return candidate;
   }
-  candidate = { ...next };
-  const scanStart = awayX > 0 ? next.x : window.innerWidth - ORB_SIZE - 12 - next.x;
+  const scanStart = awayX > 0 ? next.x : window.innerWidth - ORB_SIZE - 12;
   for (let step = 0; step < 24; step += 1) {
     const moved = clampToViewport(scanStart + (awayX > 0 ? step : -step) * 32, candidate.y);
     if (moved.x === candidate.x) continue;
@@ -406,8 +117,259 @@ function avoidProtected(next: { x: number; y: number }): { x: number; y: number 
 }
 
 function defaultPosition(): { x: number; y: number } {
-  return {
-    x: (window.innerWidth - ORB_SIZE) / 2,
-    y: window.innerHeight - 140 - ORB_SIZE,
-  };
+  // 屏幕中下方：水平居中、距底 140px——不压任何控件（用户定稿，两次迭代结论）。
+  return { x: (window.innerWidth - ORB_SIZE) / 2, y: window.innerHeight - 140 - ORB_SIZE };
 }
+
+export function ButlerOrb({
+  mode,
+  progress,
+  draft,
+  onDraftChange,
+  onSubmit,
+  running = false,
+}: {
+  mode?: OrbMode;
+  progress?: number;
+  draft?: string;
+  onDraftChange?: (next: string) => void;
+  onSubmit?: () => void;
+  running?: boolean;
+}) {
+  const [position, setPosition] = useState(() => loadPosition() ?? defaultPosition());
+  const [dragging, setDragging] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [callOn, setCallOn] = useState(false);
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [localDraft, setLocalDraft] = useState("");
+  const meterRef = useRef<VoiceMeter | null>(null);
+  const latch = useRef(new SpeechLatch(1500));
+  const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const reducedMotion = useRef(false);
+  /** 点球即通话：面板/拖动之外，单击球的语义。 */
+  const [voiceLevel, setVoiceLevel] = useState(0);
+
+  const value = draft ?? localDraft;
+  const setValue = onDraftChange ?? setLocalDraft;
+  const submit = onSubmit ?? (() => {
+    window.dispatchEvent(new CustomEvent("shadowroom:orb-submit", { detail: { text: localDraft } }));
+    setLocalDraft("");
+  });
+
+  const forced = (typeof window !== "undefined" ? window.localStorage.getItem("qa-orb-force") : null) as OrbMode | null;
+  const effectiveMode: OrbMode =
+    mode ?? forced ?? (running ? "working" : callOn ? (voiceActive ? "listening" : "listening") : "idle");
+  const active = effectiveMode !== "idle";
+
+  // prefers-reduced-motion。
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => {
+      reducedMotion.current = query.matches;
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  // 点球即通话：通话开着才持有共享麦克风引用；RMS 喂给玻璃珠。
+  useEffect(() => {
+    if (!callOn) return;
+    let cancelled = false;
+    let detach: (() => void) | null = null;
+    void acquireMicrophone()
+      .then((stream) => {
+        if (cancelled) return;
+        const meter = createVoiceMeter(stream);
+        meterRef.current = meter;
+      })
+      .catch(() => undefined);
+    detach = onMicrophoneChange((stream) => {
+      if (stream === null) {
+        meterRef.current?.stop();
+        meterRef.current = null;
+      }
+    });
+    return () => {
+      cancelled = true;
+      meterRef.current?.stop();
+      meterRef.current = null;
+      detach?.();
+      releaseMicrophone();
+    };
+  }, [callOn]);
+
+  useEffect(() => {
+    if (!callOn) {
+      setVoiceActive(false);
+      setVoiceLevel(0);
+      return;
+    }
+    const id = window.setInterval(() => {
+      const meter = meterRef.current;
+      if (meter === null) return;
+      const level = FINITE(meter.level(), 0);
+      setVoiceLevel(level);
+      setVoiceActive(latch.current.update(level));
+    }, 33);
+    return () => window.clearInterval(id);
+  }, [callOn]);
+
+  const toggleCall = useCallback(() => setCallOn((on) => !on), []);
+
+  // Esc 挂断。
+  useEffect(() => {
+    if (!callOn) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCallOn(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [callOn]);
+
+  // 拖动。
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+    dragRef.current = { startX: event.clientX, startY: event.clientY, originX: position.x, originY: position.y, moved: false };
+  };
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (drag === null) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) setDragging(true);
+    if (drag.moved || Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      drag.moved = true;
+      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy));
+    }
+  };
+  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if ((event.currentTarget as HTMLDivElement).hasPointerCapture(event.pointerId)) {
+      (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
+    }
+    const wasDrag = drag?.moved === true;
+    setDragging(false);
+    if (wasDrag) setPosition(snapToViewport(position));
+    if (!wasDrag && !expanded) toggleCall();
+    else if (!wasDrag) setExpanded(false);
+  };
+
+  useEffect(() => {
+    if (dragging) return;
+    window.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+  }, [position, dragging]);
+
+  // 单 rAF：把 RMS 平滑进 level ref，交给 r3f 的 useFrame（玻璃珠渲染在 Canvas 内部循环）。
+  const levelRef = useRef(0);
+  useEffect(() => {
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = FINITE(now - last, 16) / 120;
+      last = now;
+      const target = effectiveMode === "listening" ? voiceLevel : 0;
+      levelRef.current += (FINITE(target, 0) - levelRef.current) * Math.min(1, dt);
+      rafRef.current = window.requestAnimationFrame(tick);
+    };
+    rafRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
+    };
+  }, [effectiveMode, voiceLevel]);
+
+  const size = active ? ACTIVE_SIZE : ORB_SIZE;
+  const glassColour = effectiveMode === "speaking" ? "#34d399" : "#38bdf8";
+
+  return (
+    <div
+      className={`sr-orb${expanded ? " sr-orb--expanded" : ""}${dragging ? " sr-orb--dragging" : ""}${active ? " sr-orb--active" : ""}`}
+      data-mode={effectiveMode}
+      style={{ left: position.x, top: position.y }}
+    >
+      <div
+        className="sr-orb-ball"
+        role="button"
+        tabIndex={0}
+        aria-label={callOn ? "结束通话" : "开始通话"}
+        title={callOn ? "通话中：再点一下或按 Esc 挂断" : "点一下开始说话（共享麦克风）· 拖动移动 · 双击打开面板"}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") setExpanded((open) => !open);
+        }}
+      >
+        <Canvas
+          className="sr-orb-canvas"
+          dpr={[1, 2]}
+          gl={{ alpha: true, antialias: true }}
+          style={{ pointerEvents: "none" }}
+        >
+          <GlassSphere
+            level={levelRef.current}
+            listening={effectiveMode === "listening" || effectiveMode === "speaking"}
+            reducedMotion={reducedMotion.current}
+            colour={glassColour}
+          />
+        </Canvas>
+        {showProgress(effectiveMode, progress)}
+      </div>
+
+      {expanded && (
+        <div className="sr-orb-panel" onPointerDown={(event) => event.stopPropagation()}>
+          {/* 细把手：无文字 */}
+          <span className="sr-orb-handle" aria-hidden="true" />
+          <form
+            className="sr-orb-input"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (value.trim() === "" || running) return;
+              submit();
+              setValue("");
+            }}
+          >
+            <input
+              className="sr-input"
+              value={value}
+              placeholder={running ? "管家正在干活…" : "跟管家说一句…"}
+              aria-label="跟管家说一句话"
+              onChange={(event) => setValue(event.target.value)}
+            />
+            <button type="submit" className="sr-btn sr-btn--accent" disabled={value.trim() === "" || running}>
+              发送
+            </button>
+          </form>
+          {onSubmit === undefined && (
+            <p className="sr-orb-hint sr-mono">还没接会话（App 挂载时传 onSubmit 即同右侧对话栏）</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function showProgress(mode: OrbMode, progress: number | undefined) {
+  if (mode !== "working" || progress === undefined || !Number.isFinite(progress)) return null;
+  const clamped = Math.max(0, Math.min(1, progress));
+  return (
+    <svg className="sr-orb-progress" viewBox="0 0 100 100" aria-hidden="true">
+      <circle cx="50" cy="50" r="47" fill="none" stroke="rgba(148,163,184,0.3)" strokeWidth="2" />
+      <circle
+        cx="50"
+        cy="50"
+        r="47"
+        fill="none"
+        stroke="#38bdf8"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeDasharray={`${clamped * 2 * Math.PI * 47} ${2 * Math.PI * 47}`}
+        transform="rotate(-90 50 50)"
+      />
+    </svg>
+  );
+}
+

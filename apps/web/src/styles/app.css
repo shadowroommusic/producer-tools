@@ -3412,16 +3412,16 @@
 .sr-orb {
   position: fixed;
   z-index: 60;
-  /* 球体始终按 120px 布局占位；说话/干活时用 transform 放大到 150px，不引起布局抖动。 */
-  width: 120px;
-  height: 120px;
+  /* 球体始终按 56px 布局占位；说话时 transform 放大到 72px，不引起布局抖动。 */
+  width: 56px;
+  height: 56px;
   user-select: none;
   touch-action: none;
   transform-origin: center;
 }
 
 .sr-orb--active {
-  transform: scale(1.25); /* 120 → 150 */
+  transform: scale(1.2857); /* 56 → 72 */
 }
 
 .sr-orb--dragging {
@@ -3430,8 +3430,8 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   cursor: grab;
 }
@@ -3442,9 +3442,26 @@
 
 .sr-orb-canvas {
   position: absolute;
-  inset: -20px; /* 外发光与脉冲波纹会画出球体之外，画布留边 */
-  width: 160px;
-  height: 160px;
+  inset: -12px; /* fresnel 边缘光会画出球体边界，画布留边 */
+  width: 80px;
+  height: 80px;
+  pointer-events: none;
+}
+/* 细把手：面板顶部一条 24×3 的圆角短线，无文字。 */
+.sr-orb-handle {
+  display: block;
+  width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sr-label-tertiary) 55%, transparent);
+  margin: 0 auto 6px;
+}
+/* 进度环（SVG）盖在球上。 */
+.sr-orb-progress {
+  position: absolute;
+  inset: -2px;
+  width: calc(100% + 4px);
+  height: calc(100% + 4px);
   pointer-events: none;
 }
 /* 面板展开时与 active 缩放并存。 */
