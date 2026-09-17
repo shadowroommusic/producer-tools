@@ -1599,6 +1599,8 @@ export function App() {
    * 相同的吸收路径**——不另写一套解析，避免两条路慢慢跑偏。
    */
   const mediaCursor = useRef(0);
+  /** 当前工程**本次打开**的时刻（ms）：早于它的媒体事件属于历史/别的工程，不吸收只推游标。 */
+  const projectOpenedAt = useRef(0);
   /**
    * 对齐游标：桥里可能还躺着上一次会话的事件，重放它们会让一个刚打开的工程凭空多出几轨。
    * 对齐**只在页面刚打开时做一次**（挂在下面那个 effect 上），并且必须一次就成功——如果失败，
@@ -1620,14 +1622,22 @@ export function App() {
     }).catch(() => undefined);
   }, [mainView, openProjectId]);
 
+  /**
+   * 打开页面/打开工程那一刻，把游标**对齐到最新**：跳过桥里残留的全部历史事件。
+   *
+   * P0 回归的教训：只解耦轮询不保留这道防线，页面加载就会把别的工程/别的会话渲染过的
+   * 事件倒进当前工程（实测 8 秒冒出 8 条轨，其中 9 条是历史残留）。对齐 = 「此刻之前的一切
+   * 都与我无关」；此后轮询只吸收**新产生**的事件。
+   */
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const answer = (await fetch("/api/agent/media-events?since=0").then((response) => response.json())) as { next?: number };
+        const answer = (await fetch("/api/agent/media-events?since=0").then((response) => response.json())) as { events?: Array<{ id: number }>; next?: number };
         if (cancelled || typeof answer.next !== "number") return;
         mediaCursor.current = Math.max(mediaCursor.current, answer.next);
         mediaCursorReady.current = true;
+        projectOpenedAt.current = Date.now();
       } catch {
         /* 桥还没起来：交给轮询那条路，它会先对齐、再立刻取一次 */
       }
@@ -1644,7 +1654,7 @@ export function App() {
     const take = async () => {
       try {
         const answer = (await fetch(`/api/agent/media-events?since=${mediaCursor.current}`).then((response) => response.json())) as {
-          events?: Array<{ id: number; server: string; tool: string; ok: boolean; text: string; args?: Record<string, unknown> }>;
+          events?: Array<{ id: number; at?: number; server: string; tool: string; ok: boolean; text: string; args?: Record<string, unknown> }>;
           next?: number;
         };
         if (cancelled || answer.events === undefined) return;
@@ -1655,6 +1665,10 @@ export function App() {
         }
         for (const event of answer.events) {
           mediaCursor.current = Math.max(mediaCursor.current, event.id);
+          // 作用域（P0 回归第二道闸）：只吸收**本工程本次打开之后**发生的事件。历史/别处的
+          // 事件跳过吸收但照常推进游标——不推进会每轮重试同一批（实测把旧轨倒进新工程）。
+          const eventAt = (event as { at?: number }).at ?? 0;
+          if (projectOpenedAt.current > 0 && eventAt > 0 && eventAt < projectOpenedAt.current) continue;
           absorbRef.current({
             id: `media-${event.id}`,
             server: event.server,

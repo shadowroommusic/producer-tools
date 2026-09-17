@@ -245,7 +245,7 @@ export function Composer({
             <button
               type="button"
               className={busy ? "sr-send sr-send--stop" : "sr-send"}
-              aria-label={busy ? "停止" : "发送"}
+              aria-label={busy ? "停止这一轮" : "发送"}
               title={busy ? "停止这一轮" : "发送"}
               disabled={busy ? onStop === undefined : !canSend}
               onClick={busy ? onStop : onSubmit}
