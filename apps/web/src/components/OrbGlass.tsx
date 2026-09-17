@@ -1,135 +1,154 @@
 /**
- * 球 v4 的 3D 玻璃珠（react-three-fiber + 自写 fresnel shader）。
+ * 管家球的绘制（canvas 2D，照着新版 Siri 那颗球抄）。
  *
- * 规格：细玻璃描边环 + 内部小光核（白→青蓝径向）+ 2-3 颗极小高光粒子缓慢绕行；
- * 空闲整体 alpha≈0.35、不抢眼；说话亮 + 粒子外扩。reduced-motion 时停转静态。
- * 零 console error：所有 uniform 数值先过 Number.isFinite（P0 教训）。
+ * 为什么不用 three.js：用户要的是「一眼就看见、像 Siri 那样有体积的发光球」，不是一颗小玻璃珠。
+ * 2D 画布足够做出 Siri 的关键特征，而且没有依赖、不会 NaN 崩：
+ *   ① 柔和外发光（青蓝→透明）② 球体=白核偏左上→青蓝→蓝紫→透明的多段径向渐变（虹彩感来源）
+ *   ③ 边缘不是正圆：半径按 3 条不同频率的正弦随时间起伏（有机流体边）④ 边缘光 + 左上镜面高光
+ *   ⑤ 6 颗高光粒子沿球面绕行（越靠后越暗越小）⑥ 你说=青蓝外扩波纹，它说=青绿向内容
+ * 所有进 canvas 的数值先过 Number.isFinite（P0 教训：NaN 会让整块画布炸掉）。
  */
-import { useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
-import * as THREE from "three";
+import { useEffect, useRef } from "react";
 
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
-/** fresnel 玻璃材质：视线越掠射边缘越亮，中心透出内核。 */
-const glassVertex = /* glsl */ `
-  varying vec3 vNormal;
-  varying vec3 vView;
-  void main() {
-    vNormal = normalize(normalMatrix * normal);
-    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    vView = normalize(-mvPosition.xyz);
-    gl_Position = projectionMatrix * mvPosition;
-  }
-`;
-const glassFragment = /* glsl */ `
-  varying vec3 vNormal;
-  varying vec3 vView;
-  uniform vec3 uColor;
-  uniform float uAlpha;
-  uniform float uLevel;
-  uniform float uTime;
-  void main() {
-    float fresnel = pow(1.0 - max(dot(normalize(vNormal), normalize(vView)), 0.0), 2.6);
-    float pulse = 0.9 + 0.1 * sin(uTime * 1.2);
-    vec3 color = uColor * (0.8 + uLevel * 0.6);
-    float alpha = clamp(uAlpha * (0.35 + fresnel * 1.5) * pulse + uLevel * 0.25, 0.0, 1.0);
-    gl_FragColor = vec4(color + vec3(fresnel * 0.35), alpha);
-  }
-`;
-
 export function GlassSphere({
+  size,
+  mode,
   level,
-  listening,
   reducedMotion,
-  colour,
 }: {
+  size: number;
+  /** "idle" | "listening"（你说）| "speaking"（它说）| "working" */
+  mode: string;
+  /** 麦克风电平 0–1（上层每帧更新，这里平滑后使用） */
   level: number;
-  listening: boolean;
-  reducedMotion: boolean;
-  colour: string;
+  reducedMotion?: boolean;
 }) {
-  const material = useRef<THREE.ShaderMaterial>(null);
-  const sparksRef = useRef<THREE.Group>(null);
-  const uniforms = useMemo(
-    () => ({
-      uColor: { value: new THREE.Color(colour) },
-      uAlpha: { value: 0.35 },
-      uLevel: { value: 0 },
-      uTime: { value: 0 },
-    }),
-    [],
-  );
-  const sparks = useMemo(
-    () => [
-      { tilt: 0.3, speed: 0.5, radius: 1.25, size: 0.05 },
-      { tilt: -0.5, speed: -0.35, radius: 1.32, size: 0.04 },
-      { tilt: 0.9, speed: 0.28, radius: 1.4, size: 0.035 },
-    ],
-    [],
-  );
-  const sparkRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** 动画脱离 React 重渲染：每帧从 ref 读最新值。 */
+  const state = useRef({ mode, level, reducedMotion: reducedMotion === true });
+  state.current = { mode, level, reducedMotion: reducedMotion === true };
 
-  useFrame((state, delta) => {
-    const safeDelta = FINITE(delta, 0.016);
-    const t = state.clock.elapsedTime;
-    if (material.current !== null) {
-      material.current.uniforms.uTime.value = FINITE(t, 0);
-      material.current.uniforms.uLevel.value = FINITE(level, 0);
-      material.current.uniforms.uAlpha.value = listening ? 0.75 : 0.35;
-      material.current.uniforms.uColor.value.set(colour);
-    }
-    // 玻璃珠慢自转；reduced-motion 停。
-    if (!reducedMotion) {
-      if (sparksRef.current !== null) sparksRef.current.rotation.y += safeDelta * 0.4;
-      for (const [index, spark] of sparks.entries()) {
-        const mesh = sparkRefs.current[index];
-        if (mesh === null || mesh === undefined) continue;
-        const angle = t * spark.speed + index * 2.1;
-        const x = Math.cos(angle) * spark.radius;
-        const z = Math.sin(angle) * spark.radius;
-        mesh.position.set(FINITE(x, 1), FINITE(Math.sin(angle * 0.7 + index) * 0.35, 0), FINITE(z, 1));
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    const ctx = canvas.getContext("2d");
+    if (ctx === null) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const px = FINITE(size, 120) * dpr;
+    canvas.width = Math.round(px);
+    canvas.height = Math.round(px);
+    let frame = 0;
+    let smoothed = 0;
+    const draw = (now: number) => {
+      frame = requestAnimationFrame(draw);
+      const t = FINITE(now / 1000, 0);
+      const current = state.current.mode;
+      const still = state.current.reducedMotion;
+      const r = px / 2;
+      const cx = r;
+      const cy = r;
+      smoothed += (Math.max(0, Math.min(1, FINITE(state.current.level, 0))) - smoothed) * 0.18;
+      const level = smoothed;
+      const speaking = current === "speaking";
+      const active = current !== "idle";
+      const hue = speaking ? 158 : 216;
+      const alphaBody = active ? 0.95 : 0.72;
+      if (!Number.isFinite(px) || px <= 0) return;
+
+      ctx.clearRect(0, 0, px, px);
+
+      // ① 外发光
+      const halo = ctx.createRadialGradient(cx, cy, r * 0.32, cx, cy, r);
+      halo.addColorStop(0, `hsla(${hue}, 100%, 66%, ${0.32 + level * 0.26})`);
+      halo.addColorStop(1, `hsla(${hue}, 100%, 60%, 0)`);
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // ② 有机流体边
+      const wobble = (angle: number): number => {
+        if (still) return 0;
+        const k = level * 0.07 + 0.035;
+        return Math.sin(angle * 3 + t * 0.9) * k + Math.sin(angle * 5 - t * 0.6) * k * 0.6;
+      };
+      const bodyR = r * (0.84 + level * 0.05);
+      const path = new Path2D();
+      for (let i = 0; i <= 96; i += 1) {
+        const angle = (i / 96) * Math.PI * 2;
+        const radius = bodyR * (1 + wobble(angle));
+        const x = cx + Math.cos(angle) * radius;
+        const y = cy + Math.sin(angle) * radius;
+        if (i === 0) path.moveTo(x, y);
+        else path.lineTo(x, y);
       }
-    }
-  });
+      path.closePath();
+
+      // ③ 球体（虹彩）
+      const core = ctx.createRadialGradient(cx - r * 0.26, cy - r * 0.3, r * 0.03, cx, cy, bodyR * 1.05);
+      core.addColorStop(0, `hsla(${hue}, 100%, 98%, ${alphaBody})`);
+      core.addColorStop(0.22, `hsla(${hue}, 100%, 80%, ${alphaBody})`);
+      core.addColorStop(0.55, `hsla(${hue + 24}, 92%, 62%, ${alphaBody * 0.85})`);
+      core.addColorStop(0.82, `hsla(${hue + 60}, 88%, 58%, ${alphaBody * 0.45})`);
+      core.addColorStop(1, `hsla(${hue + 80}, 90%, 60%, 0)`);
+      ctx.fillStyle = core;
+      ctx.fill(path);
+
+      // ④ 边缘光 + 镜面高光
+      ctx.save();
+      ctx.clip(path);
+      const rim = ctx.createRadialGradient(cx, cy, bodyR * 0.7, cx, cy, bodyR);
+      rim.addColorStop(0, "rgba(255,255,255,0)");
+      rim.addColorStop(1, `hsla(${hue + 10}, 100%, 90%, ${0.6 + level * 0.35})`);
+      ctx.fillStyle = rim;
+      ctx.fillRect(0, 0, px, px);
+      const spec = ctx.createRadialGradient(cx - r * 0.34, cy - r * 0.38, 0, cx - r * 0.34, cy - r * 0.38, r * 0.34);
+      spec.addColorStop(0, "rgba(255,255,255,0.9)");
+      spec.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = spec;
+      ctx.fillRect(0, 0, px, px);
+      ctx.restore();
+
+      // ⑤ 绕行火花
+      if (!still) {
+        for (let i = 0; i < 6; i += 1) {
+          const phase = t * 0.6 + (i / 6) * Math.PI * 2;
+          const depth = Math.cos(phase);
+          const radius = bodyR * 1.06;
+          const x = cx + Math.cos(phase) * radius;
+          const y = cy + Math.sin(phase * 0.9) * radius * 0.86;
+          const scale = 0.5 + (depth + 1) * 0.35;
+          ctx.beginPath();
+          ctx.arc(x, y, Math.max(0.8, r * 0.04 * scale), 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(${hue + 10}, 100%, 93%, ${0.35 + (depth + 1) * 0.3})`;
+          ctx.fill();
+        }
+      }
+
+      // ⑥ 状态波纹
+      if (active && !still) {
+        for (let i = 0; i < 2; i += 1) {
+          const phase = (t * (speaking ? -0.5 : 0.5) + i * 0.5) % 1;
+          const ringR = speaking ? bodyR * (0.92 - phase * 0.36) : bodyR * (0.86 + phase * 0.4);
+          ctx.beginPath();
+          ctx.arc(cx, cy, Math.max(1, ringR), 0, Math.PI * 2);
+          ctx.strokeStyle = `hsla(${hue}, 100%, 80%, ${Math.max(0, 0.38 * (1 - phase))})`;
+          ctx.lineWidth = Math.max(1, r * 0.02);
+          ctx.stroke();
+        }
+      }
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [size]);
 
   return (
-    <group>
-      {/* 玻璃壳 */}
-      <mesh>
-        <sphereGeometry args={[1, 48, 48]} />
-        <shaderMaterial
-          ref={material}
-          vertexShader={glassVertex}
-          fragmentShader={glassFragment}
-          uniforms={uniforms}
-          transparent
-          depthWrite={false}
-        />
-      </mesh>
-      {/* 内部小光核：白→青蓝径向渐变的 sprite 感小球 */}
-      <mesh position={[-0.25, 0.28, 0.35]}>
-        <sphereGeometry args={[0.34, 24, 24]} />
-        <meshBasicMaterial color="#ffffff" transparent opacity={listening ? 0.85 : 0.5} />
-      </mesh>
-      <mesh position={[-0.25, 0.28, 0.34]}>
-        <sphereGeometry args={[0.5, 24, 24]} />
-        <meshBasicMaterial color={colour} transparent opacity={listening ? 0.35 : 0.22} depthWrite={false} />
-      </mesh>
-      {/* 2-3 颗绕行高光粒子 */}
-      <group ref={sparksRef}>
-        {sparks.map((spark, index) => (
-          <mesh
-            key={index}
-            ref={(mesh) => {
-              sparkRefs.current[index] = mesh;
-            }}
-          >
-            <sphereGeometry args={[spark.size, 12, 12]} />
-            <meshBasicMaterial color="#e0f2fe" transparent opacity={0.9} />
-          </mesh>
-        ))}
-      </group>
-    </group>
+    <canvas
+      ref={canvasRef}
+      className="sr-orb-canvas"
+      style={{ width: size, height: size, pointerEvents: "none" }}
+    />
   );
 }

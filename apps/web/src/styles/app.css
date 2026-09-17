@@ -3185,8 +3185,10 @@
 .sr-orb {
   position: fixed;
   z-index: 60;
-  width: 56px;
-  height: 56px;
+  /* 尺寸跟着 ButlerOrb 的 ORB_SIZE/ACTIVE_SIZE 走（120 空闲 / 150 说话）；
+     用户两次否掉小尺寸，这里不再是那个 56px 的小点。 */
+  width: 120px;
+  height: 120px;
   user-select: none;
   touch-action: none;
 }
@@ -3197,8 +3199,8 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
   cursor: grab;
 }
@@ -3430,8 +3432,8 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
   cursor: grab;
 }
@@ -3540,4 +3542,24 @@
   margin: 0;
   font-size: 11px;
   opacity: 0.6;
+}
+
+/*
+  管家球尺寸覆盖（放在最后，确保生效）：容器必须和 ButlerOrb 的 ORB_SIZE/ACTIVE_SIZE 一致
+  （120 空闲 / 150 说话/干活）。之前容器还是 56px，而 canvas 是 120px —— 结果画布溢出容器、
+  位置夹取也算错，看起来就是"一个小点"（用户两次否掉的原因之一）。
+*/
+.sr-orb {
+  width: 120px;
+  height: 120px;
+}
+
+.sr-orb--active {
+  width: 150px;
+  height: 150px;
+}
+
+.sr-orb-ball {
+  width: inherit;
+  height: inherit;
 }

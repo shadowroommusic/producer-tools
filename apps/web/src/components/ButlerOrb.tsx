@@ -11,7 +11,6 @@
  * 工具执行、落轨、导出都是那条会话在做；球负责「知道全局 + 派活 + 汇报」。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Canvas } from "@react-three/fiber";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
 import { GlassSphere } from "./OrbGlass";
@@ -19,8 +18,12 @@ import { GlassSphere } from "./OrbGlass";
 export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working";
 
 const POSITION_KEY = "shadowroom.orb.position";
-const ORB_SIZE = 56;
-const ACTIVE_SIZE = 72;
+/**
+ * 尺寸：用户两次否掉小尺寸（"这么小给谁看呢""太小"），定 **120px 空闲 / 150px 说话**——
+ * 像 Siri 那颗球一样，一眼就能看见，但默认待机时仍比说话时淡、不抢视线。
+ */
+const ORB_SIZE = 120;
+const ACTIVE_SIZE = 150;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
@@ -303,19 +306,8 @@ export function ButlerOrb({
           if (event.key === "Enter" || event.key === " ") setExpanded((open) => !open);
         }}
       >
-        <Canvas
-          className="sr-orb-canvas"
-          dpr={[1, 2]}
-          gl={{ alpha: true, antialias: true }}
-          style={{ pointerEvents: "none" }}
-        >
-          <GlassSphere
-            level={levelRef.current}
-            listening={effectiveMode === "listening" || effectiveMode === "speaking"}
-            reducedMotion={reducedMotion.current}
-            colour={glassColour}
-          />
-        </Canvas>
+        {/* canvas 2D 的 Siri 式发光球（无 3D 依赖、不会 NaN 崩；尺寸 120/150）。 */}
+        <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} reducedMotion={reducedMotion.current} />
         {showProgress(effectiveMode, progress)}
       </div>
 
@@ -372,4 +364,3 @@ function showProgress(mode: OrbMode, progress: number | undefined) {
     </svg>
   );
 }
-
