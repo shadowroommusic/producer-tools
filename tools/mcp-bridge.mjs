@@ -136,6 +136,16 @@ const REGISTRY = [
     description: "Event ledger behind the floating orb: receipts from every workspace, a situation report, and focus changes",
   },
   {
+    /**
+     * 第 9 个插件：本地曲目库（指纹增量扫描 + BPM/调性/能量的索引）。
+     * 文件不动，只建索引；库是唯一真相，UI 与 agent 都从这里查。
+     */
+    id: "library",
+    repo: "library",
+    label: "曲目库",
+    description: "Local track index: fingerprint-incremental scanning, BPM/key/energy metadata, crates",
+  },
+  {
     id: "grabber",
     repo: "ShadowMusicGrabber",
     label: "音乐抓取转码",

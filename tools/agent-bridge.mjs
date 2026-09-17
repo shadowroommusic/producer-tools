@@ -699,6 +699,7 @@ const PLUGIN_REPOS = [
    */
   "soundfont-renderer",
   "steward",
+  "library",
   "ShadowMusicGrabber",
 ];
 
