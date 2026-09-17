@@ -12,13 +12,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
-import { PALETTES, FluidOrb } from "../lib/orb-particles";
+import { PALETTES, FluidOrb, SPARK_COUNT } from "../lib/orb-particles";
 
 export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working";
 
 const POSITION_KEY = "shadowroom.orb.position";
-const ORB_SIZE = 88;
-const ACTIVE_SIZE = 112;
+const ORB_SIZE = 120;
+const ACTIVE_SIZE = 150;
 const DRAG_THRESHOLD = 4;
 
 function loadPosition(): { x: number; y: number } | null {
@@ -316,7 +316,7 @@ export function ButlerOrb({
   );
 }
 
-/** 默认落脚点：右下角，离边 24px——绝不遮导入/导出/BPM（它们在顶部走带区）。 */
+/** 默认落脚点：右下、**抬到输入条上方**（bottom:120px / right:24px）——用户反馈不能压底部输入框和发送按钮。 */
 function defaultPosition(): { x: number; y: number } {
-  return { x: window.innerWidth - ORB_SIZE - 24, y: window.innerHeight - ORB_SIZE - 24 };
+  return { x: window.innerWidth - ORB_SIZE - 24, y: window.innerHeight - 120 - ORB_SIZE };
 }

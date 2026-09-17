@@ -3412,16 +3412,16 @@
 .sr-orb {
   position: fixed;
   z-index: 60;
-  /* 球体始终按 88px 布局占位；说话/干活时用 transform 放大到 112px，不引起布局抖动。 */
-  width: 88px;
-  height: 88px;
+  /* 球体始终按 120px 布局占位；说话/干活时用 transform 放大到 150px，不引起布局抖动。 */
+  width: 120px;
+  height: 120px;
   user-select: none;
   touch-action: none;
   transform-origin: center;
 }
 
 .sr-orb--active {
-  transform: scale(1.2727); /* 88 → 112 */
+  transform: scale(1.25); /* 120 → 150 */
 }
 
 .sr-orb--dragging {
@@ -3430,8 +3430,8 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 88px;
-  height: 88px;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
   cursor: grab;
 }
@@ -3442,10 +3442,17 @@
 
 .sr-orb-canvas {
   position: absolute;
-  inset: -14px; /* 脉冲波纹会画出球体之外，画布留边 */
-  width: 116px;
-  height: 116px;
+  inset: -20px; /* 外发光与脉冲波纹会画出球体之外，画布留边 */
+  width: 160px;
+  height: 160px;
   pointer-events: none;
+}
+/* 面板展开时与 active 缩放并存。 */
+.sr-orb--expanded {
+  transform: translateY(-140px);
+}
+.sr-orb--expanded.sr-orb--active {
+  transform: translateY(-140px) scale(1.25);
 }
 /* 面板出现时球上移到面板上方（规格 4）。 */
 .sr-orb--expanded {

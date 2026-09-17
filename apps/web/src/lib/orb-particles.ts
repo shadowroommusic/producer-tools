@@ -1,105 +1,108 @@
 /**
- * 悬浮球 v2.1 的渲染内核：**有体积的流体球**（Siri 那种），不是点云。
+ * 悬浮球 v3 的渲染内核：有深度、流体边的发光球。
  *
- * 规格映射：
- * - 球体 = 多层径向渐变叠加（白核 → 主色 → 透明）+ 一层**缓慢漂移的 fbm 噪声纹理**（价值噪声
- *   3 octave，预烘焙到 128px 离屏 canvas，每帧只做平移/旋转混合——热路径零逐像素计算）；
- * - 粒子只做**边缘细密火花**（≈160 粒贴在球面，随 RMS 微微外扩），**不是散开的点云**；
- * - 颜色语义：空闲=极淡青蓝玻璃（呼吸）；你说=青蓝向外脉冲波纹；它说=青绿向内收。
+ * v3 规格：
+ * - **流体边**：球缘按 fbm 噪声轻微位移（有机起伏，不是完美正圆）——把球面拆成 120 段折线，
+ *   每段的半径乘 fbm（角度 + 时间），路径闭合填充渐变；
+ * - **内核**：多段径向渐变 + 偏移高光（光从左上打，右下暗）→ 3D 体积感；
+ * - **外发光**：球体先以低 alpha 画一个更大的柔光圆（径向渐变到透明），让球「坐」在界面里；
+ * - **粒子**：240 粒在球体外侧**三维绕行**（真实 3D 坐标绕 Y 轴 + 倾斜轴，透视投影；远的暗而小、
+ *   近的亮而大），RMS 驱动外扩幅度；
+ * - 颜色语义不变：你说=青蓝向外加速+中心扩散波纹；它说=青绿向内收+青转绿渐变；空闲=呼吸玻璃。
  *
- * 硬约束：单实例单 rAF（ButlerOrb 驱动 `step()`）；数值类型、热路径零对象分配；
- * `prefers-reduced-motion` 时 ButlerOrb 不推进时间——只画一帧静态发光。所有进 canvas 的值
- * 先过 Number.isFinite（P0 的教训）。
+ * 硬约束：单实例单 rAF；数值热路径零对象分配；进 canvas 的值全部先过 Number.isFinite（P0）；
+ * `prefers-reduced-motion` 时时间不推进——静态发光。
  */
 
 export type OrbPalette = { r: number; g: number; b: number };
 
 export const PALETTES: Record<"idle" | "listening" | "speaking", OrbPalette> = {
-  idle: { r: 56, g: 189, b: 248 }, // 青蓝玻璃
+  idle: { r: 56, g: 189, b: 248 },
   listening: { r: 0x38, g: 0xbd, b: 0xf8 },
   speaking: { r: 0x34, g: 0xd3, b: 0x99 },
 };
 
-export const SPARK_COUNT = 160;
-const MAX_SPARKS = 200;
-const NOISE_SIZE = 128;
+export const SPARK_COUNT = 240;
+const MAX_SPARKS = 260;
+const RIM_SEGMENTS = 120;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
-/** 价值噪声（网格插值），fbm 叠 3 octave——烘焙用，不在热路径。 */
-function valueNoise(size: number, cellSize: number, seed: number): Float32Array {
-  const cells = Math.ceil(size / cellSize) + 2;
-  const random = new Float32Array(cells * cells);
-  let state = seed;
-  for (let index = 0; index < random.length; index += 1) {
-    state = (state * 1664525 + 1013904223) % 4294967296;
-    random[index] = state / 4294967296;
+/** 价值噪声 + 3 octave fbm，按 (角度, 时间) 采样——流体边的位移场。烘焙三张网格后插值。 */
+class FbmField {
+  private readonly size = 256;
+  private readonly layers: Float32Array[] = [];
+
+  constructor() {
+    for (const cells of [8, 16, 32]) this.layers.push(this.valueNoise(cells));
   }
-  const field = new Float32Array(size * size);
-  const smooth = (t: number) => t * t * (3 - 2 * t);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const gx = x / cellSize;
-      const gy = y / cellSize;
-      const x0 = Math.floor(gx);
-      const y0 = Math.floor(gy);
-      const tx = smooth(gx - x0);
-      const ty = smooth(gy - y0);
-      const a = random[y0 * cells + x0];
-      const b = random[y0 * cells + x0 + 1];
-      const c = random[(y0 + 1) * cells + x0];
-      const d = random[(y0 + 1) * cells + x0 + 1];
-      field[y * size + x] = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+
+  private valueNoise(cells: number): Float32Array {
+    const random = new Float32Array(cells * cells);
+    let state = cells * 7919;
+    for (let index = 0; index < random.length; index += 1) {
+      state = (state * 1664525 + 1013904223) % 4294967296;
+      random[index] = state / 4294967296;
     }
+    const size = this.size;
+    const field = new Float32Array(size);
+    const smooth = (t: number) => t * t * (3 - 2 * t);
+    for (let index = 0; index < size; index += 1) {
+      const gx = (index / size) * cells;
+      const x0 = Math.floor(gx);
+      const tx = smooth(gx - x0);
+      const a = random[(index % cells) * cells + (x0 % cells)];
+      const b = random[(index % cells) * cells + ((x0 + 1) % cells)];
+      field[index] = a + (b - a) * tx;
+    }
+    return field;
   }
-  return field;
+
+  /** angle 弧度、time 秒 → 0..1。 */
+  sample(angle: number, time: number): number {
+    const size = this.size;
+    const norm = ((angle / (Math.PI * 2)) % 1 + 1) % 1;
+    let value = 0;
+    const weights = [0.5, 0.3, 0.2];
+    for (let octave = 0; octave < 3; octave += 1) {
+      const layer = this.layers[octave];
+      const speed = octave + 1;
+      const pos = (norm + (motionless(time) * 0.02 * speed) % 1) * size;
+      const x0 = Math.floor(pos);
+      const tx = smoothLike(pos - x0);
+      const a = layer[x0 % size];
+      const b = layer[(x0 + 1) % size];
+      value += (a + (b - a) * tx) * weights[octave];
+    }
+    return value;
+  }
 }
+const motionless = (time: number): number => Math.sin(time * 0.35) * 0.5 + 0.5;
+const smoothLike = (t: number): number => t * t * (3 - 2 * t);
 
 export class FluidOrb {
-  /** 边缘火花的球面分布与相位。 */
+  private readonly sparkX = new Float32Array(MAX_SPARKS);
   private readonly sparkY = new Float32Array(MAX_SPARKS);
-  private readonly sparkAngle = new Float32Array(MAX_SPARKS);
+  private readonly sparkZ = new Float32Array(MAX_SPARKS);
   private readonly sparkPhase = new Float32Array(MAX_SPARKS);
   readonly count: number;
   rotation = 0;
   drift = 0;
-  private readonly noiseCanvas: HTMLCanvasElement;
+  private readonly field = new FbmField();
 
   constructor(count: number = SPARK_COUNT) {
     this.count = Math.min(count, MAX_SPARKS);
+    // 火花分布在半径 1.02–1.18 的球壳上（球体外侧绕行），斐波那契分布保证均匀。
+    const golden = Math.PI * (3 - Math.sqrt(5));
     for (let index = 0; index < this.count; index += 1) {
-      // 火花贴在球面赤道带（|y| ≤ 0.55），角度均匀。
-      this.sparkY[index] = (Math.random() * 2 - 1) * 0.55;
-      this.sparkAngle[index] = (index / this.count) * Math.PI * 2;
-      this.sparkPhase[index] = Math.random() * Math.PI * 2;
+      const y = 1 - (index / (this.count - 1)) * 2;
+      const ring = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = golden * index;
+      const shell = 1.02 + (index % 5) * 0.04;
+      this.sparkX[index] = Math.cos(theta) * ring * shell;
+      this.sparkY[index] = y * shell;
+      this.sparkZ[index] = Math.sin(theta) * ring * shell;
+      this.sparkPhase[index] = (index * 0.618) % 1;
     }
-    // fbm 三 octave 烘焙成一张噪声纹理（白色 + alpha=噪声），热路径只做 drawImage。
-    this.noiseCanvas = document.createElement("canvas");
-    this.noiseCanvas.width = NOISE_SIZE;
-    this.noiseCanvas.height = NOISE_SIZE;
-    const noiseContext = this.noiseCanvas.getContext("2d");
-    if (noiseContext === null) throw new Error("2d context unavailable");
-    // 三 octave 在数值域叠加成一张 fbm，再一次性烘焙（ lighter 叠层会把 R 通道叠爆出伪影）。
-    const layers: Array<{ cell: number; weight: number }> = [
-      { cell: 16, weight: 0.5 },
-      { cell: 32, weight: 0.3 },
-      { cell: 64, weight: 0.2 },
-    ];
-    const combined = new Float32Array(NOISE_SIZE * NOISE_SIZE);
-    for (const { cell, weight } of layers) {
-      const layer = valueNoise(NOISE_SIZE, cell, cell * 7919);
-      for (let index = 0; index < combined.length; index += 1) combined[index] += layer[index] * weight;
-    }
-    const imageData = noiseContext.createImageData(NOISE_SIZE, NOISE_SIZE);
-    for (let index = 0; index < NOISE_SIZE * NOISE_SIZE; index += 1) {
-      // 亮度写进 RGB（暖白），alpha 恒定——`lighter` 叠加时不会再把某个通道顶爆成伪彩色。
-      const brightness = Math.round(Math.min(1, combined[index]) * 110);
-      imageData.data[index * 4 + 0] = brightness;
-      imageData.data[index * 4 + 1] = brightness;
-      imageData.data[index * 4 + 2] = brightness;
-      imageData.data[index * 4 + 3] = 255;
-    }
-    noiseContext.putImageData(imageData, 0, 0);
-
   }
 
   step(
@@ -110,79 +113,122 @@ export class FluidOrb {
     const level = FINITE(options.level, 0);
     const time = FINITE(options.time, 0);
     const { palette, mode, motion } = options;
-    const size = FINITE(rawSize, 96);
+    const size = FINITE(rawSize, 120);
     const center = size / 2;
-    const radius = size * 0.44;
+    const radius = size * 0.4;
     if (motion) {
-      this.rotation += 0.003 + level * 0.008;
-      this.drift += 0.0025;
+      this.rotation += 0.004 + level * 0.01;
+      this.drift += 0.002;
     }
     context.clearRect(0, 0, size, size);
 
-    // 1. 球体基底：白核 → 主色 → 透明 的多层径向渐变（内核偏左上，Siri 的高光感）。
-    const gradient = context.createRadialGradient(
-      center - radius * 0.18,
-      center - radius * 0.22,
-      radius * 0.05,
-      center,
-      center,
-      radius,
-    );
-    gradient.addColorStop(0, `rgba(255,255,255,${(0.55 + level * 0.4).toFixed(3)})`);
-    gradient.addColorStop(0.35, `rgba(${palette.r},${palette.g},${palette.b},${(mode === "idle" ? 0.28 : 0.72).toFixed(3)})`);
-    gradient.addColorStop(0.75, `rgba(${palette.r},${palette.g},${palette.b},${(mode === "idle" ? 0.12 : 0.38).toFixed(3)})`);
-    gradient.addColorStop(1, `rgba(${palette.r},${palette.g},${palette.b},0)`);
-    context.fillStyle = gradient;
+    // 0. 外发光：大半径低 alpha 的柔光，让球「坐」在界面里。
+    const glow = context.createRadialGradient(center, center, radius * 0.5, center, center, radius * 1.5);
+    glow.addColorStop(0, `rgba(${palette.r},${palette.g},${palette.b},${(0.16 + level * 0.18).toFixed(3)})`);
+    glow.addColorStop(1, `rgba(${palette.r},${palette.g},${palette.b},0)`);
+    context.fillStyle = glow;
     context.beginPath();
-    context.arc(center, center, radius, 0, Math.PI * 2);
+    context.arc(center, center, radius * 1.5, 0, Math.PI * 2);
     context.fill();
 
-    // 2. 噪声纹理层：裁剪进球体，缓慢平移+旋转，`lighter` 叠出流体的体积感。
+    // 1. 流体边球体：fbm 位移的闭合路径（120 段），填充多层渐变。
     context.save();
     context.beginPath();
-    context.arc(center, center, radius * 0.99, 0, Math.PI * 2);
+    const segments = RIM_SEGMENTS;
+    for (let index = 0; index <= segments; index += 1) {
+      const angle = (index / segments) * Math.PI * 2;
+      const wobble = motion ? (this.field.sample(angle, time) - 0.5) * radius * 0.07 : 0;
+      const r = radius + wobble;
+      const x = center + Math.cos(angle) * r;
+      const y = center + Math.sin(angle) * r;
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    }
+    context.closePath();
     context.clip();
-    // 不用 lighter：灰噪声以 lighter 叠在蓝体上会出现互补色伪影（实测中心发红）。
-    context.globalCompositeOperation = "source-over";
-    context.globalAlpha = mode === "idle" ? 0.08 : 0.14 + level * 0.16;
-    context.translate(center + (motion ? Math.sin(this.drift) * radius * 0.3 : 0), center + (motion ? Math.cos(this.drift * 0.8) * radius * 0.3 : 0));
-    if (motion) context.rotate(this.rotation * 0.4);
-    context.drawImage(this.noiseCanvas, -radius, -radius, radius * 2, radius * 2);
+    const body = context.createRadialGradient(
+      center - radius * 0.35,
+      center - radius * 0.4,
+      radius * 0.08,
+      center,
+      center,
+      radius * 1.05,
+    );
+    body.addColorStop(0, `rgba(255,255,255,${(0.75 + level * 0.2).toFixed(3)})`);
+    body.addColorStop(0.3, `rgba(${Math.min(255, palette.r + 90)},${Math.min(255, palette.g + 90)},${Math.min(255, palette.b + 90)},${(mode === "idle" ? 0.4 : 0.85).toFixed(3)})`);
+    body.addColorStop(0.7, `rgba(${palette.r},${palette.g},${palette.b},${(mode === "idle" ? 0.22 : 0.55).toFixed(3)})`);
+    body.addColorStop(1, `rgba(${Math.max(0, palette.r - 40)},${Math.max(0, palette.g - 40)},${Math.max(0, palette.b - 40)},${(mode === "idle" ? 0.12 : 0.3).toFixed(3)})`);
+    context.fillStyle = body;
+    context.fillRect(0, 0, size, size);
+    // 右下暗部：补一层偏移的暗渐变，强化 3D 体积。
+    const shade = context.createRadialGradient(
+      center + radius * 0.45,
+      center + radius * 0.5,
+      radius * 0.1,
+      center + radius * 0.45,
+      center + radius * 0.5,
+      radius * 1.2,
+    );
+    shade.addColorStop(0, `rgba(0,0,0,${(mode === "idle" ? 0.1 : 0.24).toFixed(3)})`);
+    shade.addColorStop(1, "rgba(0,0,0,0)");
+    context.fillStyle = shade;
+    context.fillRect(0, 0, size, size);
     context.restore();
-    context.globalCompositeOperation = "source-over";
-    context.globalAlpha = 1;
 
-    // 3. 你说/它说的脉冲波纹：listening 向外两圈、speaking 向内收。
+    // 2. 呼吸高光：左上一颗随 RMS 微移的亮斑（不动的时候也保持，静态发光的一部分）。
+    const glossX = center - radius * (0.32 + level * 0.05);
+    const glossY = center - radius * (0.36 + level * 0.05);
+    const gloss = context.createRadialGradient(glossX, glossY, 0, glossX, glossY, radius * 0.4);
+    gloss.addColorStop(0, `rgba(255,255,255,${(0.5 + level * 0.35).toFixed(3)})`);
+    gloss.addColorStop(1, "rgba(255,255,255,0)");
+    context.fillStyle = gloss;
+    context.beginPath();
+    context.arc(glossX, glossY, radius * 0.4, 0, Math.PI * 2);
+    context.fill();
+
+    // 3. 240 粒 3D 绕行：绕 Y 轴 + 轻微倾斜，透视投影（远的暗而小、近的亮而大），RMS 外扩。
+    const tilt = 0.35;
+    for (let index = 0; index < this.count; index += 1) {
+      const angle = this.sparkAngleOf(index) + (motion ? this.rotation : 0);
+      const x0 = Math.cos(angle);
+      const z0 = Math.sin(angle);
+      const y0 = this.sparkY[index];
+      // 绕 X 轴倾斜，让绕行轨道有立体感
+      const y = y0 * Math.cos(tilt) - z0 * Math.sin(tilt);
+      const z = y0 * Math.sin(tilt) + z0 * Math.cos(tilt);
+      const x = x0;
+      const perspective = 1 / (1.9 - z * 0.7);
+      const outward = 1 + level * 0.16 * (0.5 + this.sparkPhase[index] * 0.5);
+      const px = center + x * radius * outward * perspective;
+      const py = center + y * radius * outward * perspective;
+      const depth = (z + 1) / 2;
+      const alpha = (0.1 + depth * 0.55) * (mode === "idle" ? 0.4 : 0.85) * (0.5 + level * 0.5 + 0.3);
+      const dot = (0.9 + depth * 1.8 + level * 1.2) * (size / 120);
+      context.fillStyle = `rgba(${Math.min(255, palette.r + 110)},${Math.min(255, palette.g + 110)},${Math.min(255, palette.b + 110)},${FINITE(alpha, 0.2).toFixed(3)})`;
+      context.beginPath();
+      context.arc(FINITE(px, center), FINITE(py, center), Math.max(0.4, FINITE(dot, 1)), 0, Math.PI * 2);
+      context.fill();
+    }
+
+    // 4. 你说/它说的波纹：listening 从中心向外两圈；speaking 从外向内收。
     if (mode === "listening" || mode === "speaking") {
       const outward = mode === "listening";
       for (let ring = 1; ring <= 2; ring += 1) {
-        const wave = (time * 0.9 + ring * 0.5) % 1;
+        const wave = (time * 0.8 + ring * 0.5) % 1;
         const waveRadius = outward
-          ? radius * (0.75 + wave * 0.45 + level * 0.2)
-          : radius * (1.15 - wave * 0.35 + level * 0.1);
-        context.strokeStyle = `rgba(${palette.r},${palette.g},${palette.b},${((1 - wave) * 0.35).toFixed(3)})`;
-        context.lineWidth = 1.5;
+          ? radius * (0.5 + wave * 0.7 + level * 0.2)
+          : radius * (1.25 - wave * 0.4 + level * 0.1);
+        context.strokeStyle = `rgba(${palette.r},${palette.g},${palette.b},${((1 - wave) * 0.4).toFixed(3)})`;
+        context.lineWidth = 2;
         context.beginPath();
         context.arc(center, center, Math.max(2, waveRadius), 0, Math.PI * 2);
         context.stroke();
       }
     }
-
-    // 4. 边缘火花：贴球面赤道带的细密亮点，随 RMS 微微外扩，自转带动。
-    for (let index = 0; index < this.count; index += 1) {
-      const angle = this.sparkAngle[index] + this.rotation;
-      const bandY = this.sparkY[index];
-      const ringRadius = Math.sqrt(Math.max(0, 1 - bandY * bandY));
-      const sparkle = motion ? 0.5 + 0.5 * Math.sin(time * 3 + this.sparkPhase[index]) : 0.6;
-      const outward = radius * (1.005 + level * 0.12 * (0.4 + sparkle * 0.6));
-      const x = center + Math.cos(angle) * outward * ringRadius;
-      const y = center + bandY * outward;
-      const alpha = (0.25 + level * 0.6) * sparkle * (mode === "idle" ? 0.35 : 1);
-      context.fillStyle = `rgba(${Math.min(255, palette.r + 120)},${Math.min(255, palette.g + 120)},${Math.min(255, palette.b + 120)},${alpha.toFixed(3)})`;
-      context.beginPath();
-      context.arc(x, y, 0.8 + sparkle * 1.1 * (size / 96), 0, Math.PI * 2);
-      context.fill();
-    }
     return this.count;
+  }
+
+  private sparkAngleOf(index: number): number {
+    return Math.atan2(this.sparkZ[index], this.sparkX[index]);
   }
 }
