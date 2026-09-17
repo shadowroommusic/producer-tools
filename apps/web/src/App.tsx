@@ -2500,7 +2500,9 @@ export function App() {
               onNoteContextChange={setNoteContext}
               rendering={rendering}
               storageBlocked={storageBlocked}
-              composer={chatInDock ? null : composerFor()}
+              /* 用户定稿：Studio 页不再有底部大输入条——打字入口只有悬浮球面板与右侧对话栏。
+                 传 null 让 StudioPage 不渲染 composer 整条（输入框/添加/模式芯片/模型/发送）。 */
+              composer={null}
               onClose={() => {
                 setOpenProjectId(undefined);
                 rememberOpenProject(null);
