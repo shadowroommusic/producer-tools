@@ -227,10 +227,8 @@ export function ButlerOrb({
     if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) setDragging(true);
     if (drag.moved || Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       drag.moved = true;
-      setPosition((current) => ({
-        x: Math.max(8, Math.min(window.innerWidth - ORB_SIZE - 8, drag.originX + dx)),
-        y: Math.max(8, Math.min(window.innerHeight - ORB_SIZE - 8, drag.originY + dy)),
-      }));
+      // 拖动中按视口夹取（不许露出窗外）；松手后 snapToViewport 做 12px 角落吸附。
+      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy));
     }
   };
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -241,6 +239,7 @@ export function ButlerOrb({
     }
     const wasDrag = drag?.moved === true;
     setDragging(false);
+    if (wasDrag) setPosition((current) => snapToViewport(current));
     if (!wasDrag) setExpanded((open) => !open);
   };
 
@@ -316,7 +315,99 @@ export function ButlerOrb({
   );
 }
 
-/** 默认落脚点：右下、**抬到输入条上方**（bottom:120px / right:24px）——用户反馈不能压底部输入框和发送按钮。 */
+/**
+ * 默认落脚点：**屏幕中下方**——水平居中、距底 140px。
+ *
+ * 用户两次推翻角落：先「别压底部输入条」（抬到 bottom:120px），再「缩放药丸也被盖了」
+ * （右下正是 − 100% + 那颗）。居中偏下是视觉重心又不与任何控件重叠；位置只认 {x, y} +
+ * 容器尺寸，将来换容器（ADR-018 独立窗口）不用重写。
+ */
+/** 视口边界夹取：窗口内留 12px 边距，不许只露半个球。 */
+function clampToViewport(x: number, y: number): { x: number; y: number } {
+  const margin = 12;
+  return {
+    x: Math.max(margin, Math.min(window.innerWidth - ORB_SIZE - margin, x)),
+    y: Math.max(margin, Math.min(window.innerHeight - ORB_SIZE - margin, y)),
+  };
+}
+
+/** 松手吸附：离任一边缘不足 48px 时直接贴到该边缘的 12px 边距处。 */
+function snapToViewport(pos: { x: number; y: number }): { x: number; y: number } {
+  const margin = 12;
+  const snapDistance = 48;
+  const maxX = window.innerWidth - ORB_SIZE - margin;
+  const maxY = window.innerHeight - ORB_SIZE - margin;
+  const next = clampToViewport(pos.x, pos.y);
+  if (next.x - margin < snapDistance) next.x = margin;
+  if (maxX - next.x < snapDistance) next.x = maxX;
+  if (next.y - margin < snapDistance) next.y = margin;
+  if (maxY - next.y < snapDistance) next.y = maxY;
+  return avoidProtected(next);
+}
+
+/**
+ * 保护性退避：吸附点若与页面受保护控件（底部输入框、发送、缩放药丸、导入/导出/录音）相交，
+ * 沿「远离该控件中心」的方向逐步退让，每步 24px、最多 12 步——用户可拖到任意位置，但松手后
+ * 球永远不会停在控件上面。控件清单集中在这一个数组（ADR-018 换容器时同步改这里）。
+ */
+function avoidProtected(next: { x: number; y: number }): { x: number; y: number } {
+  const selectors = [
+    ".sr-new-session",
+    ".sr-studio-import",
+    ".sr-studio-export",
+    ".sr-studio-record",
+    ".sr-transport-zoom button",
+    "textarea",
+    'button[title="发送"]',
+  ];
+  const protectedRects: Array<{ x: number; y: number; w: number; h: number }> = [];
+  for (const selector of selectors) {
+    for (const el of document.querySelectorAll(selector)) {
+      const rect = el.getBoundingClientRect();
+      protectedRects.push({ x: rect.x, y: rect.y, w: rect.width, h: rect.height });
+    }
+  }
+  const hits = (point: { x: number; y: number }) =>
+    protectedRects.some(
+      (rect) => !(point.x > rect.x + rect.w || point.x + ORB_SIZE < rect.x || point.y > rect.y + rect.h || point.y + ORB_SIZE < rect.y),
+    );
+  if (!hits(next)) return next;
+  let nearest = protectedRects[0];
+  let bestDistance = Infinity;
+  for (const rect of protectedRects) {
+    const dx = rect.x + rect.w / 2 - (next.x + ORB_SIZE / 2);
+    const dy = rect.y + rect.h / 2 - (next.y + ORB_SIZE / 2);
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      nearest = rect;
+    }
+  }
+  const awayX = Math.sign(next.x + ORB_SIZE / 2 - (nearest.x + nearest.w / 2)) || -1;
+  const awayY = Math.sign(next.y + ORB_SIZE / 2 - (nearest.y + nearest.h / 2)) || -1;
+  // 两阶段退让：先沿 awayY 垂直退（顶/底边界会挡住，那时换水平）；再整行水平扫描——
+  // 右上角实测：垂直被顶后行扫描把球推到输入框右侧的空位（awayX 只决定扫描起点方向）。
+  let candidate = { ...next };
+  for (let step = 0; step < 24; step += 1) {
+    const moved = clampToViewport(candidate.x, candidate.y + awayY * 24);
+    if (moved.y === candidate.y) break; // 该方向被边界顶住
+    candidate = moved;
+    if (!hits(candidate)) return candidate;
+  }
+  candidate = { ...next };
+  const scanStart = awayX > 0 ? next.x : window.innerWidth - ORB_SIZE - 12 - next.x;
+  for (let step = 0; step < 24; step += 1) {
+    const moved = clampToViewport(scanStart + (awayX > 0 ? step : -step) * 32, candidate.y);
+    if (moved.x === candidate.x) continue;
+    candidate = moved;
+    if (!hits(candidate)) return candidate;
+  }
+  return candidate;
+}
+
 function defaultPosition(): { x: number; y: number } {
-  return { x: window.innerWidth - ORB_SIZE - 24, y: window.innerHeight - 120 - ORB_SIZE };
+  return {
+    x: (window.innerWidth - ORB_SIZE) / 2,
+    y: window.innerHeight - 140 - ORB_SIZE,
+  };
 }
