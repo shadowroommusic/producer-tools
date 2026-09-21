@@ -213,7 +213,7 @@ const MEDIA_PROTOCOLS = {
 
 
 /** 一轮 chat 请求：把文本与工具调用都收齐（文本仍然按流式解析）。 */
-async function runChatRound({ base, headers, model, messages, tools, temperature }) {
+export async function runChatRound({ base, headers, model, messages, tools, temperature, onTextDelta }) {
   const response = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers,
@@ -248,7 +248,12 @@ async function runChatRound({ base, headers, model, messages, tools, temperature
         continue;
       }
       const delta = chunk?.choices?.[0]?.delta ?? {};
-      if (typeof delta.content === "string") text += delta.content;
+      if (typeof delta.content === "string" && delta.content !== "") {
+        text += delta.content;
+        // 首句延迟的关键（P1-4）：模型一开始说话就往外推，不等整轮结束——
+        // 调用方把这段当作 message(output_index=0) 立刻 emit 给 Codex。
+        if (onTextDelta) onTextDelta(delta.content, text);
+      }
       for (const call of delta.tool_calls ?? []) {
         const index = call.index ?? 0;
         const current = toolCalls.get(index) ?? { id: call.id ?? `call-${index}`, name: "", arguments: "" };
@@ -396,7 +401,8 @@ function saveMedia(audio, name, format) {
  *
  * Text and function calls both cross over: an agent that cannot call tools could not make music.
  */
-async function startChatAdapter(provider, credential) {
+/** 导出给测试/工具用（本文件也被 tests 引用其内部函数）。 */
+export async function startChatAdapter(provider, credential) {
   const base = provider.baseUrl.replace(/\/+$/, "");
   const headers = { "content-type": "application/json", ...(credential === null ? {} : { authorization: `Bearer ${credential.value}` }), ...(provider.headers ?? {}) };
   const server = createServer(async (request, response) => {
@@ -502,6 +508,45 @@ async function startChatAdapter(provider, credential) {
       let messagesForRound = messages;
       let finalText = "";
       let round = 0;
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      const adapterT0 = Date.now();
+      let firstTextAt = null;
+      const sseLog = [];
+      const emit = (type, payload) => {
+        sseLog.push(type);
+        if (type === "response.output_text.delta" && firstTextAt === null) firstTextAt = Date.now();
+        response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
+      };
+      const id = `resp-${Date.now().toString(36)}`;
+      emit("response.created", { response: { id, model: body.model ?? "", status: "in_progress", output: [] } });
+
+      /**
+       * 首句延迟（P1-4）的正确解法，按 DeepSeek 的协议规则：
+       *
+       * 一个 response 里 message 永远是 output_index=0、function_call 从 1 递增。模型一旦开始
+       * 说话（「好，正在做」），立刻以 message 事件流给 Codex——用户几秒内听见第一句，适配器
+       * 继续在后台跑工具循环。message 流完后**先 output_item.done 收掉它**，再开始 function_call
+       * 的 added/delta/done；`response.completed` 的 output 必须**完整带上全部 item**——
+       * Codex 用终态对象做最终校验，流式事件发了但终态缺 function_call 的那版就是败在这。
+       */
+      let messageOpened = false;
+      let messageClosed = false;
+      let messageText = "";
+      const calls = new Map();
+      const openMessage = () => {
+        if (messageOpened) return;
+        messageOpened = true;
+        emit("response.output_item.added", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "in_progress", content: [] } });
+        emit("response.content_part.added", { item_id: "msg-1", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } });
+      };
+      const closeMessage = (final) => {
+        if (!messageOpened || messageClosed) return;
+        messageClosed = true;
+        emit("response.output_text.done", { item_id: "msg-1", output_index: 0, content_index: 0, text: final });
+        emit("response.content_part.done", { item_id: "msg-1", output_index: 0, content_index: 0, part: { type: "output_text", text: final, annotations: [] } });
+        emit("response.output_item.done", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: final, annotations: [] }] } });
+      };
+
       for (; round < 8; round += 1) {
         const outcome = await runChatRound({
           base,
@@ -510,36 +555,49 @@ async function startChatAdapter(provider, credential) {
           messages: messagesForRound,
           tools,
           temperature: body.temperature,
+          // 每轮的文本增量：第一轮直接透传给用户（首句）；后续轮的文本也照发（工具间的话）。
+          onTextDelta: (delta, full) => {
+            openMessage();
+            messageText = full;
+            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta });
+          },
         });
         if (outcome.toolCalls.length === 0) {
           finalText = outcome.text;
           break;
         }
+        // 模型这轮说了话又要工具：先把 message 收干净（done），再发 function_call——
+        // 这就是「message 与 function_call 共存于一个 response」的次序。
+        closeMessage(outcome.text);
+        const assistantToolMessage = {
+          role: "assistant",
+          // 关键：content 保留模型原文（不能写 null）——chat 供应商把纯文本+null 工具调用
+          // 当完整回合直接 stop；合并成一条 {content, tool_calls} 才是合法的「说话又要工具」。
+          ...(outcome.text === "" ? {} : { content: outcome.text }),
+          tool_calls: outcome.toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })),
+        };
+        messagesForRound = [...messagesForRound, assistantToolMessage];
+        let functionOutputIndex = 1;
         for (const call of outcome.toolCalls) {
           const target = nameMap.get(call.name);
+          const callItem = { id: call.id ?? `call-${round}-${functionOutputIndex}`, type: "function_call", call_id: call.id ?? `call-${round}-${functionOutputIndex}`, name: call.name, arguments: call.arguments, status: "in_progress" };
+          emit("response.output_item.added", { output_index: functionOutputIndex, item: callItem });
           const result = await callPluginTool(target, call.arguments);
           executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, resultText: result.text, args: result.args });
+          emit("response.function_call_arguments.delta", { item_id: callItem.id, output_index: functionOutputIndex, delta: call.arguments });
+          emit("response.function_call_arguments.done", { item_id: callItem.id, output_index: functionOutputIndex, arguments: call.arguments });
+          emit("response.output_item.done", { output_index: functionOutputIndex, item: { ...callItem, status: "completed" } });
+          calls.set(callItem.id, { id: callItem.id, name: call.name, arguments: call.arguments, namespace: undefined });
           messagesForRound = [
             ...messagesForRound,
-            { role: "assistant", content: null, tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] },
-            { role: "tool", tool_call_id: call.id, content: result.text },
+            { role: "tool", tool_call_id: callItem.call_id, content: result.text },
           ];
+          functionOutputIndex += 1;
         }
       }
-      if (finalText === "" && executed.length > 0) finalText = "（工具执行完了，但模型没有给出总结。）";
+      if (finalText === "" && executed.length > 0) finalText = messageText || "（工具执行完了，但模型没有给出总结。）";
       for (const entry of executed) noteMediaEvent(entry);
-      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-      const emit = (type, payload) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
-      const id = `resp-${Date.now().toString(36)}`;
-      emit("response.created", { response: { id, model: body.model ?? "", status: "in_progress", output: [] } });
-      let opened = false;
       let text = finalText;
-      const calls = new Map();
-      if (text !== "") {
-        opened = true;
-        emit("response.output_item.added", { output_index: 0, item: { id: "msg-1", type: "message", role: "assistant", status: "in_progress", content: [] } });
-        emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: text });
-      }
       console.log(`[adapter] → done · rounds=${round + 1} · tools=${executed.length} · text=${JSON.stringify(text.slice(0, 40))}`);
 
       /**
@@ -549,15 +607,19 @@ async function startChatAdapter(provider, credential) {
        * asked again (measured: six rounds of MiniMax-M3 curling the bridge by hand instead of calling
        * `detect_tempo`).
        */
-      const output = [];
-      if (opened) {
-        const message = { id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
-        emit("response.output_text.done", { item_id: "msg-1", output_index: 0, content_index: 0, text });
-        emit("response.output_item.done", { output_index: 0, item: message });
-        output.push(message);
+      // 终态兜底：循环结束后 message 还没关（模型最后一轮直接给完整回答、没有工具）就在这里收。
+      if (messageOpened && !messageClosed) {
+        closeMessage(text);
+      } else if (!messageOpened && text !== "") {
+        openMessage();
+        closeMessage(text);
       }
-      for (const [index, call] of calls) {
-        const item = {
+      const output = [];
+      if (messageOpened) {
+        output.push({ id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
+      }
+      for (const [, call] of calls) {
+        output.push({
           id: call.id,
           type: "function_call",
           call_id: call.id,
@@ -565,14 +627,15 @@ async function startChatAdapter(provider, credential) {
           ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
           arguments: call.arguments,
           status: "completed",
-        };
-        emit("response.output_item.done", { output_index: index + (opened ? 1 : 0), item });
-        output.push(item);
+        });
       }
       emit("response.completed", {
         response: { id, model: body.model ?? "", status: "completed", output, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
       });
       console.log(`[adapter] → done · text=${JSON.stringify(text.slice(0, 40))} · calls=${calls.size}`);
+      console.log(`[adapter] 首句 emit 于 ${firstTextAt === null ? "?" : firstTextAt - adapterT0}ms`);
+      console.log(`[adapter] SSE 序: ${sseLog.join(" → ")}`);
+      console.log(`[adapter] completed.output items: ${output.map((item) => item.type).join(", ")}`);
       response.end();
     } catch (error) {
       if (!response.headersSent) send(500, JSON.stringify({ error: String(error?.message ?? error) }));
@@ -1923,7 +1986,7 @@ const http = createServer(async (request, response) => {
   }
 });
 
-http.listen(PORT, HOST, () => {
+if (process.env.SHADOWROOM_ADAPTER_TEST !== "1") http.listen(PORT, HOST, () => {
   console.log(`[agent] listening on http://${HOST}:${PORT}`);
   console.log(`[agent] core: ${CODEX}`);
   console.log(`[agent] cwd: ${AGENT_CWD} · sandbox: ${SANDBOX} · approval: ${APPROVAL}`);
