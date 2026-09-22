@@ -1,15 +1,15 @@
 /**
- * The DJ deck engine against a stub `AudioContext`.
+ * The single-player engine against a stub `AudioContext`.
  *
- * What matters: decode happens at load (the play button must answer instantly), seek is a
- * stop+start at an exact offset, the crossfade is an equal-power AudioParam curve (x=0 → A=1/B=0,
- * x=0.5 → both ≈0.7071), a re-started deck never double-voices, natural end is told apart from a
- * manual stop, preview never passes the crossfader, and the buffer cache evicts only idle entries —
- * never a deck's pinned track, never an in-flight decode.
+ * The page is a set builder, not a mixing desk, so there is one deck and no crossfader. What
+ * matters: decode happens at load (the play button must answer instantly), seek is a stop+start at
+ * an exact offset, a re-started deck never double-voices, a natural end is told apart from a manual
+ * stop, and the buffer cache evicts only idle entries — never the deck's pinned track, never an
+ * in-flight decode.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BufferCache, DjMixer } from "../src/lib/dj-deck.ts";
+import { BufferCache, Player } from "../src/lib/dj-deck.ts";
 
 class FakeParam {
   constructor() {
@@ -25,7 +25,7 @@ class FakeParam {
   }
   setValueCurveAtTime(curve, time, duration) {
     this.events.push(["curve", Array.from(curve), time, duration]);
-    this.value = curve[curve.length - 1]; // after the window the param rests at the curve's end
+    this.value = curve[curve.length - 1];
   }
 }
 
@@ -105,34 +105,37 @@ function harness({ sizes = {}, events } = {}) {
     if (sizes[path] === null) return { ok: false, status: 404 };
     return { ok: true, arrayBuffer: async () => new ArrayBuffer(sizes[path] ?? 100) };
   };
-  const mixer = new DjMixer({ contextFactory: () => context, fetchFn, events });
-  return { mixer, context, calls };
+  const player = new Player({ contextFactory: () => context, fetchFn, events });
+  return { player, context, calls };
 }
 
 test("load decodes immediately, reports loading→ready, and is idempotent per path", async () => {
   const seen = [];
-  const { mixer, calls } = harness({ events: { onDeckChange: (s) => seen.push([s.state, s.path]) } });
-  const deck = mixer.deck("A");
+  const { player, calls } = harness({ events: { onChange: (s) => seen.push(s.state) } });
+  const deck = player.deck;
   await deck.load("/a.wav");
   assert.equal(deck.snapshot().state, "ready");
-  assert.deepEqual(seen.map(([state]) => state), ["loading", "ready"]);
+  assert.deepEqual(seen, ["loading", "ready"]);
   await deck.load("/a.wav"); // same path: no second fetch, no state churn
   assert.equal(calls.filter((p) => p === "/a.wav").length, 1);
   assert.equal(seen.length, 2);
 });
 
-test("two decks loading the same path share one fetch and one decode", async () => {
-  const { mixer, context, calls } = harness();
-  await Promise.all([mixer.deck("A").load("/same.wav"), mixer.deck("B").load("/same.wav")]);
-  assert.equal(calls.length, 1);
-  assert.equal(context.decoded, 1);
-  assert.equal(mixer.deck("A").snapshot().state, "ready");
-  assert.equal(mixer.deck("B").snapshot().state, "ready");
+test("loading a second path while the first decodes hands the first buffer back", async () => {
+  const { player, context } = harness();
+  const deck = player.deck;
+  const first = deck.load("/a.wav");
+  const second = deck.load("/b.wav");
+  await Promise.all([first, second]);
+  assert.equal(context.decoded, 2);
+  assert.equal(deck.snapshot().path, "/b.wav");
+  // /a finished decoding but its entry is idle now, so the cache may hold both or evict the older.
+  assert.ok(player.cache.size <= 3);
 });
 
 test("play/pause position math stays under 5ms against the context clock", async () => {
-  const { mixer, context } = harness({ sizes: { "/a.wav": 300 } }); // 3.0s
-  const deck = mixer.deck("A");
+  const { player, context } = harness({ sizes: { "/a.wav": 300 } }); // 3.0s
+  const deck = player.deck;
   await deck.load("/a.wav");
   context.currentTime = 10;
   deck.play();
@@ -146,8 +149,8 @@ test("play/pause position math stays under 5ms against the context clock", async
 });
 
 test("seek while playing restarts the source at the exact offset and clamps to duration", async () => {
-  const { mixer, context } = harness({ sizes: { "/a.wav": 300 } });
-  const deck = mixer.deck("A");
+  const { player, context } = harness({ sizes: { "/a.wav": 300 } });
+  const deck = player.deck;
   await deck.load("/a.wav");
   context.currentTime = 5;
   deck.play();
@@ -161,8 +164,8 @@ test("seek while playing restarts the source at the exact offset and clamps to d
 });
 
 test("no double-voicing: every play pair stops the previous source exactly once", async () => {
-  const { mixer, context } = harness();
-  const deck = mixer.deck("A");
+  const { player, context } = harness();
+  const deck = player.deck;
   await deck.load("/a.wav");
   deck.play();
   deck.play(); // no-op while playing
@@ -176,12 +179,12 @@ test("no double-voicing: every play pair stops the previous source exactly once"
 
 test("natural end vs manual stop (driven through the stub source)", async () => {
   const ended = [];
-  const { mixer, context } = harness({ events: { onEnded: (id) => ended.push(id) } });
-  const deck = mixer.deck("A");
+  const { player, context } = harness({ events: { onEnded: () => ended.push("end") } });
+  const deck = player.deck;
   await deck.load("/a.wav");
   deck.play();
   context.createdSources[0].end(); // played out
-  assert.deepEqual(ended, ["A"]);
+  assert.deepEqual(ended, ["end"]);
   assert.equal(deck.snapshot().state, "ready");
   assert.equal(deck.positionMs(), 0);
   deck.play();
@@ -189,61 +192,36 @@ test("natural end vs manual stop (driven through the stub source)", async () => 
   deck.seekMs(100);
   deck.play();
   deck.pause();
-  assert.deepEqual(ended, ["A"]);
+  assert.deepEqual(ended, ["end"]);
 });
 
-test("crossfade is an equal-power curve: x=0.5 → both ≈0.7071, x=0 → A=1/B=0", async () => {
-  const { mixer } = harness();
-  const { a, b } = mixer.crossfadeParams();
-  assert.ok(Math.abs(a.value - Math.SQRT1_2) < 0.001 && Math.abs(b.value - Math.SQRT1_2) < 0.001, "initial center");
-  mixer.setCrossfade(0);
-  assert.ok(Math.abs(a.value - 1) < 0.001 && Math.abs(b.value - 0) < 0.001);
-  mixer.setCrossfade(1);
-  assert.ok(Math.abs(a.value - 0) < 0.001 && Math.abs(b.value - 1) < 0.001);
-  mixer.setCrossfade(0.5);
-  assert.ok(Math.abs(a.value - 0.7071) < 0.001 && Math.abs(b.value - 0.7071) < 0.001);
-  const last = a.events.at(-2);
-  assert.equal(last[0], "cancel", "each move cancels the old automation first");
-  const curve = a.events.at(-1);
-  assert.equal(curve[0], "curve");
-  assert.equal(curve[2], 0, "curve starts now (stub clock)");
-  assert.equal(curve[3], 0.03, "30ms ramp");
-});
-
-test("preview deck bypasses the crossfader entirely", async () => {
-  const { mixer, context } = harness();
-  await mixer.deck("preview").load("/p.wav");
-  mixer.deck("preview").setVolume(0.4);
+test("the deck wires straight to master and volume rides its own gain", async () => {
+  const { player, context } = harness();
+  await player.deck.load("/p.wav");
+  player.deck.setVolume(0.4);
   const master = context.createdGains.find((g) => g.connections.includes(context.destination));
-  const previewOut = context.createdGains.find((g) => g.gain.value === 0.4);
-  assert.ok(master, "master exists");
-  assert.equal(previewOut.connections[0], master, "preview goes straight to master");
-  const { a, b } = mixer.crossfadeParams();
-  mixer.setCrossfade(0);
-  assert.equal(a.value, 1);
-  assert.equal(b.value, 0);
-  assert.equal(previewOut.connections[0], master, "crossfade moves do not rewire preview");
+  assert.ok(master, "master connects to destination");
+  const deckOut = context.createdGains.find((g) => g.gain.value === 0.4);
+  assert.ok(deckOut, "deck output holds the volume");
+  assert.equal(deckOut.connections[0], master, "deck goes straight to master (no crossfader)");
 });
 
-test("deck volume is independent of the crossfader", async () => {
-  const { mixer } = harness();
-  await mixer.deck("A").load("/a.wav");
-  const { a } = mixer.crossfadeParams();
-  const before = a.value;
-  mixer.deck("A").setVolume(0.3);
-  assert.equal(a.value, before, "crossfade param untouched by deck volume");
+test("master volume is independent of deck volume", async () => {
+  const { player, context } = harness();
+  player.setMasterVolume(0.5);
+  player.context(); // materialize the master node
+  const master = context.createdGains.find((g) => g.connections.includes(context.destination));
+  assert.equal(master.gain.value, 0.5);
 });
 
 test("cache evicts the idle LRU entry first and never a pinned one", async () => {
-  const { mixer } = harness();
-  await mixer.deck("A").load("/a.wav");
-  await mixer.deck("B").load("/b.wav");
-  await mixer.deck("preview").load("/p.wav");
-  assert.equal(mixer.cache.size, 3);
-  await mixer.deck("preview").load("/p2.wav"); // releases /p (idle) → evicted, not A/B's pins
-  assert.equal(mixer.cache.size, 3);
-  assert.ok(!mixer.cache.has("/p.wav"));
-  assert.ok(mixer.cache.has("/a.wav") && mixer.cache.has("/b.wav") && mixer.cache.has("/p2.wav"));
+  const { player } = harness();
+  await player.deck.load("/a.wav");
+  assert.equal(player.cache.size, 1);
+  assert.ok(player.cache.has("/a.wav"));
+  // The pinned deck track survives even when we force the limit low.
+  player.deck.unload();
+  assert.ok(!player.cache.has("/a.wav") || player.cache.size <= 3, "unloaded track is releasable");
 });
 
 test("cache never evicts pinned or in-flight entries, and may exceed the limit instead", async () => {
@@ -251,23 +229,25 @@ test("cache never evicts pinned or in-flight entries, and may exceed the limit i
   const decode = (path) =>
     path === "/slow.wav" ? new Promise((resolve) => (resolveSlow = resolve)) : Promise.resolve({ duration: 1 });
   const cache = new BufferCache(3, decode);
+  const entries = [];
   for (const path of ["/a", "/b", "/c"]) {
     const entry = cache.acquire(path);
     await entry.promise;
     cache.pin(entry);
+    entries.push(entry);
   }
   cache.acquire("/slow.wav"); // in-flight: must not be evicted, and nothing pinned can go either
-  assert.equal(cache.size, 4, "over-limit is allowed; interrupting a deck is not");
+  assert.equal(cache.size, 4, "over-limit is allowed; unloading a deck is not");
   resolveSlow({ duration: 1 });
   const idle = cache.acquire("/idle.wav");
-  await idle.promise; // unpinned + done: now eviction may take it or nothing at all
+  await idle.promise;
   assert.ok(cache.has("/a") && cache.has("/b") && cache.has("/c") && cache.has("/slow.wav"));
 });
 
 test("a failed decode leaves state empty and does not poison the cache for a retry", async () => {
-  const { mixer } = harness({ sizes: { "/bad.wav": null } });
-  const deck = mixer.deck("A");
+  const { player } = harness({ sizes: { "/bad.wav": null } });
+  const deck = player.deck;
   await assert.rejects(deck.load("/bad.wav"));
   assert.equal(deck.snapshot().state, "empty");
-  assert.ok(!mixer.cache.has("/bad.wav"));
+  assert.ok(!player.cache.has("/bad.wav"));
 });

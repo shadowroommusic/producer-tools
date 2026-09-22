@@ -1,27 +1,22 @@
 /**
- * Deck engine for the DJ page: two performance decks plus a library-preview deck.
+ * Single-player engine for the Set workbench (formerly the two-deck DJ mixer).
  *
- * Why Web Audio `BufferSource` instead of `<audio>` elements (the Studio's approach): a DJ needs
- * deterministic seek (`start(when, offset)` is sample-exact; `mediaElement.currentTime` seeks
- * asynchronously and snaps to compressed-frame boundaries), and a crossfade that cannot drift
- * (two `<audio>` clocks drift apart and `.volume` ramps on the main thread; `AudioParam` curves
- * run on the audio thread). No `AudioWorklet`: param automation is precise enough, and manual
- * sample-pulling would pin whole tracks in memory with no eviction story (measured in
- * `_reference/stemdeck-dj`, which also clicks on keylock nudges).
+ * The page became a set builder, not a mixing desk, so the crossfader and deck A/B died with it;
+ * one deck plays the selected track (auditioning and cue work), behind one lazy `AudioContext`.
+ * Web Audio `BufferSource` over `<audio>` elements for the same reasons as before: deterministic
+ * seek (`start(when, offset)` is sample-exact) and volume on the audio thread without zippers.
  *
- * Memory is the risk of full-track decode (~21 MB/min stereo float32 — WebCodecs streaming was
- * evaluated and rejected for v1), so decoded buffers live in a refcounted LRU: an entry is only
- * evictable when `refCount === 0` and no decode is in flight; a deck pins its track from load until
- * replace/unload (pause keeps the pin — a DJ expects instant resume). If every entry is pinned the
- * cache grows past its limit rather than ever evicting a deck's track mid-performance.
+ * Memory is still the risk of full-track decode (~21 MB/min stereo float32), so decoded buffers
+ * live in a refcounted LRU: an entry is only evictable when `refCount === 0` and no decode is in
+ * flight; the deck pins its track from load until replace/unload (pause keeps the pin — the user
+ * expects instant resume). If everything is pinned the cache grows past its limit rather than
+ * evicting a track that is loaded.
  */
 import { fileUrl } from "./studio.ts";
 
-export type DeckId = "A" | "B" | "preview";
 export type DeckState = "empty" | "loading" | "ready" | "playing";
 
 export type DeckSnapshot = {
-  id: DeckId;
   state: DeckState;
   path: string | null;
   durationMs: number;
@@ -29,26 +24,21 @@ export type DeckSnapshot = {
   volume: number;
 };
 
-export type MixerEvents = {
-  onDeckChange?: (snapshot: DeckSnapshot) => void;
-  /** Fired only when a track plays out to its end — never by pause/seek/replace. */
-  onEnded?: (id: DeckId) => void;
+export type PlayerEvents = {
+  onChange?: (snapshot: DeckSnapshot) => void;
+  /** Fired only when the track plays out to its end — never by pause/seek/replace. */
+  onEnded?: () => void;
 };
-
-/** Equal-power crossfade: x=0 is full A, x=1 is full B, x=0.5 leaves both at ≈0.7071. */
-const CROSSFADE_RAMP_S = 0.03;
-const gainA = (x: number): number => Math.cos((x * Math.PI) / 2);
-const gainB = (x: number): number => Math.sin((x * Math.PI) / 2);
 
 type CacheEntry = {
   buffer: AudioBuffer | null;
-  /** Shared in-flight decode: two decks loading the same path await one promise, one fetch. */
+  /** Shared in-flight decode: reloading the same path awaits one promise, one fetch. */
   promise: Promise<AudioBuffer> | null;
   refCount: number;
   lastUsed: number;
 };
 
-/** Decoded-track store with the house rule: never evict what a deck holds or what is still decoding. */
+/** Decoded-track store with the house rule: never evict what the deck holds or what is decoding. */
 export class BufferCache {
   private entries = new Map<string, CacheEntry>();
   private clock = 0;
@@ -103,7 +93,7 @@ export class BufferCache {
 
   private evict(): void {
     // Candidates: idle and not mid-decode. If none qualify the cache stays over-limit on purpose —
-    // memory pressure is recoverable, cutting a playing deck is not.
+    // memory pressure is recoverable, unloading a track somebody works with is not.
     while (this.entries.size > this.limit) {
       let victim: string | null = null;
       let oldest = Infinity;
@@ -120,37 +110,25 @@ export class BufferCache {
   }
 }
 
-export type MixerOptions = {
+export type PlayerOptions = {
   contextFactory?: () => AudioContext;
   fetchFn?: typeof fetch;
   cacheLimit?: number;
-  events?: MixerEvents;
+  events?: PlayerEvents;
 };
 
-export class DjMixer {
+export class Player {
   readonly cache: BufferCache;
-  private readonly decks: Record<DeckId, Deck>;
-  private readonly options: MixerOptions;
+  readonly deck: Deck;
+  private readonly options: PlayerOptions;
   private contextValue: AudioContext | null = null;
   private master: GainNode | null = null;
-  private xfadeA: GainNode | null = null;
-  private xfadeB: GainNode | null = null;
-  private crossfadeX = 0.5;
   private masterVolume = 1;
 
-  constructor(options: MixerOptions = {}) {
+  constructor(options: PlayerOptions = {}) {
     this.options = options;
-    const limit = options.cacheLimit ?? 3;
-    this.cache = new BufferCache(limit, (path) => this.decode(path));
-    this.decks = {
-      A: new Deck("A", this),
-      B: new Deck("B", this),
-      preview: new Deck("preview", this),
-    };
-  }
-
-  deck(id: DeckId): Deck {
-    return this.decks[id];
+    this.cache = new BufferCache(options.cacheLimit ?? 3, (path) => this.decode(path));
+    this.deck = new Deck(this);
   }
 
   /** Lazily created: browsers want a user gesture before an `AudioContext` may start. */
@@ -160,49 +138,15 @@ export class DjMixer {
       this.master = this.contextValue.createGain();
       this.master.gain.value = this.masterVolume;
       this.master.connect(this.contextValue.destination);
-      // A and B pass through the crossfader; preview goes straight to master so auditioning a
-      // track never depends on where the performance crossfade happens to sit.
-      this.xfadeA = this.contextValue.createGain();
-      this.xfadeA.connect(this.master);
-      this.xfadeB = this.contextValue.createGain();
-      this.xfadeB.connect(this.master);
-      this.decks.A.attach(this.xfadeA);
-      this.decks.B.attach(this.xfadeB);
-      this.decks.preview.attach(this.master);
-      this.applyCrossfade();
+      this.deck.attach(this.master);
     }
     if (this.contextValue.state === "suspended") void this.contextValue.resume();
     return this.contextValue;
   }
 
-  /** Test/metering access to the crossfade params; the UI drives `setCrossfade`, never these. */
-  crossfadeParams(): { a: AudioParam; b: AudioParam } {
-    this.context();
-    return { a: this.xfadeA!.gain, b: this.xfadeB!.gain };
-  }
-
-  setCrossfade(x: number): void {
-    this.crossfadeX = Math.min(1, Math.max(0, x));
-    if (this.contextValue !== null) this.applyCrossfade();
-  }
-
   setMasterVolume(x: number): void {
     this.masterVolume = Math.min(1, Math.max(0, x));
     if (this.master !== null) this.master.gain.value = this.masterVolume;
-  }
-
-  private applyCrossfade(): void {
-    // AudioParam automation, scheduled as a short fresh curve per move: sample-accurate on the
-    // audio thread, no zipper noise, and a wiggling fader just re-schedules (cancel + new curve).
-    const now = this.contextValue!.currentTime;
-    const targets: Array<[AudioParam, number]> = [
-      [this.xfadeA!.gain, gainA(this.crossfadeX)],
-      [this.xfadeB!.gain, gainB(this.crossfadeX)],
-    ];
-    for (const [param, target] of targets) {
-      param.cancelScheduledValues(now);
-      param.setValueCurveAtTime(new Float32Array([param.value, target]), now, CROSSFADE_RAMP_S);
-    }
   }
 
   private async decode(path: string): Promise<AudioBuffer> {
@@ -214,17 +158,16 @@ export class DjMixer {
   }
 
   emit(snapshot: DeckSnapshot): void {
-    this.options.events?.onDeckChange?.(snapshot);
+    this.options.events?.onChange?.(snapshot);
   }
 
-  emitEnded(id: DeckId): void {
-    this.options.events?.onEnded?.(id);
+  emitEnded(): void {
+    this.options.events?.onEnded?.();
   }
 }
 
 export class Deck {
-  readonly id: DeckId;
-  private readonly mixer: DjMixer;
+  private readonly player: Player;
   private entry: CacheEntry | null = null;
   private path: string | null = null;
   private state: DeckState = "empty";
@@ -236,14 +179,13 @@ export class Deck {
   /** Invalidates stale async loads: only the latest `load()` may pin its result. */
   private generation = 0;
 
-  constructor(id: DeckId, mixer: DjMixer) {
-    this.id = id;
-    this.mixer = mixer;
+  constructor(player: Player) {
+    this.player = player;
   }
 
-  /** The deck's level node, wired by the mixer (A/B → crossfader, preview → master). */
+  /** The deck's level node, wired by the player straight to master. */
   attach(destination: AudioNode): void {
-    const context = this.mixer.context();
+    const context = this.player.context();
     this.output = context.createGain();
     this.output.gain.value = this.volume;
     this.output.connect(destination);
@@ -252,7 +194,6 @@ export class Deck {
 
   snapshot(): DeckSnapshot {
     return {
-      id: this.id,
       state: this.state,
       path: this.path,
       durationMs: this.durationMs(),
@@ -271,11 +212,11 @@ export class Deck {
     this.offsetMs = 0;
     this.state = "loading";
     this.emit();
-    const entry = this.mixer.cache.acquire(path);
+    const entry = this.player.cache.acquire(path);
     try {
       await entry.promise;
     } catch (cause) {
-      this.mixer.cache.drop(path); // a failed decode must not poison the cache for the retry
+      this.player.cache.drop(path); // a failed decode must not poison the cache for the retry
       if (generation === this.generation) {
         this.state = "empty";
         this.path = null;
@@ -284,10 +225,10 @@ export class Deck {
       throw cause;
     }
     if (generation !== this.generation) {
-      this.mixer.cache.release(entry); // replaced while decoding: hand the buffer back
+      this.player.cache.release(entry); // replaced while decoding: hand the buffer back
       return;
     }
-    this.mixer.cache.pin(entry);
+    this.player.cache.pin(entry);
     this.entry = entry;
     this.state = "ready";
     this.emit();
@@ -338,7 +279,7 @@ export class Deck {
 
   positionMs(): number {
     if (this.state !== "playing") return this.offsetMs;
-    const elapsed = (this.mixer.context().currentTime - this.startedAt) * 1000;
+    const elapsed = (this.player.context().currentTime - this.startedAt) * 1000;
     return Math.min(this.durationMs(), this.offsetMs + elapsed);
   }
 
@@ -348,7 +289,7 @@ export class Deck {
 
   private startSource(offsetMs: number): void {
     if (this.entry?.buffer == null || this.output === null) return;
-    const context = this.mixer.context();
+    const context = this.player.context();
     this.stopSource();
     const source = context.createBufferSource();
     source.buffer = this.entry.buffer;
@@ -358,7 +299,7 @@ export class Deck {
       this.source = null;
       this.offsetMs = 0;
       this.state = "ready";
-      this.mixer.emitEnded(this.id);
+      this.player.emitEnded();
       this.emit();
     };
     source.connect(this.output);
@@ -382,12 +323,12 @@ export class Deck {
 
   private releaseEntry(): void {
     if (this.entry !== null) {
-      this.mixer.cache.release(this.entry);
+      this.player.cache.release(this.entry);
       this.entry = null;
     }
   }
 
   private emit(): void {
-    this.mixer.emit(this.snapshot());
+    this.player.emit(this.snapshot());
   }
 }
