@@ -22,6 +22,7 @@ type LibraryTrack = {
   bpm: number | null;
   key: string | null;
   camelot: string | null;
+  energy: number | null;
   duration_ms: number | null;
 };
 
@@ -41,7 +42,20 @@ type CueBlock = {
   imported_cue_overridden: number;
 };
 
-type TrackDetail = LibraryTrack & CueBlock & { peaks: number[] };
+type TrackDetail = LibraryTrack & CueBlock & { peaks: number[]; genre?: string | null };
+
+type Suggestion = {
+  id: string;
+  title: string;
+  artist?: string;
+  bpm: number | null;
+  key: string | null;
+  score: number;
+  reasons: string[];
+  cautions?: string[];
+};
+
+type CrateInfo = { id: number; name: string; tracks: number };
 
 const DJ_STORAGE_KEY = "shadowroom.dj";
 const DJ_LOAD_KEY = "shadowroom.dj.load";
@@ -160,6 +174,125 @@ export function DjPage() {
   }, [deckTracks, crossfade, master]);
 
   const say = useCallback((text: string | null) => setNotice(text), []);
+
+  // ------------------------------------------------ suggestions (set-planner)
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+
+  useEffect(() => {
+    const trackId = deckTracks.A;
+    const detail = trackId === null ? undefined : details[trackId];
+    if (trackId === null || detail === undefined) {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setSuggestBusy(true);
+      try {
+        const pool = await tool<{ tracks: LibraryTrack[] }>("library", "list_tracks", { limit: 200 });
+        const payload = {
+          current: {
+            id: String(detail.id),
+            title: detail.title ?? "",
+            artist: detail.artist ?? "",
+            bpm: detail.bpm,
+            key: detail.camelot ?? detail.key,
+            genres: detail.genre ? [detail.genre] : [],
+            energy: detail.energy,
+          },
+          pool: (pool.tracks ?? []).map((t) => ({
+            id: String(t.id),
+            title: t.title ?? "",
+            artist: t.artist ?? "",
+            bpm: t.bpm,
+            key: t.camelot ?? t.key,
+            genres: [],
+            energy: t.energy,
+            duration_ms: t.duration_ms,
+          })),
+          limit: 5,
+        };
+        const result = await tool<{ suggestions: Suggestion[] }>("planner", "suggest_next", payload);
+        if (cancelled) return;
+        setSuggestions(result.suggestions ?? []);
+      } catch (cause) {
+        if (!cancelled) {
+          setSuggestions([]);
+          say(`下一首推荐失败：${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+      } finally {
+        if (!cancelled) setSuggestBusy(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [deckTracks.A, details, say]);
+
+  // ------------------------------------------------ crates + m3u
+  const [crates, setCrates] = useState<CrateInfo[]>([]);
+  const [crateBusy, setCrateBusy] = useState(false);
+
+  const refreshCrates = useCallback(async () => {
+    try {
+      const result = await tool<{ crates: CrateInfo[] }>("library", "crate_list", {});
+      setCrates(result.crates ?? []);
+    } catch (cause) {
+      say(`crate 列表失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }, [say]);
+
+  useEffect(() => {
+    void refreshCrates();
+  }, [refreshCrates]);
+
+  const saveDeckToCrate = useCallback(
+    async (deckId: "A" | "B", name: string) => {
+      const trackId = deckTracks[deckId];
+      const trimmed = name.trim();
+      if (trackId === null || trimmed === "") return;
+      setCrateBusy(true);
+      try {
+        const created = await tool<{ id: number }>("library", "crate_create", { name: trimmed });
+        const added = await tool<{ added: number; skipped: number }>("library", "crate_add", {
+          crate_id: created.id,
+          track_ids: [trackId],
+        });
+        await refreshCrates();
+        say(added.skipped > 0 ? `「${trimmed}」里已经有这首` : `已存进「${trimmed}」`);
+      } catch (cause) {
+        say(`保存失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        setCrateBusy(false);
+      }
+    },
+    [deckTracks, refreshCrates, say],
+  );
+
+  const exportCrate = useCallback(
+    async (crateId: number) => {
+      setCrateBusy(true);
+      try {
+        const result = await tool<{ path: string; tracks: number; missing_files: string[] }>(
+          "library",
+          "crate_export_m3u",
+          { crate_id: crateId },
+        );
+        say(
+          `m3u 已导出：${result.path}${
+            result.missing_files.length > 0 ? `（${result.missing_files.length} 个文件不在盘上）` : ""
+          }`,
+        );
+      } catch (cause) {
+        say(`导出失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        setCrateBusy(false);
+      }
+    },
+    [say],
+  );
 
   const loadDeck = useCallback(
     async (deckId: "A" | "B", trackId: number) => {
@@ -359,6 +492,20 @@ export function DjPage() {
           onCancelEdit={() => setEditing(null)}
         />
       </div>
+      <SuggestPanel
+        active={deckTracks.A !== null}
+        busy={suggestBusy}
+        suggestions={suggestions}
+        onLoadTrack={(deckId, trackId) => void loadDeck(deckId, trackId)}
+      />
+      <CrateBar
+        crates={crates}
+        busy={crateBusy}
+        hasA={deckTracks.A !== null}
+        hasB={deckTracks.B !== null}
+        onSaveDeck={(deckId, name) => void saveDeckToCrate(deckId, name)}
+        onExport={(crateId) => void exportCrate(crateId)}
+      />
       <LibraryBrowser
         previewing={decks.preview.state !== "empty" ? decks.preview.path : null}
         deckPaths={[decks.A.path, decks.B.path]}
@@ -635,6 +782,126 @@ function MixerColumn(props: {
         aria-label="主音量"
         onChange={(event) => props.onMaster(Number(event.target.value))}
       />
+    </section>
+  );
+}
+
+function SuggestPanel(props: {
+  active: boolean;
+  busy: boolean;
+  suggestions: Suggestion[];
+  onLoadTrack: (deckId: "A" | "B", trackId: number) => void;
+}) {
+  const { active, busy, suggestions } = props;
+  return (
+    <section className="sr-dj-suggest" aria-label="下一首建议">
+      <div className="sr-dj-suggest-head">
+        <span className="sr-dj-mixer-label">下一首</span>
+        {busy ? <span className="sr-dj-count">计算中…</span> : null}
+        {!active ? <span className="sr-dj-count">先在 A 装一首歌</span> : null}
+      </div>
+      <div className="sr-dj-suggest-rows">
+        {active && !busy && suggestions.length === 0 ? (
+          <p className="sr-dj-empty">库里没有可推荐的曲目</p>
+        ) : null}
+        {suggestions.map((item) => {
+          const trackId = Number(item.id);
+          return (
+            <div
+              key={item.id}
+              className="sr-dj-row"
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData("application/x-shadowroom-track", item.id);
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+            >
+              <span className="sr-dj-row-title">{item.title}</span>
+              <span className="sr-dj-row-artist">{item.artist ?? ""}</span>
+              {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
+              {item.key ? <span className="sr-chip">{item.key}</span> : null}
+              <span className="sr-dj-score">{(item.score * 100).toFixed(0)}</span>
+              <button type="button" className="sr-page-action" onClick={() => props.onLoadTrack("A", trackId)}>
+                装到 A
+              </button>
+              <button type="button" className="sr-page-action" onClick={() => props.onLoadTrack("B", trackId)}>
+                装到 B
+              </button>
+              <div className="sr-dj-reasons">
+                {(item.reasons ?? []).map((reason, index) => (
+                  <span key={index} className="sr-dj-reason">{reason}</span>
+                ))}
+                {(item.cautions ?? []).map((caution, index) => (
+                  <span key={`c${index}`} className="sr-dj-caution">{caution}</span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CrateBar(props: {
+  crates: CrateInfo[];
+  busy: boolean;
+  hasA: boolean;
+  hasB: boolean;
+  onSaveDeck: (deckId: "A" | "B", name: string) => void;
+  onExport: (crateId: number) => void;
+}) {
+  const { crates, busy, hasA, hasB } = props;
+  const [name, setName] = useState("");
+  const [deckId, setDeckId] = useState<"A" | "B">("A");
+  return (
+    <section className="sr-dj-crates" aria-label="crate">
+      <div className="sr-dj-crate-save">
+        <select
+          className="sr-input sr-input--num"
+          value={deckId}
+          aria-label="存哪一台"
+          onChange={(event) => setDeckId(event.target.value === "B" ? "B" : "A")}
+        >
+          <option value="A" disabled={!hasA}>deck A</option>
+          <option value="B" disabled={!hasB}>deck B</option>
+        </select>
+        <input
+          className="sr-input"
+          placeholder="crate 名"
+          value={name}
+          aria-label="crate 名"
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") props.onSaveDeck(deckId, name);
+          }}
+        />
+        <button
+          type="button"
+          className="sr-page-action"
+          disabled={busy || name.trim() === "" || !(deckId === "A" ? hasA : hasB)}
+          onClick={() => props.onSaveDeck(deckId, name)}
+        >
+          存入
+        </button>
+      </div>
+      <div className="sr-dj-crate-list">
+        {crates.map((crate) => (
+          <span key={crate.id} className="sr-dj-crate-item">
+            <span className="sr-dj-crate-name">{crate.name}</span>
+            <span className="sr-dj-count">{crate.tracks}</span>
+            <button
+              type="button"
+              className="sr-page-action"
+              disabled={busy || crate.tracks === 0}
+              onClick={() => props.onExport(crate.id)}
+            >
+              导出 m3u
+            </button>
+          </span>
+        ))}
+        {crates.length === 0 ? <span className="sr-dj-count">还没有 crate</span> : null}
+      </div>
     </section>
   );
 }
