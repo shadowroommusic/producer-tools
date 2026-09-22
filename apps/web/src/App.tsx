@@ -126,13 +126,16 @@ import {
 } from "./lib/sessions";
 import { AppFrame } from "./shell/AppFrame";
 
-/** The four ShadowRoom MCP servers, keyed by the ids the bridge reports. */
+/** The nine ShadowRoom MCP servers, keyed by the ids the bridge reports. */
 const PLUGINS: Array<{ id: string; server: string; label: string; repo: string }> = [
   { id: "bridge", server: "converter", label: "Rekordbox ⇄ Serato", repo: "rekordbox-serato-bridge" },
   { id: "analysis", server: "analysis", label: "音频分析去重", repo: "audio-analysis-dedupe" },
   { id: "planner", server: "planner", label: "Set 编排", repo: "set-planner" },
   { id: "generator", server: "generator", label: "音乐生成队列", repo: "shadow-music-generator" },
   { id: "splitter", server: "splitter", label: "Stem Splitter", repo: "stem-splitter" },
+  { id: "soundfont", server: "soundfont", label: "真乐器渲染", repo: "soundfont-renderer" },
+  { id: "steward", server: "steward", label: "管家账本", repo: "steward" },
+  { id: "library", server: "library", label: "曲目库", repo: "library" },
   { id: "grabber", server: "grabber", label: "音乐抓取转码", repo: "ShadowMusicGrabber" },
 ];
 
