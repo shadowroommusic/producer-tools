@@ -20,6 +20,7 @@ import { WorkbenchHome } from "./components/WorkbenchHome";
 import { PluginPanelPage } from "./components/PluginPanelPage";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
+import { DjPage } from "./components/DjPage";
 import { SettingsPage } from "./components/SettingsPage";
 import {
   agentModelChoices,
@@ -159,7 +160,7 @@ export function App() {
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [mainView, setMainView] = useState<
-    "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "settings"
+    "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "dj" | "settings"
   >(
     () =>
       (window.localStorage.getItem("shadowroom.view") as
@@ -168,6 +169,7 @@ export function App() {
         | "plugins"
         | "plugin"
         | "studio"
+        | "dj"
         | "settings"
         | null) ?? "workbench",
   );
@@ -182,6 +184,8 @@ export function App() {
   const workspace: WorkspaceId =
     mainView === "studio"
       ? "studio"
+      : mainView === "dj"
+        ? "dj"
       : mainView === "settings"
         ? "settings"
         : mainView === "plugins" || mainView === "plugin"
@@ -190,7 +194,13 @@ export function App() {
             ? "workbench"
             : lastWorkspaceView;
   useEffect(() => {
-    if (mainView === "studio" || mainView === "settings" || mainView === "workbench") setLastWorkspaceView(mainView);
+    if (
+      mainView === "studio" ||
+      mainView === "dj" ||
+      mainView === "settings" ||
+      mainView === "workbench"
+    )
+      setLastWorkspaceView(mainView);
   }, [mainView]);
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
@@ -1867,7 +1877,7 @@ export function App() {
    * form is noise, and a chat beside the plugin list is a second conversation nobody asked for. On
    * those pages the dock stays put away (the rail can still take you to the conversation).
    */
-  const viewShowsDock = mainView === "workbench" || mainView === "studio";
+  const viewShowsDock = mainView === "workbench" || mainView === "studio" || mainView === "dj";
   const chatInDock = dockOpen && viewShowsDock;
   /** Bounce the arrangement through the generator plugin and record the call in the transcript. */
   const exportArrangement = useCallback(
@@ -2382,7 +2392,15 @@ export function App() {
           onSelectWorkspace={(next) => {
             // The work pages keep the conversation beside them; the conversation page is the
             // conversation, so the dock folds away there.
-            setMainView(next === "studio" ? "studio" : next === "settings" ? "settings" : "workbench");
+            setMainView(
+              next === "studio"
+                ? "studio"
+                : next === "dj"
+                  ? "dj"
+                  : next === "settings"
+                    ? "settings"
+                    : "workbench",
+            );
             setDockOpen(true);
           }}
           onShowPlugins={() => {
@@ -2448,6 +2466,8 @@ export function App() {
             />
           ) : mainView === "settings" ? (
             <SettingsPage settings={modelSettings} onChange={setModelSettings} />
+          ) : mainView === "dj" ? (
+            <DjPage />
           ) : mainView === "studio" ? (
           openProject === undefined ? (
             <StudioProjects

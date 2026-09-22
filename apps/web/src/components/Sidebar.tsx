@@ -37,7 +37,7 @@ const WORKSPACES: Array<{ id: WorkspaceId; label: string; icon: typeof IconWorkb
   { id: "workbench", label: "工作台", icon: IconWorkbench, ready: true },
   { id: "library", label: "曲目库", icon: IconLibrary, ready: false },
   { id: "studio", label: "Studio", icon: IconStudio, ready: true },
-  { id: "dj", label: "DJ", icon: IconDj, ready: false },
+  { id: "dj", label: "DJ", icon: IconDj, ready: true },
   { id: "settings", label: "设置", icon: IconSettings, ready: true },
 ];
 
