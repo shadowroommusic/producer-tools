@@ -542,7 +542,7 @@ export function DjPage() {
           >
             {deck.state === "playing" ? <IconPause /> : <IconPlay />}
           </button>
-          <span className="sr-dj-clock">{mmss(deck.positionMs / 1000)}</span>
+          <span className="sr-dj-clock">{mmss(player.deck.positionMs() / 1000)}</span>
           <span className="sr-dj-clock-total">/ {mmss(deck.durationMs / 1000)}</span>
           <div className="sr-dj-nudges">
             <button type="button" className="sr-page-action" disabled={!canTransport} onClick={() => nudge(-4)}>−4拍</button>
