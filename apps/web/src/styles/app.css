@@ -3865,6 +3865,26 @@
   height: 30px;
 }
 
+.sr-dj-overlap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+}
+
+.sr-dj-overlap .sr-input--num {
+  width: 56px;
+  min-width: 0;
+  height: 26px;
+}
+
+.sr-dj-timing {
+  color: var(--sr-label-caption);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .sr-dj-main {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);

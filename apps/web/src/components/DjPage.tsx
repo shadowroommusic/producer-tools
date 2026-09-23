@@ -14,6 +14,7 @@ import type { DragEvent } from "react";
 import { IconPause, IconPlay } from "./icons";
 import { callTool } from "../lib/mcp";
 import { Player, type DeckSnapshot } from "../lib/dj-deck";
+import { formatPlanDuration, plannerTrackPayload } from "../lib/dj-plan";
 
 type LibraryTrack = {
   id: number;
@@ -61,11 +62,40 @@ type SuggestionRow = {
 type Draft = {
   name: string;
   trackIds: number[];
+  overlapMs: number;
+};
+
+type PlanRow = {
+  id: string;
+  play_start: string;
+  play_end: string;
+  warnings: string[];
+};
+
+type PlanResult = {
+  summary: {
+    total_duration_ms: number;
+    sum_of_segments_ms: number;
+    overlap_saved_ms: number;
+    warning_count: number;
+  };
+  timeline: PlanRow[];
+  warnings: string[];
+};
+
+type OrderResult = {
+  ordered_ids: string[];
+  set_score: number;
+  greedy_score: number;
+  two_opt_gain: number;
+  two_opt_moves: number;
+  elapsed_ms: number;
 };
 
 const DRAG_TRACK = "application/x-shadowroom-track";
 const DRAG_ROW = "application/x-shadowroom-setrow";
 const DRAFT_KEY = "shadowroom.setdraft";
+const DEFAULT_OVERLAP_MS = 16_000;
 const CUE_COLORS = ["#f43f5e", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#6366f1"];
 
 function mmss(seconds: number): string {
@@ -89,12 +119,16 @@ function readDraft(): Draft {
       return {
         name: typeof parsed.name === "string" ? parsed.name : "未命名 set",
         trackIds: Array.isArray(parsed.trackIds) ? parsed.trackIds.filter((id) => typeof id === "number") : [],
+        overlapMs:
+          typeof parsed.overlapMs === "number" && Number.isFinite(parsed.overlapMs) && parsed.overlapMs >= 0
+            ? parsed.overlapMs
+            : DEFAULT_OVERLAP_MS,
       };
     }
   } catch {
     // corrupted draft = empty draft; the page must always come up
   }
-  return { name: "未命名 set", trackIds: [] };
+  return { name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS };
 }
 
 const emptySnapshot = (): DeckSnapshot => ({
@@ -130,6 +164,9 @@ export function DjPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<SuggestionRow[]>([]);
   const [suggestBusy, setSuggestBusy] = useState(false);
+  const [plan, setPlan] = useState<PlanResult | null>(null);
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [undoOrder, setUndoOrder] = useState<number[] | null>(null);
 
   const say = useCallback((text: string | null) => setNotice(text), []);
 
@@ -190,6 +227,7 @@ export function DjPage() {
 
   const addToSet = useCallback(
     (id: number) => {
+      setUndoOrder(null);
       setDraft((current) =>
         current.trackIds.includes(id) ? current : { ...current, trackIds: [...current.trackIds, id] },
       );
@@ -198,6 +236,7 @@ export function DjPage() {
   );
 
   const insertIntoSet = useCallback((id: number, at: number) => {
+    setUndoOrder(null);
     setDraft((current) => {
       const next = current.trackIds.filter((existing) => existing !== id);
       const clamped = Math.min(at, next.length);
@@ -206,6 +245,7 @@ export function DjPage() {
   }, []);
 
   const moveRow = useCallback((from: number, to: number) => {
+    setUndoOrder(null);
     setDraft((current) => {
       const ids = [...current.trackIds];
       const [moved] = ids.splice(from, 1);
@@ -215,11 +255,13 @@ export function DjPage() {
   }, []);
 
   const removeFromSet = useCallback((id: number) => {
+    setUndoOrder(null);
     setDraft((current) => ({ ...current, trackIds: current.trackIds.filter((existing) => existing !== id) }));
   }, []);
 
   const newSet = useCallback(() => {
-    setDraft({ name: "未命名 set", trackIds: [] });
+    setUndoOrder(null);
+    setDraft({ name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS });
     setSuggestions([]);
     say(null);
   }, [say]);
@@ -322,6 +364,65 @@ export function DjPage() {
     };
   }, [draft.trackIds, draft.name, details, say]);
 
+  // ------------------------------------------------ timing: plan_set drives the topbar readouts
+  useEffect(() => {
+    const ids = draft.trackIds;
+    if (ids.length === 0) {
+      setPlan(null);
+      return;
+    }
+    if (ids.some((id) => details[id] === undefined)) return; // the backfill re-triggers this effect
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await tool<PlanResult>("planner", "plan_set", {
+          set: { tracks: ids.map((id) => plannerTrackPayload(details[id])) },
+          default_overlap_ms: Math.round(draft.overlapMs),
+        });
+        if (!cancelled) setPlan(result);
+      } catch (cause) {
+        if (!cancelled) {
+          setPlan(null);
+          say(`计时失败：${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [draft.trackIds, draft.overlapMs, details, say]);
+
+  /** planner.order_set re-orders the whole draft; the previous order stays one undo deep. */
+  const applyAiOrder = useCallback(async () => {
+    const ids = draft.trackIds;
+    if (ids.length < 2 || ids.some((id) => details[id] === undefined)) return;
+    setOrderBusy(true);
+    try {
+      const result = await tool<OrderResult>("planner", "order_set", {
+        set: { tracks: ids.map((id) => plannerTrackPayload(details[id])) },
+      });
+      const ordered = result.ordered_ids.map(Number);
+      if (ordered.length !== ids.length || ids.some((id) => !ordered.includes(id))) {
+        throw new Error("插件返回的曲目集合与草稿不一致");
+      }
+      setUndoOrder(ids);
+      setDraft((current) => ({ ...current, trackIds: ordered }));
+      say(`AI 排序：2-opt ${result.two_opt_moves} 步 · ${Math.round(result.elapsed_ms)}ms · 总分 ${result.set_score}`);
+    } catch (cause) {
+      say(`AI 排序失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setOrderBusy(false);
+    }
+  }, [draft.trackIds, details, say]);
+
+  const undoAiOrder = useCallback(() => {
+    setUndoOrder((previous) => {
+      if (previous !== null) setDraft((current) => ({ ...current, trackIds: previous }));
+      return null;
+    });
+  }, []);
+
   // ------------------------------------------------ cue editing on the selected track
   const selectedDetail = selectedId !== null ? details[selectedId] : undefined;
   const cueBlock: CueBlock | null =
@@ -419,6 +520,9 @@ export function DjPage() {
     player.deck.seekMs(player.deck.positionMs() + step);
   };
 
+  // The plan's per-track rows, keyed by track id for the SetBoard.
+  const planRows = new Map<string, PlanRow>((plan?.timeline ?? []).map((row) => [row.id, row]));
+
   return (
     <div className="sr-dj">
       <div className="sr-dj-topbar">
@@ -429,6 +533,50 @@ export function DjPage() {
           onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
         />
         <span className="sr-dj-count">{draft.trackIds.length} 首</span>
+        <label className="sr-dj-overlap" title="相邻两首的默认重叠时长（v1 全局一个值，逐首覆盖留后）">
+          overlap
+          <input
+            className="sr-input sr-input--num"
+            type="number"
+            min={0}
+            max={120}
+            step={1}
+            value={Math.round(draft.overlapMs / 1000)}
+            aria-label="默认 overlap（秒）"
+            onChange={(event) => {
+              const seconds = Number(event.target.value);
+              if (Number.isFinite(seconds) && seconds >= 0) {
+                setDraft((current) => ({ ...current, overlapMs: Math.round(seconds * 1000) }));
+              }
+            }}
+          />
+          秒
+        </label>
+        {plan !== null ? (
+          <span className="sr-dj-timing">
+            段 {formatPlanDuration(plan.summary.sum_of_segments_ms)} · 省 {formatPlanDuration(plan.summary.overlap_saved_ms)} · 总{" "}
+            {formatPlanDuration(plan.summary.total_duration_ms)}
+          </span>
+        ) : null}
+        {plan !== null && plan.summary.warning_count > 0 ? (
+          <span className="sr-dj-badge" title={plan.warnings.join("\n")}>
+            ⚠ {plan.summary.warning_count}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="sr-page-action"
+          disabled={orderBusy || draft.trackIds.length < 2}
+          title="planner.order_set：贪心链 + 2-opt 重排整个 set"
+          onClick={() => void applyAiOrder()}
+        >
+          {orderBusy ? "排序中…" : "AI 排序"}
+        </button>
+        {undoOrder !== null ? (
+          <button type="button" className="sr-page-action" onClick={undoAiOrder}>
+            撤销排序
+          </button>
+        ) : null}
         <button type="button" className="sr-page-action" onClick={newSet}>
           新建 set
         </button>
@@ -454,6 +602,7 @@ export function DjPage() {
         <SetBoard
           trackIds={draft.trackIds}
           details={details}
+          planRows={planRows}
           selectedId={selectedId}
           onSelect={(id) => void openTrack(id)}
           onRemove={removeFromSet}
@@ -660,6 +809,7 @@ function CueEditor(props: {
 function SetBoard(props: {
   trackIds: number[];
   details: Record<number, TrackDetail>;
+  planRows: Map<string, PlanRow>;
   selectedId: number | null;
   onSelect: (id: number) => void;
   onRemove: (id: number) => void;
@@ -691,6 +841,7 @@ function SetBoard(props: {
       <div className="sr-dj-rows" onDragOver={(event) => event.preventDefault()} onDrop={(event) => handleDrop(event, props.trackIds.length)}>
         {props.trackIds.map((id, index) => {
           const detail = props.details[id];
+          const planRow = props.planRows.get(String(id));
           return (
             <div
               key={id}
@@ -724,7 +875,18 @@ function SetBoard(props: {
               {(detail?.cues ?? []).some((cue) => cue.role === "out") ? (
                 <span className="sr-dj-badge sr-dj-badge-out">出</span>
               ) : null}
-              <span className="sr-dj-row-time">{detail?.duration_ms != null ? mmss(detail.duration_ms / 1000) : "—"}</span>
+              {planRow !== undefined && planRow.warnings.length > 0 ? (
+                <span className="sr-dj-badge" title={planRow.warnings.join("\n")}>
+                  ⚠
+                </span>
+              ) : null}
+              <span className="sr-dj-row-time">
+                {planRow !== undefined
+                  ? `${planRow.play_start}–${planRow.play_end}`
+                  : detail?.duration_ms != null
+                    ? mmss(detail.duration_ms / 1000)
+                    : "—"}
+              </span>
               <button
                 type="button"
                 className="sr-page-action"
