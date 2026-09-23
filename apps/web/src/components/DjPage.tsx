@@ -1009,7 +1009,7 @@ function LibraryBrowser(props: {
             onDragStart={(event) => event.dataTransfer.setData(DRAG_TRACK, String(track.id))}
           >
             <span className="sr-dj-row-title">{track.title ?? track.path.split("/").pop()}</span>
-            <span className="sr-dj-row-artist">{track.artist ?? ""}</span>
+            {track.artist ? <span className="sr-dj-row-artist">{track.artist}</span> : null}
             {track.bpm !== null ? <span className="sr-chip">{Number(track.bpm.toFixed(1))} BPM</span> : null}
             {track.camelot ? <span className="sr-chip">{track.camelot}</span> : null}
             <span className="sr-dj-row-time">{track.duration_ms !== null ? mmss(track.duration_ms / 1000) : "—"}</span>

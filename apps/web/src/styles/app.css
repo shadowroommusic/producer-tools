@@ -3819,7 +3819,7 @@
 
 .sr-dj-row-title {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 6ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3828,8 +3828,9 @@
 }
 
 .sr-dj-row-artist {
-  flex: none;
-  width: 120px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3842,6 +3843,45 @@
   color: var(--sr-label-caption);
   font-family: var(--sr-font-mono);
   font-size: 11px;
+}
+
+/* Narrow panels (dock open on small windows): the title owns the first row
+   and chips/time/buttons wrap to a second line, so the name never collapses. */
+.sr-dj-library,
+.sr-dj-board {
+  container-type: inline-size;
+}
+
+@container (max-width: 380px) {
+  .sr-dj-row {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .sr-dj-row-title {
+    flex: 1 1 calc(100% - 30px);
+  }
+
+  /* The board row's ✕ would otherwise land near the row's geometric centre on
+     line 2, where a click meant to select the track would delete it. Pin it to
+     the corner and keep the title clear of it. */
+  .sr-dj-board .sr-dj-row {
+    position: relative;
+  }
+
+  .sr-dj-board .sr-dj-row > .sr-page-action {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+  }
+
+  .sr-dj-board .sr-dj-row-title {
+    padding-right: 30px;
+  }
+
+  .sr-dj-reasons {
+    flex: 1 1 100%;
+  }
 }
 
 .sr-dj-empty {
