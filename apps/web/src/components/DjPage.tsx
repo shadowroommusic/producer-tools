@@ -92,6 +92,23 @@ type OrderResult = {
   elapsed_ms: number;
 };
 
+/** analysis.suggest_cues — computed only; nothing lands until the user confirms and cues_set writes. */
+type AiCueCandidate = {
+  position_ms: number;
+  end_ms?: number;
+  role: "in" | "out" | "loop";
+  confidence: number;
+  reason: string;
+};
+
+type AiCueResult = {
+  duration_ms: number;
+  bpm: { value: number; source: string };
+  candidates: AiCueCandidate[];
+  notes: string[];
+  warnings: string[];
+};
+
 const DRAG_TRACK = "application/x-shadowroom-track";
 const DRAG_ROW = "application/x-shadowroom-setrow";
 const DRAFT_KEY = "shadowroom.setdraft";
@@ -167,6 +184,8 @@ export function DjPage() {
   const [plan, setPlan] = useState<PlanResult | null>(null);
   const [orderBusy, setOrderBusy] = useState(false);
   const [undoOrder, setUndoOrder] = useState<number[] | null>(null);
+  const [aiCue, setAiCue] = useState<{ trackId: number; result: AiCueResult } | null>(null);
+  const [aiCueBusy, setAiCueBusy] = useState(false);
 
   const say = useCallback((text: string | null) => setNotice(text), []);
 
@@ -217,6 +236,7 @@ export function DjPage() {
         await player.deck.load(next.path);
         setSelectedId(id);
         setEditing(null);
+        setAiCue(null);
         say(null);
       } catch (cause) {
         say(`载入失败：${cause instanceof Error ? cause.message : String(cause)}`);
@@ -513,6 +533,55 @@ export function DjPage() {
     [cueBlock, saveCues],
   );
 
+  /** analysis.suggest_cues only computes; the preview card is the user gate before cues_set writes. */
+  const requestAiCues = useCallback(async () => {
+    if (selectedId === null || selectedDetail === undefined) return;
+    setAiCueBusy(true);
+    try {
+      const result = await tool<AiCueResult>("analysis", "suggest_cues", {
+        path: selectedDetail.path,
+        ...(selectedDetail.bpm !== null ? { bpm: selectedDetail.bpm } : {}),
+      });
+      setAiCue({ trackId: selectedId, result });
+      say(null);
+    } catch (cause) {
+      say(`AI 设 cue 失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setAiCueBusy(false);
+    }
+  }, [selectedId, selectedDetail, say]);
+
+  /** Merge the preview into the cue set: same role is replaced, slots take the lowest free 0-7. */
+  const applyAiCues = useCallback(() => {
+    if (aiCue === null || cueBlock === null) return;
+    let cues = [...cueBlock.cues];
+    for (const cand of aiCue.result.candidates) {
+      const replaced = cues.find((cue) => cue.role === cand.role);
+      const rest = cues.filter((cue) => cue.role !== cand.role);
+      const usedSlots = new Set(rest.map((cue) => cue.slot).filter((s): s is number => typeof s === "number"));
+      const usedColors = new Set(rest.map((cue) => cue.color).filter((c): c is string => typeof c === "string"));
+      let slot = replaced?.slot ?? null;
+      if (slot === null) {
+        slot = [0, 1, 2, 3, 4, 5, 6, 7].find((s) => !usedSlots.has(s)) ?? null;
+      }
+      cues = [
+        ...rest,
+        {
+          position_ms: Math.round(cand.position_ms),
+          end_ms: cand.end_ms !== undefined ? Math.round(cand.end_ms) : null,
+          kind: cand.role === "loop" ? "loop" : "cue",
+          role: cand.role,
+          slot,
+          color: replaced?.color ?? CUE_COLORS.find((c) => !usedColors.has(c)) ?? null,
+          name: cand.role === "in" ? "AI 进" : cand.role === "out" ? "AI 出" : "AI loop",
+          display_name: "",
+        },
+      ];
+    }
+    setAiCue(null);
+    void saveCues(cues);
+  }, [aiCue, cueBlock, saveCues]);
+
   const bpm = selectedDetail?.bpm ?? null;
   const canTransport = deck.state === "ready" || deck.state === "playing";
   const nudge = (beats: number) => {
@@ -631,6 +700,41 @@ export function DjPage() {
           cues={cueBlock?.cues ?? []}
           onSeek={(ms) => player.deck.seekMs(ms)}
         />
+        {aiCue !== null && aiCue.trackId === selectedId ? (
+          <div className="sr-dj-aicue">
+            <div className="sr-dj-aicue-head">
+              <strong>AI 设 cue · 预览（未写入）</strong>
+              <span className="sr-dj-cue-note">
+                {aiCue.result.bpm.value.toFixed(1)} BPM（{aiCue.result.bpm.source}）
+              </span>
+            </div>
+            <ul className="sr-dj-aicue-list">
+              {aiCue.result.candidates.map((cand) => (
+                <li key={cand.role}>
+                  <span className={`sr-dj-badge${cand.role === "in" ? " sr-dj-badge-in" : cand.role === "out" ? " sr-dj-badge-out" : ""}`}>
+                    {cand.role === "in" ? "进" : cand.role === "out" ? "出" : "loop"}
+                  </span>
+                  <span className="sr-dj-aicue-time">
+                    {mmss(cand.position_ms / 1000)}
+                    {cand.end_ms !== undefined ? ` – ${mmss(cand.end_ms / 1000)}` : ""}
+                  </span>
+                  <span className="sr-dj-aicue-conf">{Math.round(cand.confidence * 100)}%</span>
+                  <span className="sr-dj-aicue-reason">{cand.reason}</span>
+                  {(cueBlock?.cues ?? []).some((cue) => cue.role === cand.role) ? (
+                    <span className="sr-dj-aicue-replace">替换现有</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {aiCue.result.notes.map((note) => (
+              <p key={note} className="sr-dj-aicue-note">{note}</p>
+            ))}
+            <div className="sr-dj-aicue-actions">
+              <button type="button" className="sr-page-action" onClick={applyAiCues}>写入 cues</button>
+              <button type="button" className="sr-page-action" onClick={() => setAiCue(null)}>放弃</button>
+            </div>
+          </div>
+        ) : null}
         <div className="sr-dj-cues">
           {(cueBlock?.cues ?? []).map((cue, index) =>
             editing === index ? (
@@ -672,6 +776,14 @@ export function DjPage() {
           )}
           <button type="button" className="sr-dj-cue-add" onClick={addCueAt} disabled={!canTransport}>
             ＋ 打点
+          </button>
+          <button
+            type="button"
+            className="sr-dj-cue-add"
+            onClick={() => void requestAiCues()}
+            disabled={aiCueBusy || selectedDetail === undefined}
+          >
+            {aiCueBusy ? "分析中…" : "AI 设 cue"}
           </button>
           {cueBlock !== null && cueBlock.imported_cue_overridden > 0 ? (
             <span className="sr-dj-cue-note">已覆盖 {cueBlock.imported_cue_overridden} 条导入 cue</span>

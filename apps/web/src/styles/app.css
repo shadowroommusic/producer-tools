@@ -3711,6 +3711,75 @@
   font-size: 12px;
 }
 
+/* AI 设 cue preview — computed suggestions, nothing written until 写入 cues is clicked. */
+.sr-dj-aicue {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: 12px;
+  background: var(--sr-surface-2);
+}
+
+.sr-dj-aicue-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sr-dj-aicue-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-dj-aicue-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--sr-text-13);
+}
+
+.sr-dj-aicue-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--sr-label-primary);
+  white-space: nowrap;
+}
+
+.sr-dj-aicue-conf {
+  font-variant-numeric: tabular-nums;
+  color: var(--sr-label-secondary);
+}
+
+.sr-dj-aicue-reason {
+  color: var(--sr-label-secondary);
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.sr-dj-aicue-replace {
+  color: var(--sr-warn, #eab308);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sr-dj-aicue-note {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+}
+
+.sr-dj-aicue-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .sr-dj-cue-editor {
   display: inline-flex;
   align-items: center;
