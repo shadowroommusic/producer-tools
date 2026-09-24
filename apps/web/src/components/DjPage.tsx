@@ -109,6 +109,23 @@ type AiCueResult = {
   warnings: string[];
 };
 
+/** library.set_list row — an imported Rekordbox XML playlist or history set. */
+type SetSummary = {
+  id: number;
+  source: string;
+  name: string;
+  played_at: number;
+  track_count: number;
+};
+
+/** library.set_detail — tracks in played order; track_id is null when the import matched nothing. */
+type SetDetail = {
+  id: number;
+  source: string;
+  name: string;
+  tracks: Array<{ position: number; track_id: number | null; title: string | null }>;
+};
+
 const DRAG_TRACK = "application/x-shadowroom-track";
 const DRAG_ROW = "application/x-shadowroom-setrow";
 const DRAFT_KEY = "shadowroom.setdraft";
@@ -186,6 +203,9 @@ export function DjPage() {
   const [undoOrder, setUndoOrder] = useState<number[] | null>(null);
   const [aiCue, setAiCue] = useState<{ trackId: number; result: AiCueResult } | null>(null);
   const [aiCueBusy, setAiCueBusy] = useState(false);
+  const [setChoices, setSetChoices] = useState<SetSummary[] | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
 
   const say = useCallback((text: string | null) => setNotice(text), []);
 
@@ -285,6 +305,76 @@ export function DjPage() {
     setSuggestions([]);
     say(null);
   }, [say]);
+
+  // ------------------------------------------------ import an existing set / export the draft as m3u
+  /** Toggle the picker; the list is fetched fresh every time it opens. */
+  const openImport = useCallback(async () => {
+    if (setChoices !== null) {
+      setSetChoices(null);
+      return;
+    }
+    setImportBusy(true);
+    try {
+      const result = await tool<{ sets: SetSummary[] }>("library", "set_list", {});
+      setSetChoices(result.sets);
+    } catch (cause) {
+      say(`读取 set 列表失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setImportBusy(false);
+    }
+  }, [setChoices, say]);
+
+  /** set_detail's order is the set's order; rows the import never matched (track_id null) are skipped, named in the notice. */
+  const importSet = useCallback(
+    async (setId: number) => {
+      setImportBusy(true);
+      try {
+        const detail = await tool<SetDetail>("library", "set_detail", { id: setId });
+        const matched = detail.tracks.filter((t) => t.track_id !== null).map((t) => t.track_id as number);
+        const skipped = detail.tracks.length - matched.length;
+        setUndoOrder(null);
+        setEditing(null);
+        setAiCue(null);
+        setDraft({ name: detail.name, trackIds: matched, overlapMs: DEFAULT_OVERLAP_MS });
+        setSetChoices(null);
+        say(
+          skipped > 0
+            ? `已导入「${detail.name}」：${matched.length} 首；${skipped} 条在库内匹配不上（跳过）`
+            : `已导入「${detail.name}」：${matched.length} 首`,
+        );
+      } catch (cause) {
+        say(`导入 set 失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        setImportBusy(false);
+      }
+    },
+    [say],
+  );
+
+  /** Our set lands in a crate first (crate = library's structure), then crate_export_m3u writes the file. */
+  const exportM3u = useCallback(async () => {
+    if (draft.trackIds.length === 0) return;
+    setExportBusy(true);
+    try {
+      const crate = await tool<{ id: number; created: boolean }>("library", "crate_create", { name: draft.name });
+      const added = await tool<{ added: number; skipped: number }>("library", "crate_add", {
+        crate_id: crate.id,
+        track_ids: draft.trackIds,
+      });
+      const out = await tool<{ path: string; tracks: number; missing_files: string[] }>("library", "crate_export_m3u", {
+        crate_id: crate.id,
+      });
+      say(
+        `已导出 ${out.tracks} 首 → ${out.path}` +
+          (added.skipped > 0 ? `（同名 crate 已有 ${added.skipped} 首，未重复添加）` : "") +
+          (out.missing_files.length > 0 ? `（${out.missing_files.length} 个文件当前缺失，仍写入）` : ""),
+      );
+    } catch (cause) {
+      say(`导出 m3u 失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setExportBusy(false);
+    }
+  }, [draft.name, draft.trackIds, say]);
 
   // ------------------------------------------------ suggestions: last track + whole-set blend
   useEffect(() => {
@@ -649,7 +739,47 @@ export function DjPage() {
         <button type="button" className="sr-page-action" onClick={newSet}>
           新建 set
         </button>
+        <button
+          type="button"
+          className="sr-page-action"
+          aria-expanded={setChoices !== null}
+          disabled={importBusy}
+          title="library.set_list / set_detail：把导入的 Rekordbox XML 歌单或历史 set 落进看板"
+          onClick={() => void openImport()}
+        >
+          {importBusy && setChoices === null ? "读取中…" : "导入 set"}
+        </button>
+        <button
+          type="button"
+          className="sr-page-action"
+          disabled={exportBusy || draft.trackIds.length === 0}
+          title="先落 crate（library.crate_create/crate_add），再 crate_export_m3u 写到 exports/"
+          onClick={() => void exportM3u()}
+        >
+          {exportBusy ? "导出中…" : "导出 m3u"}
+        </button>
       </div>
+      {setChoices !== null ? (
+        <div className="sr-dj-import">
+          {setChoices.length === 0 ? (
+            <p className="sr-dj-empty">库里还没有导入的 set —— 用 library 插件先导 Rekordbox XML 或历史。</p>
+          ) : (
+            setChoices.map((set) => (
+              <button
+                key={set.id}
+                type="button"
+                className="sr-dj-import-row"
+                disabled={importBusy}
+                onClick={() => void importSet(set.id)}
+              >
+                <span className="sr-dj-import-name">{set.name}</span>
+                <span className="sr-chip">{set.source}</span>
+                <span className="sr-dj-count">{set.track_count} 首</span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
       {notice !== null ? <div className="sr-dj-notice" role="alert">{notice}</div> : null}
       <div className="sr-dj-main">
         <LibraryBrowser
@@ -958,6 +1088,7 @@ function SetBoard(props: {
             <div
               key={id}
               className="sr-dj-row"
+              data-track-id={id}
               data-selected={props.selectedId === id || undefined}
               data-dropat={dropAt === index || undefined}
               draggable

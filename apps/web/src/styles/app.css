@@ -3585,6 +3585,48 @@
   font-size: var(--sr-text-13);
 }
 
+/* 导入 set picker — the imported Rekordbox/history sets, one row each. */
+.sr-dj-import {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-surface-2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.sr-dj-import-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--sr-radius-md);
+  background: transparent;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-13);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-dj-import-row:hover:enabled {
+  background: var(--sr-hover);
+}
+
+.sr-dj-import-row:disabled {
+  opacity: 0.45;
+}
+
+.sr-dj-import-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sr-dj-deck {
   display: flex;
   flex-direction: column;
