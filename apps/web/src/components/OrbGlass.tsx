@@ -1,34 +1,45 @@
 /**
- * 管家球的绘制（canvas 2D，照着新版 Siri 那颗球抄）。
+ * 管家球 v5 的绘制（canvas 2D，方向 A「暗核光圈」——照 iOS 18 Siri 拆解重做）。
  *
- * 为什么不用 three.js：用户要的是「一眼就看见、像 Siri 那样有体积的发光球」，不是一颗小玻璃珠。
- * 2D 画布足够做出 Siri 的关键特征，而且没有依赖、不会 NaN 崩：
- *   ① 柔和外发光（青蓝→透明）② 球体=白核偏左上→青蓝→蓝紫→透明的多段径向渐变（虹彩感来源）
- *   ③ 边缘不是正圆：半径按 3 条不同频率的正弦随时间起伏（有机流体边）④ 边缘光 + 左上镜面高光
- *   ⑤ 6 颗高光粒子沿球面绕行（越靠后越暗越小）⑥ 你说=青蓝外扩波纹，它说=青绿向内容
- * 所有进 canvas 的数值先过 Number.isFinite（P0 教训：NaN 会让整块画布炸掉）。
+ * v4 的病：白核实心球像颗塑料珠，五态只分两族颜色，thinking/working 与 idle 一模一样
+ * （用户："跟人机一样"）。v5 的形态 = **深色半透明核 + 液态亮描边（色相沿边流动）+ 外发光**，
+ * 五态走三条独立通道，任意两态至少在两个通道上不同（单测钉住）：
+ *   色相族  说=青绿 / 其余蓝紫 / 干活=品牌酸绿进度弧
+ *   运动    思考=色相快速追边+中心旋流 / 听=漂移加速+电平驱动边宽 / 闲=4s 慢呼吸
+ *   亮度    听 > 思考 > 闲
+ * 状态切换不做硬切：参数逐帧指数趋近， morph 过去。reduced-motion 冻结一切位移，
+ * 但色相族/亮度/进度弧保留（信息不丢）。进 canvas 的数值先过 Number.isFinite（P0 教训）。
  */
 import { useEffect, useRef } from "react";
+import { ORB_STATES, lerpHue, type OrbVisualMode } from "../lib/orb-states.ts";
 
+export type { OrbVisualMode } from "../lib/orb-states.ts";
+
+/** 品牌酸绿（--sr-accent #d9ff3d ≈ hsl(68,100%,62%)）：干活进度弧专用。 */
+const ACID = { h: 68, s: 100, l: 62 };
+const TAU = Math.PI * 2;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 export function GlassSphere({
   size,
   mode,
   level,
+  progress,
   reducedMotion,
 }: {
   size: number;
-  /** "idle" | "listening"（你说）| "speaking"（它说）| "working" */
-  mode: string;
-  /** 麦克风电平 0–1（上层每帧更新，这里平滑后使用） */
+  mode: OrbVisualMode;
+  /** 麦克风电平 0–1（listening 时驱动边宽与发光） */
   level: number;
+  /** 干活进度 0–1；不给 = 不定态（酸绿弧追赶）。 */
+  progress?: number;
   reducedMotion?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  /** 动画脱离 React 重渲染：每帧从 ref 读最新值。 */
-  const state = useRef({ mode, level, reducedMotion: reducedMotion === true });
-  state.current = { mode, level, reducedMotion: reducedMotion === true };
+  const state = useRef({ mode, level, progress, still: reducedMotion === true });
+  state.current = { mode, level, progress, still: reducedMotion === true };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -36,109 +47,128 @@ export function GlassSphere({
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const px = FINITE(size, 120) * dpr;
+    const px = FINITE(size, 64) * dpr;
+    if (!Number.isFinite(px) || px <= 0) return;
     canvas.width = Math.round(px);
     canvas.height = Math.round(px);
+
+    // 逐帧趋近的当前参数（初值=idle，首次 mode 切换也是 morph 过去的）
+    const current = { ...ORB_STATES.idle };
+    let smoothedLevel = 0;
     let frame = 0;
-    let smoothed = 0;
+
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw);
       const t = FINITE(now / 1000, 0);
-      const current = state.current.mode;
-      const still = state.current.reducedMotion;
+      const { mode: m, level: rawLevel, progress: rawProgress, still } = state.current;
+      const target = ORB_STATES[m] ?? ORB_STATES.idle;
+      const k = 0.09; // morph 速率：~0.4s 内到位
+      current.hueA = lerpHue(current.hueA, target.hueA, k);
+      current.hueB = lerpHue(current.hueB, target.hueB, k);
+      current.drift = lerp(current.drift, target.drift, k);
+      current.rimAlpha = lerp(current.rimAlpha, target.rimAlpha, k);
+      current.rimWidth = lerp(current.rimWidth, target.rimWidth, k);
+      current.glow = lerp(current.glow, target.glow, k);
+      current.breathe = lerp(current.breathe, target.breathe, k);
+      current.wobble = lerp(current.wobble, target.wobble, k);
+      current.ripple = lerp(current.ripple, target.ripple, k);
+      current.swirl = lerp(current.swirl, target.swirl, k);
+      smoothedLevel += (Math.max(0, Math.min(1, FINITE(rawLevel, 0))) - smoothedLevel) * 0.18;
+      const voice = m === "listening" && !still ? smoothedLevel : 0;
+
       const r = px / 2;
       const cx = r;
       const cy = r;
-      smoothed += (Math.max(0, Math.min(1, FINITE(state.current.level, 0))) - smoothed) * 0.18;
-      const level = smoothed;
-      const speaking = current === "speaking";
-      const active = current !== "idle";
-      const hue = speaking ? 158 : 216;
-      const alphaBody = active ? 0.95 : 0.72;
-      if (!Number.isFinite(px) || px <= 0) return;
+      const breatheScale = still ? 1 : 1 + current.breathe * Math.sin(t * TAU * 0.25);
+      const rimR = r * 0.66 * breatheScale * (1 + voice * 0.06);
+      const rimW = Math.max(1, r * current.rimWidth * (1 + voice * 0.9));
 
       ctx.clearRect(0, 0, px, px);
 
-      // ① 外发光
-      const halo = ctx.createRadialGradient(cx, cy, r * 0.32, cx, cy, r);
-      halo.addColorStop(0, `hsla(${hue}, 100%, 66%, ${0.32 + level * 0.26})`);
-      halo.addColorStop(1, `hsla(${hue}, 100%, 60%, 0)`);
-      ctx.fillStyle = halo;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fill();
-
-      // ② 有机流体边
-      const wobble = (angle: number): number => {
-        if (still) return 0;
-        const k = level * 0.07 + 0.035;
-        return Math.sin(angle * 3 + t * 0.9) * k + Math.sin(angle * 5 - t * 0.6) * k * 0.6;
-      };
-      const bodyR = r * (0.84 + level * 0.05);
-      const path = new Path2D();
+      // 液态边（wobble 圆）：reduced-motion 下是正圆
+      const wobblePath = new Path2D();
       for (let i = 0; i <= 96; i += 1) {
-        const angle = (i / 96) * Math.PI * 2;
-        const radius = bodyR * (1 + wobble(angle));
+        const angle = (i / 96) * TAU;
+        const w = still
+          ? 0
+          : Math.sin(angle * 3 + t * 1.1) * current.wobble + Math.sin(angle * 5 - t * 0.7) * current.wobble * 0.55;
+        const radius = rimR * (1 + w);
         const x = cx + Math.cos(angle) * radius;
         const y = cy + Math.sin(angle) * radius;
-        if (i === 0) path.moveTo(x, y);
-        else path.lineTo(x, y);
+        if (i === 0) wobblePath.moveTo(x, y);
+        else wobblePath.lineTo(x, y);
       }
-      path.closePath();
+      wobblePath.closePath();
 
-      // ③ 球体（虹彩）
-      const core = ctx.createRadialGradient(cx - r * 0.26, cy - r * 0.3, r * 0.03, cx, cy, bodyR * 1.05);
-      core.addColorStop(0, `hsla(${hue}, 100%, 98%, ${alphaBody})`);
-      core.addColorStop(0.22, `hsla(${hue}, 100%, 80%, ${alphaBody})`);
-      core.addColorStop(0.55, `hsla(${hue + 24}, 92%, 62%, ${alphaBody * 0.85})`);
-      core.addColorStop(0.82, `hsla(${hue + 60}, 88%, 58%, ${alphaBody * 0.45})`);
-      core.addColorStop(1, `hsla(${hue + 80}, 90%, 60%, 0)`);
-      ctx.fillStyle = core;
-      ctx.fill(path);
-
-      // ④ 边缘光 + 镜面高光
+      // ① 外发光：同路径更宽更淡的一道描边（比 shadowBlur 便宜）
       ctx.save();
-      ctx.clip(path);
-      const rim = ctx.createRadialGradient(cx, cy, bodyR * 0.7, cx, cy, bodyR);
-      rim.addColorStop(0, "rgba(255,255,255,0)");
-      rim.addColorStop(1, `hsla(${hue + 10}, 100%, 90%, ${0.6 + level * 0.35})`);
-      ctx.fillStyle = rim;
-      ctx.fillRect(0, 0, px, px);
-      const spec = ctx.createRadialGradient(cx - r * 0.34, cy - r * 0.38, 0, cx - r * 0.34, cy - r * 0.38, r * 0.34);
-      spec.addColorStop(0, "rgba(255,255,255,0.9)");
-      spec.addColorStop(1, "rgba(255,255,255,0)");
-      ctx.fillStyle = spec;
-      ctx.fillRect(0, 0, px, px);
-      ctx.restore();
-
-      // ⑤ 绕行火花
-      if (!still) {
-        for (let i = 0; i < 6; i += 1) {
-          const phase = t * 0.6 + (i / 6) * Math.PI * 2;
-          const depth = Math.cos(phase);
-          const radius = bodyR * 1.06;
-          const x = cx + Math.cos(phase) * radius;
-          const y = cy + Math.sin(phase * 0.9) * radius * 0.86;
-          const scale = 0.5 + (depth + 1) * 0.35;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const driftPhase = still ? 0 : (t * current.drift) % 1;
+      const SEGMENTS = 32;
+      const drawRim = (width: number, alphaScale: number) => {
+        for (let i = 0; i < SEGMENTS; i += 1) {
+          const a0 = (i / SEGMENTS) * TAU;
+          const a1 = ((i + 1) / SEGMENTS) * TAU;
+          const hue = lerpHue(current.hueA, current.hueB, (i / SEGMENTS + driftPhase) % 1);
           ctx.beginPath();
-          ctx.arc(x, y, Math.max(0.8, r * 0.04 * scale), 0, Math.PI * 2);
-          ctx.fillStyle = `hsla(${hue + 10}, 100%, 93%, ${0.35 + (depth + 1) * 0.3})`;
-          ctx.fill();
+          ctx.arc(cx, cy, rimR, a0, a1 + 0.002);
+          // 描边画在 wobble 圆的均值半径上；液态感靠色相流动承担（逐段 wobble 描边会断）
+          ctx.strokeStyle = `hsla(${hue}, 95%, 66%, ${Math.min(1, current.rimAlpha * alphaScale)})`;
+          ctx.lineWidth = width;
+          ctx.stroke();
         }
+      };
+      drawRim(rimW * 2.4, current.glow * 0.22);
+      drawRim(rimW, 1);
+
+      // ② 暗核：半透明（背景微微透出来，球才不像贴上去的塑料片）
+      const core = ctx.createRadialGradient(cx, cy, rimR * 0.1, cx, cy, rimR);
+      core.addColorStop(0, `hsla(${lerpHue(current.hueA, current.hueB, 0.5)}, 55%, 14%, 0.86)`);
+      core.addColorStop(0.75, `hsla(${current.hueA}, 60%, 10%, 0.62)`);
+      core.addColorStop(1, `hsla(${current.hueA}, 70%, 12%, 0)`);
+      ctx.fillStyle = core;
+      ctx.fill(wobblePath);
+
+      // ③ 思考：中心旋流（注意力在打转）
+      if (current.swirl > 0.02 && !still) {
+        const spin = (t * current.drift * 2.2) % 1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, rimR * 0.42, spin * TAU, spin * TAU + TAU * 0.3);
+        ctx.strokeStyle = `hsla(${current.hueB}, 95%, 78%, ${0.6 * current.swirl})`;
+        ctx.lineWidth = Math.max(1, r * 0.05);
+        ctx.stroke();
       }
 
-      // ⑥ 状态波纹
-      if (active && !still) {
+      // ④ 说话：向外扩散的节拍波纹
+      if (current.ripple > 0.02 && !still) {
         for (let i = 0; i < 2; i += 1) {
-          const phase = (t * (speaking ? -0.5 : 0.5) + i * 0.5) % 1;
-          const ringR = speaking ? bodyR * (0.92 - phase * 0.36) : bodyR * (0.86 + phase * 0.4);
+          const phase = (t * 0.55 + i * 0.5) % 1;
+          const rr = rimR * (1 + phase * 0.6);
           ctx.beginPath();
-          ctx.arc(cx, cy, Math.max(1, ringR), 0, Math.PI * 2);
-          ctx.strokeStyle = `hsla(${hue}, 100%, 80%, ${Math.max(0, 0.38 * (1 - phase))})`;
-          ctx.lineWidth = Math.max(1, r * 0.02);
+          ctx.arc(cx, cy, rr, 0, TAU);
+          ctx.strokeStyle = `hsla(${current.hueA}, 95%, 72%, ${Math.max(0, 0.5 * (1 - phase) * current.ripple)})`;
+          ctx.lineWidth = Math.max(1, r * 0.025);
           ctx.stroke();
         }
       }
+
+      // ⑤ 干活（只属于 working）：品牌酸绿弧——有 progress 画完成度，没有画 0.35 圈追赶
+      // （信息弧，reduced-motion 也画；此前 unconditional 画会把绿弧漏进 idle/thinking）。
+      if (m === "working") {
+        const p = rawProgress !== undefined && Number.isFinite(rawProgress) ? Math.max(0, Math.min(1, rawProgress)) : null;
+        const chase = still ? 0.12 : (t * 0.45) % 1;
+        const start = p !== null ? -Math.PI / 2 : chase * TAU;
+        const length = p !== null ? p * TAU : TAU * 0.35;
+        if (p === null || p > 0) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, rimR, start, start + Math.max(0.001, length));
+          ctx.strokeStyle = `hsla(${ACID.h}, ${ACID.s}%, ${ACID.l}%, 0.95)`;
+          ctx.lineWidth = rimW * 1.15;
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
     };
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);

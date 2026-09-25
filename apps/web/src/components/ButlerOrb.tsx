@@ -1,11 +1,9 @@
 /**
- * 悬浮球 v4：玻璃珠（react-three-fiber）+ 一行输入面板 + 点球即通话。
+ * 悬浮球 v5：暗核光圈（方向 A，照 iOS 18 Siri）+ 一行输入面板 + 点球即通话。
  *
- * 规格：空闲 56px / 说话 72px（transform，布局零抖动）；形态=细玻璃描边环 + 内部小光核 +
- * 2-3 颗极小高光绕行（OrbGlass.tsx，fresnel shader）；空闲整体 alpha≈0.35；面板**没有标题、
- * 没有听话开关**——只有一行输入 + 发送 + 一条细把手；文字说明只进 hover tooltip。
- * 交互：**点一下球立刻进入通话动态**（listening 动画 + 波形，麦克风经 lib/mic.ts 共享流），
- * 再点一下 / Esc 挂断回静态；面板输入照旧提交到当前工作区的会话（App 传 onSubmit）。
+ * 形态与五态口径见 OrbGlass.tsx 头注；这里只管交互：**点一下球立刻进入通话动态**
+ * （listening 动画 + 波形，麦克风经 lib/mic.ts 共享流），再点一下 / Esc 挂断回静态；
+ * 面板**没有标题、没有听话开关**——只有一行输入 + 发送 + 一条细把手；文字说明只进 hover tooltip。
  *
  * 架构（用户强调）：干活的不是球——球只是管家/调度：它把话交给**当前工作区**的 agent 会话，
  * 工具执行、落轨、导出都是那条会话在做；球负责「知道全局 + 派活 + 汇报」。
@@ -169,6 +167,15 @@ export function ButlerOrb({
   const forced = (typeof window !== "undefined" ? window.localStorage.getItem("qa-orb-force") : null) as OrbMode | null;
   const effectiveMode: OrbMode =
     mode ?? forced ?? (running ? "working" : callOn ? (voiceActive ? "listening" : "listening") : "idle");
+  // 验收钩子（生产不触发）：qa-orb-progress 只在强制模式下顶替 progress，让「干活」弧可确定性截图。
+  const qaProgress =
+    forced !== null && typeof window !== "undefined"
+      ? (() => {
+          const raw = Number(window.localStorage.getItem("qa-orb-progress"));
+          return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : undefined;
+        })()
+      : undefined;
+  const effectiveProgress = progress ?? qaProgress;
   const active = effectiveMode !== "idle";
 
   // prefers-reduced-motion。
@@ -299,7 +306,6 @@ export function ButlerOrb({
   }, [effectiveMode, voiceLevel]);
 
   const size = active ? ACTIVE_SIZE : ORB_SIZE;
-  const glassColour = effectiveMode === "speaking" ? "#34d399" : "#38bdf8";
 
   return (
     <div
@@ -322,9 +328,8 @@ export function ButlerOrb({
           if (event.key === "Enter" || event.key === " ") setExpanded((open) => !open);
         }}
       >
-        {/* canvas 2D 的 Siri 式发光球（无 3D 依赖、不会 NaN 崩；尺寸 120/150）。 */}
-        <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} reducedMotion={reducedMotion.current} />
-        {showProgress(effectiveMode, progress)}
+        {/* v5 暗核光圈：五态三通道 + 干活酸绿弧都画在这一层（无 3D 依赖、不会 NaN 崩）。 */}
+        <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} progress={effectiveProgress} reducedMotion={reducedMotion.current} />
       </div>
 
       {expanded && (
@@ -357,26 +362,5 @@ export function ButlerOrb({
         </div>
       )}
     </div>
-  );
-}
-
-function showProgress(mode: OrbMode, progress: number | undefined) {
-  if (mode !== "working" || progress === undefined || !Number.isFinite(progress)) return null;
-  const clamped = Math.max(0, Math.min(1, progress));
-  return (
-    <svg className="sr-orb-progress" viewBox="0 0 100 100" aria-hidden="true">
-      <circle cx="50" cy="50" r="47" fill="none" stroke="rgba(148,163,184,0.3)" strokeWidth="2" />
-      <circle
-        cx="50"
-        cy="50"
-        r="47"
-        fill="none"
-        stroke="#38bdf8"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeDasharray={`${clamped * 2 * Math.PI * 47} ${2 * Math.PI * 47}`}
-        transform="rotate(-90 50 50)"
-      />
-    </svg>
   );
 }
