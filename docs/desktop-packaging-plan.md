@@ -1,7 +1,8 @@
 # 桌面端打包方案（ADR-018 落地路径）
 
 日期：2026-09-25 ｜ 作者：ZCode（GLM-5.3）｜ 任务：desktop-packaging（总线 #78 派单）
-状态：**调研稿，未动任何 app 代码**（apps/web、根 package.json 零改动；所有试跑都在 `/tmp/sr-pack/`）
+状态：**§1–4 调研定稿 → §5 第一刀已落地验收（2026-09-25，commit `2084148`，③⑤⑥⑦ + Codex 复验
+1/2/4 全过）→ §6 第二刀方案待评审（2026-09-26，未动码）**
 
 **结论先行**：用 **Electron 44 + electron-builder**。三个关键主张都已在真机验证过，
 不是推测：
@@ -483,7 +484,188 @@ open release/mac-arm64/ShadowRoom.app                    # 双击路径
 
 ---
 
-## 证据索引（每个数字的出处，全部 2026-09-25 实查/实测）
+## 6. 第二刀方案（TCC 根治 + Python 装箱 + 出包签名）——**待评审，未动任何码**
+
+日期：2026-09-26 ｜ 作者：ZCode（GLM-5.3）｜ 前置：第一刀已验收（§5 执行记录 + Codex 复验 1/2/4 全过）
+
+目标：① 双击首启零 TCC 弹窗、插件即开即用；② 换一台干净机器（无 venv / 无 Xcode python /
+无 ~/Documents/ShadowRoom）装上就能跑；③ 一条命令出 dmg+zip，证书到位后签名公证全自动进 CI。
+
+**先纠三处本档旧账**（2026-09-26 实测，§2.1 的假设有错，第二刀按实测走）：
+
+| # | 旧假设（§2.1） | 实测真相 | 对方案的影响 |
+| --- | --- | --- | --- |
+| 1 | analysis / generator 是"轻量 numpy 档"（各自 8.9M venv） | 两仓 venv 是**空壳**：`bin/python` 软链进 `stem-splitter` venv，实际一直骑在 381M torch 环境上跑（numpy 1.26.4） | 装箱后它们要有自己的 numpy，不能指望"已经很轻" |
+| 2 | 核心 8 插件"建一个共享 env"（§2.3） | 现机器同时存在 **三个 numpy**：splitter/analysis/generator 1.26.4、系统面 2.0.2（用户 site）、soundfont 2.5.3。共享单 env 必然动某家的版本 | 分档 env：core + soundfont + splitter 三个，机制上仍是 `_venvs/<repo>` 布局，只是分组物化 |
+| 3 | converter / library "系统 py / 单文件，基本零依赖" | 真依赖装在用户 site（`~/Library/Python/3.9/...`）：pyrekordbox 0.4.4（连带 sqlalchemy、construct、dateutil）、mutagen、Pillow、send2trash、psutil；scipy 1.13.1 也在但**没有任何仓库声明它**（残留，不装箱） | core env 的 manifest 以**各仓 pyproject 声明 + 实测冻结双核对**，两者都在下面列表里 |
+
+### 6.1 TCC 根治：插件与数据的新家
+
+**新家 = `app.getPath("userData")` = `~/Library/Application Support/ShadowRoom`**（mac 上无 TCC 保护，
+非沙盒 app 直接读写，弹窗问题从根上消失）。布局（沿用桥现有的 `SHADOWROOM_HOME` 约定，**桥零改动**）：
+
+```
+~/Library/Application Support/ShadowRoom/          ← 打包态 SHADOWROOM_HOME（main.mjs 设置）
+├─ <9 个插件仓目录>/mcp_server.py + src/           ← 每次启动从 Resources/plugins/<repo> 同步
+│                                                     （stamp=git rev，几 MB 秒级；只增不删用户文件）
+├─ _library/  recordings/  exports/  _soundfonts/  ← 用户数据（迁移，见下）
+├─ _venvs/
+│   ├─ .core/                       ← 共享 core env（真目录）
+│   ├─ converter → .core 等软链 ×7   ← pythonFor() 找 _venvs/<repo>/bin/python，软链即命中，桥无感
+│   ├─ soundfont-renderer/          ← 独立 env（numpy 2.5.3，不与 core 混）
+│   └─ stem-splitter/               ← 重 env，首用下载后落地
+├─ bin/ffmpeg  bin/fpcalc           ← 从 Resources/bin 物化为真文件（现 bin/ffmpeg 是指向用户 site 的
+│                                       机器特定软链，实测；装箱后不再依赖它）
+└─ .migrated.json  ENV_STAMP  .source-stamps     ← 迁移标记 / env 版本戳 / 源码版本戳
+
+ShadowRoom.app/Contents/Resources/   ← 随包只读
+├─ python-runtime/     （python-build-standalone cpython 3.12.x，§2.2 已实测可搬迁）
+├─ wheels/core/  wheels/soundfont/   （wheel 原文件，首启离线建 env 用）
+├─ plugins/<9 repo>/   （源码快照，共 ~4.2MB 实测）
+└─ bin/ffmpeg(21.1MB 实测)  bin/fpcalc(2.6MB 实测)
+```
+
+**与现在 SHADOWROOM_HOME 的关系**：桥的默认值仍是 `~/Documents/ShadowRoom`——dev 工作流
+（`pnpm serve` / `pnpm serve:agent`）一个字都不用改。只有打包态 main.mjs 把 HOME 指到 userData。
+设置页加一个「数据目录」覆写（写配置 + 重启生效），高级用户/开发者可指回
+`~/Documents/ShadowRoom`（该路径会弹 TCC，属预期，文案写明；同时警告 dev 实例与桌面 app
+**数据分叉**——两份 library.db 会各自演化）。
+
+**打包态插件解释器解析链**：就是桥现有的 `pythonFor()` fallback 链
+（`SHADOWROOM_PYTHON_<ID>` env → `_venvs/<repo>/bin/python` → `<repo>/.venv` → PATH 的 python3）。
+第二刀只往 `_venvs/<repo>` 放东西：core 七件套用软链指向 `.core`，soundfont / splitter 各占真目录。
+`SHADOWROOM_PYTHON_<ID>` 保留为逃生舱（比如某插件要单独换版本）。
+
+**老用户数据迁移**（首启向导，三选一）：
+
+- 触发：检测 `~/Documents/ShadowRoom` 存在 且 新家是 virgin 且 无 `.migrated.json` → 弹选择：
+  **(a) 迁移（默认推荐）**、(b) 全新开始、(c) 继续用旧工作区（高级，见上）。
+- 迁移清单（体积 2026-09-26 实测）：`_library/` 412K（db 268K + covers）、`recordings/` 458M（240 件）、
+  `exports/` 108M（110 件）、`_soundfonts/` 30M —— 合计 **≈597MB**。
+  **不迁移**：9 个仓源码（包里有新版）、`_venvs/`（按新 runtime 重建）、`bin/`（包重新物化）、
+  `_venvs/mamba-root` 336M（实测遗留，无任何桥引用——迁移完成页提示用户可手动删）。
+- 实现：APFS 同卷用 **clonefile 拷贝**（`cp -c`，秒级、不额外占空间）；拷贝前 `statfs` 预检剩余空间
+  （需 ≥ 迁移量 ×1.05），不足则引导改选 (b)/(c)；逐目录进度条（字节数）。
+- 标记与幂等：成功后写 `.migrated.json`（源路径、日期、各目录文件数/字节数）；二次启动不再触发。
+- **失败回退**：拷贝是**复制不是移动**——旧家永远完好，这就是回退底座。中途失败（进程被杀/磁盘满）：
+  删新家半成品数据目录、不写标记、报错可重试；最坏情况 app 以全新数据跑，旧数据原样在 Documents。
+
+**验收 6.1（每条可执行）**：
+
+1. **干净新账号**（本机新建 macOS 用户：无 `~/Documents/ShadowRoom`、无 venv、无 Xcode）双击 app
+   → 首启 env 构建（离线）→ `/api/servers` **8/8 ready、工具合计 74**，全程 ≤90s，零 TCC 弹窗。
+2. **迁移正确性**：预置 fixture（library.db 已知行数 + recordings 10 个已知 md5 文件）→ 选 (a) →
+   userData 内 db 行数相等、文件数相等、抽 3 个文件 md5 一致；**旧家逐字节复核未动**；重启不再弹向导。
+3. **中断回退**：迁移到 ~50% 时 kill 迁移进程 → 旧家完好、新家无 `.migrated.json`、重启可重试且成功。
+4. **(c) 模式**：设置数据目录指回 Documents → 重启后桥日志 HOME=旧家、正常 ready（弹一次 TCC 属预期）。
+5. 全程（默认路径）`open` 起的 app 内插件 ready——首刀的失败签名是「open 起 → 9 error + python 阻塞
+   在 open()」，反向即证 TCC 已根除。
+
+### 6.2 Python 运行时与 9 插件装箱
+
+**运行时：单一 pbs cpython 3.12.x**（tag 实现时锁定，§2.2 已实测这族可搬迁、venv 可建）。选型依据：
+soundfont 现役就是 3.12（numpy 2.5.3 要求 ≥3.11）；torch 2.2.2 有 cp312 mac arm64 wheel（**实测存在，
+59,678,388 字节**）；不能用 3.13（torch 2.2.2 无 cp313，升 torch 是另一个项目，不猜）；不必用 3.9
+（soundfont 的 numpy 2.5.3 装不上）。
+
+**分档**（依赖清单 = 各仓 pyproject 声明 ∩ 实测冻结集；标〔实测〕的是本机现役版本）：
+
+| 档 | 插件（工具数） | env | 依赖冻结集 | wheel 体积 | 进包方式 |
+| --- | --- | --- | --- | --- | --- |
+| core | converter(7) analysis(8) planner(3) generator(15) steward(4) library(27) grabber(7) | `.core`（软链 ×7） | numpy 1.26.4〔实测〕、mutagen 1.47.0〔实测〕、Pillow 11.x、send2trash 2.1.0、pyrekordbox 0.4.4〔实测〕（连带 sqlalchemy/construct/dateutil/packaging）、yt-dlp 2025.10.14〔实测〕、pycryptodome 3.23.0〔实测〕 | ≈30–40MB〔估，实现时按实际 wheel 相加〕 | **随包**（Resources/wheels/core） |
+| soundfont | soundfont(3) | `soundfont-renderer` | numpy 2.5.3〔实测〕、pyfluidsynth 1.4.0〔实测〕、**fluidsynth dylib 闭包**（现 venv lib/ 是 42M 的 conda 系全量 dylib〔实测〕；实现时 `otool -L` 递归闭包压缩，预期 ≤15M〔估〕） | wheels ~15M + dylib 闭包 ≤20M | 闭包 ≤20M 则**随包**；超了就改首用下载 |
+| splitter | splitter(4) | `stem-splitter` | demucs 4.0.1 全树〔实测 30 包 freeze：torch 2.2.2 + torchaudio + numpy 1.26.4 + soundfile/lameenc/julius/omegaconf/…〕 + htdemucs 权重 80MB〔实测〕 | wheels ≈80MB（torch cp312 arm64 56.9MB 实测 + 树 ~20MB 估） + 模型 80MB | **首用下载 ~160MB**（我们 Releases 资产 + 镜像 URL 备选 + sha256+大小双校验〔Grabber updater 口径〕 + 断点续传 + 进度 UI + 失败退 `STEM_SPLIT_COMMAND`） |
+
+**env 物化**：首启（或 `ENV_STAMP`{python build id + wheels 清单 hash} 变更时，即 app 升级）
+`python-runtime/bin/python -m venv _venvs/<env>` → `pip install --no-index --find-links=Resources/wheels/<env>/`
+——**全程离线**，不需要网。预估耗时 30–60s（〔估〕验收上限 90s），配进度 UI。
+
+**预装 vs 首启下载**：core+soundfont 选预装——代价是包体积 +50–90MB，换来"装完即用、断网可用"；
+splitter 选首用——160MB 不是人人要分轨，且 torch win 版 198.5MB（§2 已实测）会把 Windows 包顶爆。
+
+**"最小可用集是不是轻五件"**：不必。轻五（analysis/generator/library/steward/planner = 57 工具）够
+Studio/DJ/曲库基础，但 converter+grabber（+14 工具）是曲库导入链（rekordbox 转换 / 在线下载）的核心，
+而它们的 wheel 增量只有 ~8MB；真正贵的只有 soundfont（dylib）和 splitter（torch）。
+**建议主包带 8 插件 74 工具**，工具数阶梯：57（轻五）→ 71（+converter+grabber）→ 74（+soundfont）→
+78（+splitter 首用后）。UI 对未装的 splitter 显示「未安装 · 点击安装分轨组件」。
+
+**版本迁移风险与 gate**：core 统一 numpy 1.26.4（analysis/generator 现役版本〔实测〕；library 声明
+numpy 但 src 无 import〔实测 grep〕）；8 个插件从 python 3.9 换到 3.12。**gate = 9 仓单测在 3.12 全绿
++ 每插件 1 条真机工具调用冒烟**（分轨 6s 片段 / 生成 1 小节 / 导入 1 曲 / sf2 渲染 / cue 转换……），
+不过就分 env 降级（机制支持任意分法）。
+
+**验收 6.2**：
+
+1. 断网全新首启：core env 离线建成，**8/8 ready、74 工具、≤90s**；
+2. 包体积：unpacked .app ≤ **450MB**（现 289M + pbs ~70M〔§2.2 实测解包〕+ wheels ~40M + 源 4.2M +
+   bin 24M ≈ 427M〔构成表随实测填〕）；dmg 产物 ≤ **220MB**〔估，实测为准〕；
+3. splitter 首用：下载→env→**78 工具**；断网中断后重连续传成功；预置 sha256 不符的坏资产被拒；
+4. 9 仓单测在 pbs 3.12 下全绿（各自通过数实现时填入）；冒烟 5 条全过；
+5. app 升级（wheels stamp 变化）：首启自动重建 env，用户数据不动（db 行数不变）。
+
+### 6.3 出包与签名
+
+**不签名最小路径（今天就能跑，零用户输入）**：
+
+```sh
+export PATH="<codex node bin>:<fallback pnpm bin>:$PATH"
+cd producer-tools/apps/web && node node_modules/vite/bin/vite.js build
+cd ../desktop && ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/" \
+  pnpm exec electron-builder --mac dmg zip --publish never
+# 产物：release/ShadowRoom-<ver>-arm64.dmg + release/mac-arm64/ShadowRoom-<ver>-arm64-mac.zip(+.blockmap)
+```
+
+注意：打包后 `git checkout -- pnpm-workspace.yaml pnpm-lock.yaml`（electron-builder 的 pnpm list 会
+污染根文件，第一刀实测踩过，见证据索引）。未签名分发的现实：别人下载 dmg 后需**右键→打开**一次
+（Gatekeeper「未知开发者」）；从 dmg 里直接双击运行会被 Gatekeeper 随机化挂载——app 启动时检测自身
+路径不在 /Applications 就引导「拖入应用程序文件夹」（一行检测，第二刀顺手做）。
+
+**签名+公证需要用户提供的（一样都少不了）**：
+
+| # | 要什么 | 怎么拿 | 进哪 |
+| --- | --- | --- | --- |
+| 1 | Apple Developer Program 会员（$99/年，审批 1–2 天） | developer.apple.com 注册 | — |
+| 2 | Developer ID Application 证书 | 会员后在 Certificates 页用 Keychain CSR 签发，导出 `.p12` + 自设密码 | Secrets：`CSC_LINK`（p12 的 base64）、`CSC_KEY_PASSWORD` |
+| 3 | 公证凭据（三选一，**推荐 a**） | (a) App Store Connect → 用户和访问 → 集成 → 新建**团队密钥 .p8**；(b) Apple ID + app 专用密码（appleid.apple.com → 登录与安全）；(c) 都不要 = 不公证 | a：`APPLE_API_KEY`（p8 base64）/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`；b：`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` |
+
+配置侧恢复 §3.1 骨架：`hardenedRuntime: true` + `entitlements: build/entitlements.plist`（最小清单：
+不禁 JIT、allow-unsigned-executable-memory 不开、com.apple.security.cs.allow-dyld-environment-variables
+**不需要**——我们不用 DYLD 注入）+ `notarize: true` + `publish: github`。electron-builder 内置走
+notarytool，证书+凭据齐了就全自动。
+
+**CI 接法**（§3.3 workflow 的修订点，其余照旧）：
+
+1. 触发：tag `desktop-v*`；
+2. **多仓 checkout**：producer-tools + 9 个插件仓（按 tag 锁版本）——extraResources 的插件源码/
+   wheels 打包脚本从这里取（打包脚本产出 wheels 清单 = 6.2 的冻结集）；
+3. 根 `pnpm install --frozen-lockfile`（**第二刀反转第一刀的局部 lockfile 决策**：desktop 进根
+   workspace，CI 一条 install 装全——第一刀隔离是为了不踩 Trae 并行改 web，属当时战术）；
+4. build web → `electron-builder --mac dmg zip --publish always`（secrets 见上表 + `GH_TOKEN`）；
+5. 产物：draft release 自动挂 dmg/zip/blockmap/latest.yml；公证 2–10 分钟。
+
+**更新通道**：mac 自动更新（electron-updater + blockmap 差分）**只在签名+公证后可用**（§3.4）；
+内测期手动下 dmg，Windows 未签名也能差分。此项不阻塞第二刀验收。
+
+**验收 6.3**：
+
+1. 未签名：上面三条命令出 dmg+zip 双产物；本机 `open` dmg 装的 app 跑 6.2 的 74 工具基线；
+2. 签名后：`spctl -a -vv ShadowRoom.app` → `accepted, source=Notarized Developer ID`；
+   `xcrun stapler validate` 通过；**新账号**下载 dmg 双击直开（免右键、免右键等待）；
+3. CI：推 tag → draft release 自动含 dmg+zip+blockmap+latest.yml，全程零手工；
+4. Windows nsis：CI 交叉出 exe 仅做产物存在性检查（真机验证另派——§4 #7 fluidsynth win dll 未解）。
+
+### 6.4 实施顺序（每步独立可验收，可中途发内测）
+
+1. **数据迁移 + TCC 根治**（不动 python：仍用本机 venv，只换 HOME）→ 验收 6.1 全过；
+2. **core env 装箱**（pbs + wheels 随包，8 插件 74 工具）→ 验收 6.2.1/2/4/5；
+3. **soundfont dylib 闭包**（≤20M 随包，否则首用）＋ **splitter 首用下载** → 6.2.3；
+4. **dmg/zip 出包**（不签名）→ 6.3.1；——**到这里即可发内测 dmg**；
+5. 签名+公证（等用户证书到位）→ 6.3.2；
+6. CI 收编（多仓 checkout + secrets）→ 6.3.3。
+
+---
+
+## 证据索引（每个数字的出处；2026-09-25 / 09-26 实查实测，行内自带日期）
 
 | 事实 | 出处 |
 | --- | --- |
@@ -510,5 +692,13 @@ open release/mac-arm64/ShadowRoom.app                    # 双击路径
 | notarytool 为唯一公证路径、Developer ID + hardened runtime + staple | Apple 开发者资源（WWDC22 起 altool 退役）；"Developer ID 证书改一年有效"的传闻**未获证实，不写进结论** |
 | Win7/8 自 Electron 22 起不支持；Electron 官方支持最近 3 个主版本 | electronjs.org timelines |
 | Tauri 2：系统 WebView、壳 3–10MB、运行时须自行 sidecar | Tauri 官方生态资料 |
+| **用户数据体积（迁移清单）**：_library 412K（db 268K+covers）、recordings 458M（240 件）、exports 108M（110 件）、_soundfonts/GeneralUser-GS-1.471.sf2 30M —— 合计 ≈597MB；_venvs 共 822M（mamba-root 336M 为无引用遗留） | 本机 `du` 实测（2026-09-26） |
+| **analysis/generator 的 venv 是空壳**：`_venvs/{audio-analysis-dedupe,shadow-music-generator}/bin/python` 软链 → `_venvs/stem-splitter/bin/python`，dist-info 只有 pip/setuptools —— 实际骑 381M torch env 跑（numpy 1.26.4） | 本机 `readlink` + dist-info 清点（2026-09-26） |
+| **三个 numpy 并存**：splitter 系 1.26.4（venv freeze）、系统用户 site 2.0.2、soundfont 2.5.3（python 3.12 独立 venv，numpy+pyfluidsynth 1.4.0，lib/ 为 conda 系全量 dylib 42M） | 本机 dist-info 清点（2026-09-26） |
+| **converter/library 真依赖在用户 site**（~/Library/Python/3.9）：pyrekordbox 0.4.4、sqlalchemy、construct、dateutil、mutagen 1.47.0、Pillow、send2trash、psutil；scipy 1.13.1 在但无任何仓声明（残留）；library/pyproject 声明 numpy 但 src 零 import（grep）；planner/steward pyproject dependencies=[] | 本机 site-packages 清点 + 各仓 pyproject + grep（2026-09-26） |
+| grabber venv 冻结集：mutagen 1.47.0、pycryptodome 3.23.0、yt-dlp 2025.10.14（pyproject 声明的 requests/customtkinter/tkinterdnd2 未装——MCP 面只需轻子集） | 本机 dist-info 清点（2026-09-26） |
+| splitter venv 冻结集（30 包）：torch 2.2.2、torchaudio 2.2.2、demucs 4.0.1、numpy 1.26.4、soundfile 0.13.1、lameenc、julius、omegaconf、einops、sympy 1.14.0… | 本机 dist-info 清点（2026-09-26） |
+| **torch 2.2.2 cp312 mac arm64 wheel 存在**：`torch-2.2.2-cp312-none-macosx_11_0_arm64.whl` = 59,678,388 字节；无 cp313、无 universal2 | PyPI JSON API 实查（2026-09-26） |
+| 9 个插件仓源码体积（去 .git）共 ≈4.2MB（68K–904K/仓）；bin/fpcalc 2.6MB；bin/ffmpeg 是指向 ~/Library/Python/3.9/.../imageio_ffmpeg 的机器特定软链（装箱须改为随包真文件，21.1MB 见 §2.1） | 本机 `du` + `ls -la` 实测（2026-09-26） |
 
 （完。执行第一刀时如与本文件冲突，以实测为准并回写本文件。）
