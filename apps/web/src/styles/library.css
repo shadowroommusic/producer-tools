@@ -1,0 +1,616 @@
+/*
+ * 曲目库页样式（sr-lib-*）——与 sr-dj-* 同一套页面语法：顶栏 → 通知条 → 主区 grid。
+ * 独立文件，由 LibraryPage.tsx 自己 import（app.css 归别的任务线管）。
+ * 全部颜色/字号/间距走 --sr-* token，不自造色。
+ */
+
+.sr-lib {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  padding: 16px 18px;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- 顶栏 */
+
+.sr-lib-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  flex: none;
+}
+
+.sr-lib-topbar .sr-lib-scanpath {
+  flex: 1 1 300px;
+  max-width: 460px;
+  min-width: 200px;
+  height: 30px;
+}
+
+.sr-lib-count {
+  color: var(--sr-label-caption);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sr-lib-linkage {
+  margin-left: auto;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- 统计与偏好看板 */
+
+.sr-lib-board {
+  display: grid;
+  gap: 12px;
+  flex: none;
+  padding: 12px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-surface-2);
+  max-height: 42%;
+  overflow-y: auto;
+}
+
+.sr-lib-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.sr-lib-tile {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+}
+
+.sr-lib-tile-num {
+  color: var(--sr-label-primary);
+  font-family: var(--sr-font-mono);
+  font-size: var(--sr-text-18);
+  line-height: var(--sr-line-18);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-tile-cap {
+  color: var(--sr-label-caption);
+  font-size: 12px;
+}
+
+.sr-lib-pref-summary {
+  margin: 0;
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-13);
+  line-height: var(--sr-line-13);
+}
+
+.sr-lib-pref-rows {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-13);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-sets-cap,
+.sr-lib-detail-cap {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+}
+
+.sr-lib-set-rows {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-lib-set-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--sr-text-13);
+}
+
+.sr-lib-set-source {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover);
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 11px;
+}
+
+.sr-lib-set-name {
+  flex: 1 1 auto;
+  min-width: 6ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-primary);
+}
+
+.sr-lib-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  /* 看板内容超高时动作行吸底——危险按钮（忘记偏好）永远不用翻滚动区找。 */
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding: 8px 0 2px;
+  background: var(--sr-surface-2);
+  border-top: 0.5px solid var(--sr-border-l3);
+}
+
+.sr-lib-actions-gap {
+  flex: 1 1 auto;
+}
+
+.sr-lib-forget-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.sr-lib-forget-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sr-lib-forget[data-armed] {
+  border-color: color-mix(in srgb, var(--sr-warn) 70%, transparent);
+  color: var(--sr-warn);
+}
+
+/* ---------------------------------------------------------------- 通知条（与 sr-dj-notice 同款） */
+
+.sr-lib-notice {
+  flex: none;
+  padding: 8px 12px;
+  border: 0.5px solid color-mix(in srgb, var(--sr-warn) 60%, transparent);
+  border-radius: var(--sr-radius-md);
+  background: color-mix(in srgb, var(--sr-warn) 12%, transparent);
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-13);
+}
+
+/* ---------------------------------------------------------------- 主区：列表 + 详情抽屉 */
+
+.sr-lib-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sr-lib-main[data-drawer] {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.sr-lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 12px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-surface-2);
+  container-type: inline-size;
+}
+
+.sr-lib-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex: none;
+}
+
+.sr-lib-filters .sr-input {
+  width: auto;
+  min-width: 160px;
+  height: 30px;
+}
+
+.sr-lib-filters .sr-input--num {
+  min-width: 84px;
+  width: 84px;
+}
+
+.sr-lib-filters .sr-lib-tag {
+  min-width: 96px;
+  width: 110px;
+}
+
+.sr-lib-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 行本身就是 button（整行可点，键盘免费拿到）——先清 button 默认样式。 */
+.sr-lib-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-lib-row:hover {
+  background: var(--sr-hover);
+}
+
+.sr-lib-row:focus-visible {
+  outline: 0.5px solid var(--sr-focus);
+}
+
+.sr-lib-row[data-selected] {
+  outline: 0.5px solid var(--sr-accent);
+}
+
+.sr-lib-row-title {
+  flex: 1 1 auto;
+  min-width: 6ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-13);
+}
+
+.sr-lib-row-artist {
+  flex: none;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+}
+
+.sr-lib-row-bpm {
+  flex: none;
+  width: 8ch;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-row-key {
+  flex: none;
+  width: 4ch;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 12px;
+}
+
+.sr-lib-row-time {
+  flex: none;
+  width: 5ch;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-row-source {
+  flex: none;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover);
+  color: var(--sr-label-caption);
+  font-family: var(--sr-font-mono);
+  font-size: 11px;
+}
+
+.sr-lib-empty {
+  padding: 24px 12px;
+  color: var(--sr-label-caption);
+  font-size: var(--sr-text-13);
+  text-align: center;
+}
+
+/* 窄面板：行换两行，数字列保持右对齐（与 sr-dj 的 container 口径一致）。 */
+@container (max-width: 420px) {
+  .sr-lib-row {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .sr-lib-row-artist {
+    max-width: none;
+  }
+}
+
+/* ---------------------------------------------------------------- 详情抽屉 */
+
+.sr-lib-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-surface-2);
+  overflow-y: auto;
+}
+
+.sr-lib-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+}
+
+.sr-lib-drawer-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14);
+}
+
+.sr-lib-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sr-lib-close:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+.sr-lib-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.sr-lib-path {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-caption);
+  font-family: var(--sr-font-mono);
+  font-size: 11px;
+}
+
+.sr-lib-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-misses {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.sr-lib-miss {
+  padding: 1px 6px;
+  border: 0.5px solid color-mix(in srgb, var(--sr-warn) 60%, transparent);
+  border-radius: var(--sr-radius-pill);
+  color: var(--sr-warn);
+  font-size: 12px;
+}
+
+.sr-lib-miss-note {
+  color: var(--sr-label-caption);
+  font-size: 12px;
+}
+
+.sr-lib-crates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sr-lib-crate {
+  padding: 1px 6px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover);
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+}
+
+/* cue 只读块：里面没有任何交互控件，写 cue 只去 DJ 页。 */
+.sr-lib-cues {
+  display: grid;
+  gap: 6px;
+}
+
+.sr-lib-cue-source {
+  margin: 0;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+}
+
+.sr-lib-cue-rows {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-lib-cue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.sr-lib-cue-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: 50%;
+}
+
+.sr-lib-cue-name {
+  min-width: 4ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-primary);
+}
+
+.sr-lib-cue-badge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover);
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 11px;
+}
+
+.sr-lib-cue-time {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-cue-note {
+  margin: 0;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------- 三样预留（二期接线，一期占位） */
+
+/* 入库进度位：后端任务表 + SSE 就位后这里显示「正在入库 N/M · 当前 歌名」。 */
+.sr-lib-scanprogress {
+  flex: none;
+  min-width: 0;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-lib-scanprogress:empty {
+  display: none;
+}
+
+/* 封面显示位：抽屉头 40px 方块；封面提取落地后里面换 <img>，尺寸口径不变。 */
+.sr-lib-cover {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0.5px dashed var(--sr-border-l3);
+  border-radius: var(--sr-radius-xs);
+  color: var(--sr-label-tertiary);
+  font-size: 10px;
+  user-select: none;
+}
+
+/* 行右键菜单骨架（一期只读）：与 Studio 片段菜单同一套浮层语法。 */
+.sr-lib-rowmenu {
+  position: fixed;
+  z-index: 41;
+  display: grid;
+  gap: 2px;
+  width: 200px;
+  padding: 8px;
+  border: 0.5px solid var(--sr-border-l2);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-floating-fill);
+  box-shadow: var(--sr-shadow-panel);
+}
+
+.sr-lib-rowmenu-item {
+  display: grid;
+  gap: 1px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: var(--sr-label-primary);
+  font: inherit;
+  font-size: var(--sr-text-13);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-lib-rowmenu-item:hover:not(:disabled) {
+  background: var(--sr-hover);
+}
+
+.sr-lib-rowmenu-item:disabled {
+  color: var(--sr-label-tertiary);
+  cursor: default;
+}

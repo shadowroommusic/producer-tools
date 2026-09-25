@@ -21,6 +21,7 @@ import { PluginPanelPage } from "./components/PluginPanelPage";
 import { PluginsPage } from "./components/PluginsPage";
 import { StudioPage } from "./components/StudioPage";
 import { DjPage } from "./components/DjPage";
+import { LibraryPage } from "./components/LibraryPage";
 import { SettingsPage } from "./components/SettingsPage";
 import {
   agentModelChoices,
@@ -165,7 +166,7 @@ export function App() {
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [mainView, setMainView] = useState<
-    "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "dj" | "settings"
+    "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "dj" | "library" | "settings"
   >(
     () =>
       (window.localStorage.getItem("shadowroom.view") as
@@ -191,6 +192,8 @@ export function App() {
       ? "studio"
       : mainView === "dj"
         ? "dj"
+      : mainView === "library"
+        ? "library"
       : mainView === "settings"
         ? "settings"
         : mainView === "plugins" || mainView === "plugin"
@@ -202,6 +205,7 @@ export function App() {
     if (
       mainView === "studio" ||
       mainView === "dj" ||
+      mainView === "library" ||
       mainView === "settings" ||
       mainView === "workbench"
     )
@@ -1892,7 +1896,7 @@ export function App() {
    * form is noise, and a chat beside the plugin list is a second conversation nobody asked for. On
    * those pages the dock stays put away (the rail can still take you to the conversation).
    */
-  const viewShowsDock = mainView === "workbench" || mainView === "studio" || mainView === "dj";
+  const viewShowsDock = mainView === "workbench" || mainView === "studio" || mainView === "dj" || mainView === "library";
   const chatInDock = dockOpen && viewShowsDock;
   /** Bounce the arrangement through the generator plugin and record the call in the transcript. */
   const exportArrangement = useCallback(
@@ -2426,6 +2430,8 @@ export function App() {
                 ? "studio"
                 : next === "dj"
                   ? "dj"
+                  : next === "library"
+                    ? "library"
                   : next === "settings"
                     ? "settings"
                     : "workbench",
@@ -2497,6 +2503,8 @@ export function App() {
             <SettingsPage settings={modelSettings} onChange={setModelSettings} />
           ) : mainView === "dj" ? (
             <DjPage />
+          ) : mainView === "library" ? (
+            <LibraryPage />
           ) : mainView === "studio" ? (
           openProject === undefined ? (
             <StudioProjects
