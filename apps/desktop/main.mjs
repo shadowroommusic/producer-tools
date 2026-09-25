@@ -4,8 +4,12 @@ import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { homedir } from "node:os";
+import { resolveDesktopHome, syncPluginSources } from "./home.mjs";
 
 const DEV = !app.isPackaged;
+// 打包态的 HOME（userData 或用户覆写），由 resolveDesktopHome 在起桥前解析；
+// dev 态保持 undefined——桥沿用自己的默认 ~/Documents/ShadowRoom，dev 工作流零变化。
+let HOME_DIR;
 // 开发机 8787/8788 常被 dev 实例占用，桌面包用高位端口；renderer 只见 app:// 相对路径。
 const MCP_PORT = "18787";
 const AGENT_PORT = "18788";
@@ -26,8 +30,10 @@ protocol.registerSchemesAsPrivileged([
 // 用 Electron 自己的内置 node 跑桥（本机实测 node v24.21.0，9/9 插件 ready），
 // 这样包里不用再塞一个 node 运行时。
 function bridgeEnv(extra) {
-  return { ...process.env, ELECTRON_RUN_AS_NODE: "1",
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1",
     SHADOWROOM_BRIDGE_PORT: MCP_PORT, SHADOWROOM_AGENT_PORT: AGENT_PORT, ...extra };
+  if (HOME_DIR !== undefined) env.SHADOWROOM_HOME = HOME_DIR;
+  return env;
 }
 const children = [];
 // 桥的守护壳：主进程怎么死都必须带走桥。实测（2026-09-25）：osascript quit / ⌘Q 走
@@ -59,7 +65,16 @@ for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => app.quit());
 app.on("before-quit", () => { for (const c of children) c.kill(); });
 app.on("window-all-closed", () => app.quit());
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // 第二刀第 1 步：打包态先定家（可能弹首启向导/跑迁移），再同步插件源码，
+  // 最后才起桥开窗——桥和 UI 看到的必须是同一个新家。dev 态完全跳过。
+  // 覆写模式（managed=false）下不同步源码：用户指定的地方（如 ~/Documents/ShadowRoom）
+  // 里的 <repo> 是他自己的检出，rm+覆盖等于删他的工作区。
+  if (!DEV) {
+    const { home, managed } = await resolveDesktopHome();
+    HOME_DIR = home;
+    if (managed) syncPluginSources(HOME_DIR);
+  }
   // 转发必须按 fetch 的 (url, init) 口径拆开传；带 body 时还要 duplex:"half"，
   // 否则 RequestInit 直接抛 TypeError（真机窗口里前端第一个 POST 就踩到，GET-only 冒烟测不出）。
   const proxyInit = (request) => {

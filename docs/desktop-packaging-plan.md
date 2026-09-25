@@ -540,15 +540,27 @@ ShadowRoom.app/Contents/Resources/   ← 随包只读
 
 - 触发：检测 `~/Documents/ShadowRoom` 存在 且 新家是 virgin 且 无 `.migrated.json` → 弹选择：
   **(a) 迁移（默认推荐）**、(b) 全新开始、(c) 继续用旧工作区（高级，见上）。
-- 迁移清单（体积 2026-09-26 实测）：`_library/` 412K（db 268K + covers）、`recordings/` 458M（240 件）、
-  `exports/` 108M（110 件）、`_soundfonts/` 30M —— 合计 **≈597MB**。
-  **不迁移**：9 个仓源码（包里有新版）、`_venvs/`（按新 runtime 重建）、`bin/`（包重新物化）、
-  `_venvs/mamba-root` 336M（实测遗留，无任何桥引用——迁移完成页提示用户可手动删）。
-- 实现：APFS 同卷用 **clonefile 拷贝**（`cp -c`，秒级、不额外占空间）；拷贝前 `statfs` 预检剩余空间
-  （需 ≥ 迁移量 ×1.05），不足则引导改选 (b)/(c)；逐目录进度条（字节数）。
+- 迁移清单（体积 2026-09-26 实测落地版）：`_library/` 0.4M（208 件）、`recordings/` 457.6M（240 件）、
+  `exports/` 107.6M（110 件）、`_soundfonts/` 29.8M、`_steward/` 0.1M、`stems/` 139.5M（25 件）、
+  `_stems-cache/` 242.3M（28 件）、`stem-splitter-jobs/`（9 件）、`imports/` 69.3M（29 件）
+  —— 合计 **651 件 / 1046.7MB**（初稿只列了四样，_steward/stems/_stems-cache/jobs/imports 是
+  落地盘点补上的；**封闭清单**，绝不整体拷贝——旧家里有 github-recovery-codes.txt、AGENTS.md、
+  _bus/_backups 这类工作区文件）。
+- **venv 过渡策略（第 1 步实测落地）**：方案原写"不迁移、按新 runtime 重建"是第 2 步到位后的形态；
+  第 1 步不搬 venv 插件就起不来，又**不能软链回旧家**（软链解析后的真实路径仍在 ~/Documents 下，
+  open 起的进程读它会再次踩 TCC）。所以整目录 clonefile 复制（实测 5 个 venv + bin 共 706M、秒级），
+  跳过 `mamba-root`（336M 无引用遗留），并把指向旧家的绝对软链改写到新家（实测改写 2 条：
+  audio-analysis/generator 的 bin/python；比较前须 realpath 归一——`cp -c -R` 会把软链目标存成
+  `/private/tmp/...` 形式，字面前缀比对会漏）。Xcode python / 用户 site 的外部绝对链保持原样
+  （不在 ~/Documents 下，TCC 不拦）。
+- 实现：APFS 同卷用 **clonefile 拷贝**（`cp -c -R`，实测 1.05GB 数据 + 706M venv 共 **6 秒**）；
+  拷贝前 `statfs` 预检剩余空间（需 ≥ 迁移量 ×1.05），不足则引导改选 (b)/(c)；
+  逐目录 console 进度 + 完成弹窗汇总。
 - 标记与幂等：成功后写 `.migrated.json`（源路径、日期、各目录文件数/字节数）；二次启动不再触发。
 - **失败回退**：拷贝是**复制不是移动**——旧家永远完好，这就是回退底座。中途失败（进程被杀/磁盘满）：
   删新家半成品数据目录、不写标记、报错可重试；最坏情况 app 以全新数据跑，旧数据原样在 Documents。
+  实测注：kill -9 主进程后，正在跑的 `cp` 子进程会自己跑完才退（spawnSync 子进程不随父死）——
+  无害，重试语义本来就是"先清半成品再拷"。
 
 **验收 6.1（每条可执行）**：
 
@@ -560,6 +572,23 @@ ShadowRoom.app/Contents/Resources/   ← 随包只读
 4. **(c) 模式**：设置数据目录指回 Documents → 重启后桥日志 HOME=旧家、正常 ready（弹一次 TCC 属预期）。
 5. 全程（默认路径）`open` 起的 app 内插件 ready——首刀的失败签名是「open 起 → 9 error + python 阻塞
    在 open()」，反向即证 TCC 已根除。
+
+> **执行记录（2026-09-26，ZCode，第 1 步已落地）**：`apps/desktop/{home.mjs(新), main.mjs, electron-builder.yml,
+> package.json}`，验收 **2/3/4/5 本机全过、1 留给干净账号复验**（见下）。实测数字：
+> **②** fixture 54 件 → db 行数 7==7、九目录件数逐一相等、3 文件 md5 一致、旧家树 md5 前后一致
+> （`22491a2a…`）、重启零向导行（log 直接 `plugins from <userData>`）；**③** 3030 件 fixture 在 1693 件时
+> kill -9 → 标记未写、旧家 md5 不变、重试后 3030/3030 + 标记落盘；**④** (c) 写 `shadowroom-config.json`
+> + 重启 `config-override` 生效（桥 plugins from=旧家）、**覆写模式禁源码同步**（fixture 抓到 sync 会
+> rm 用户 git 检出的雷，已修 + 复验旧家 md5 不变）；**⑤** 真迁移（651 件/1046.7MB + 5 venv 706M，
+> **6 秒**）后 `open` 起的 app **9/9 ready、78 工具**，python 全部从
+> `~/Library/Application Support/ShadowRoom/_venvs/` 起——首刀失败签名消失；⌘Q 退出 0 进程 0 孤儿。
+> 关于验收 1：第 1 步没带 python 装箱（§6.4 第 2 步），干净账号上预期是"app 正常起、向导可走、
+> 插件 error（无 venv）、零 TCC 弹窗"；**8/8 ready ≤90s 要等第 2 步**。本机等价证据 = ⑤。
+> 落地时踩的坑（都进了代码注释/本档）：package.json 必须加 `productName:"ShadowRoom"`，否则
+> userData 变成 `…/@shadowroom/desktop`；`files` 必须含 home.mjs；electron-builder 必须用
+> `pnpm run dist:dir` 跑（直调 .bin 时无 `npm_config_user_agent`，collector 兜底识别成 npm→ENOENT）；
+> 测试缝 `SHADOWROOM_LEGACY_HOME` + `SHADOWROOM_MIGRATE_CHOICE=a|b|c`（后者同时让向导弹窗静默，
+> 否则 showMessageBoxSync 卡死自动化）。
 
 ### 6.2 Python 运行时与 9 插件装箱
 
@@ -656,7 +685,8 @@ notarytool，证书+凭据齐了就全自动。
 
 ### 6.4 实施顺序（每步独立可验收，可中途发内测）
 
-1. **数据迁移 + TCC 根治**（不动 python：仍用本机 venv，只换 HOME）→ 验收 6.1 全过；
+1. **数据迁移 + TCC 根治**（不动 python：仍用本机 venv，只换 HOME）→ ✅ **已落地（2026-09-26，
+   验收 2/3/4/5 全过 + 真迁移实测；1 的干净账号复验留待 Codex/用户，"8/8 ready"部分依赖第 2 步）**；
 2. **core env 装箱**（pbs + wheels 随包，8 插件 74 工具）→ 验收 6.2.1/2/4/5；
 3. **soundfont dylib 闭包**（≤20M 随包，否则首用）＋ **splitter 首用下载** → 6.2.3；
 4. **dmg/zip 出包**（不签名）→ 6.3.1；——**到这里即可发内测 dmg**；
@@ -700,5 +730,10 @@ notarytool，证书+凭据齐了就全自动。
 | splitter venv 冻结集（30 包）：torch 2.2.2、torchaudio 2.2.2、demucs 4.0.1、numpy 1.26.4、soundfile 0.13.1、lameenc、julius、omegaconf、einops、sympy 1.14.0… | 本机 dist-info 清点（2026-09-26） |
 | **torch 2.2.2 cp312 mac arm64 wheel 存在**：`torch-2.2.2-cp312-none-macosx_11_0_arm64.whl` = 59,678,388 字节；无 cp313、无 universal2 | PyPI JSON API 实查（2026-09-26） |
 | 9 个插件仓源码体积（去 .git）共 ≈4.2MB（68K–904K/仓）；bin/fpcalc 2.6MB；bin/ffmpeg 是指向 ~/Library/Python/3.9/.../imageio_ffmpeg 的机器特定软链（装箱须改为随包真文件，21.1MB 见 §2.1） | 本机 `du` + `ls -la` 实测（2026-09-26） |
+| **第 1 步迁移实测**：真家 651 件/1046.7MB + 5 venv（706M，跳过 mamba-root）clonefile **6 秒**完成；db 行数 196==196；3 文件 md5 逐一相符；audio-analysis/generator 的 bin/python 绝对软链改写进新家 2 条；Xcode/用户 site 外部链保留；旧家树 md5 前后一致 | 本机实测（`/tmp/step1-d.log`，2026-09-26） |
+| **open 起 → 9/9 ready 78 工具（TCC 根除反证）**：迁移后 `open` 起的 app，python 全部从 `~/Library/Application Support/ShadowRoom/_venvs/` 起，2 秒内全 ready；⌘Q 后 0 进程 0 孤儿 | 本机实测（2026-09-26；对照首刀同路径 9 error + 阻塞在 open()） |
+| **cp -c -R 软链 realpath 行为**：拷贝会把软链目标存成 realpath 形式（/tmp→/private/tmp），软链改写的字面前缀比对会漏——须 realpath 归一后再比（fixture 测试抓到） | 本机实测（2026-09-26） |
+| **覆写模式下源码同步是雷**：(c)/env/config 覆写把 HOME 指回用户目录时，sync 会 rm+覆盖用户自己的 git 检出（fixture 抓到：9 个仓被塞进 fixture）——修复为 managed=false 时禁同步，复验旧家 md5 不变 | 本机实测（2026-09-26） |
+| electron-builder 直调 `.bin` 时 collector 对包管理器的兜底识别是 npm（`npm_config_user_agent` 缺失），机器无 npm 即 ENOENT 间歇失败；`pnpm run dist:dir`（pnpm 会注入 user agent）稳定命中 pnpm；另 files 列表漏 home.mjs 会让 app 秒退、package.json 缺 `productName` 会让 userData 变 `…/@shadowroom/desktop` | 本机实测（2026-09-26，第 1 步落地过程） |
 
 （完。执行第一刀时如与本文件冲突，以实测为准并回写本文件。）

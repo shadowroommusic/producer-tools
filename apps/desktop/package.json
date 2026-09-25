@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "description": "ShadowRoom desktop shell (web dist + bridges)",
   "author": "shadowroommusic",
+  "packageManager": "pnpm@11.19.0",
+  "productName": "ShadowRoom",
   "main": "main.mjs",
   "scripts": {
     "start": "electron .",

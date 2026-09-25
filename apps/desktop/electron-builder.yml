@@ -4,13 +4,41 @@
 appId: cn.shadowroom.producer-tools
 productName: ShadowRoom
 directories: { output: release }
-files: [ "main.mjs", "package.json" ]
+files: [ "main.mjs", "home.mjs", "package.json" ]
 extraResources:
   - from: ../web/dist                   # vite 产物随包（app:// 伺服根）
     to: web-dist
   - from: ../../tools                   # 两个桥
     to: tools
-  # 插件源码与 python-runtime 的打包清单见文档 §2.3，第一刀继续用本机 venv/系统 python，暂缺。
+  # 9 个插件仓源码（第二刀第 1 步：打包态每次启动同步进 HOME/<repo>，桥按老约定找 mcp_server.py）。
+  # filter 排除 .git 与字节码缓存；体积共 ~4.2MB（实测）。
+  - from: ../../../shadow-music-generator
+    to: plugins/shadow-music-generator
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../audio-analysis-dedupe
+    to: plugins/audio-analysis-dedupe
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../rekordbox-serato-bridge
+    to: plugins/rekordbox-serato-bridge
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../set-planner
+    to: plugins/set-planner
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../stem-splitter
+    to: plugins/stem-splitter
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../soundfont-renderer
+    to: plugins/soundfont-renderer
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../steward
+    to: plugins/steward
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../library
+    to: plugins/library
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
+  - from: ../../../ShadowMusicGrabber
+    to: plugins/ShadowMusicGrabber
+    filter: ["**/*", "!**/.git/**", "!**/__pycache__/**", "!**/*.pyc"]
 mac:
   target: [{ target: dmg }, { target: zip }]
   category: public.app-category.music
