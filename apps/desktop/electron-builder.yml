@@ -1,0 +1,21 @@
+# 第一刀（docs/desktop-packaging-plan.md §5.1）：不签名不公证，
+# 故 hardenedRuntime / entitlements / notarize 与 win/nsis/publish 段先删；
+# 完整签名 + 公证 + 更新通道的骨架见该文档 §3.1，第二刀起启用。
+appId: cn.shadowroom.producer-tools
+productName: ShadowRoom
+directories: { output: release }
+files: [ "main.mjs", "package.json" ]
+extraResources:
+  - from: ../web/dist                   # vite 产物随包（app:// 伺服根）
+    to: web-dist
+  - from: ../../tools                   # 两个桥
+    to: tools
+  # 插件源码与 python-runtime 的打包清单见文档 §2.3，第一刀继续用本机 venv/系统 python，暂缺。
+mac:
+  target: [{ target: dmg }, { target: zip }]
+  category: public.app-category.music
+  extendInfo:
+    # 双击首启读 ~/Documents/ShadowRoom 会触发 TCC「文件与文件夹」弹窗（第一刀插件仍住在
+    # 文稿文件夹；实测 2026-09-25：终端继承授权不弹、launchd 起则 python 阻塞在 open()
+    # 等用户决定）。这段文案就显示在那张弹窗上；第二刀插件随包走后此键删。
+    NSDocumentsFolderUsageDescription: ShadowRoom 需要访问「文稿」文件夹以读取插件与曲库（第一刀：插件仍安装在 ~/Documents/ShadowRoom）。

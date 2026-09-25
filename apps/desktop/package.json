@@ -1,0 +1,20 @@
+{
+  "name": "@shadowroom/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ShadowRoom desktop shell (web dist + bridges)",
+  "author": "shadowroommusic",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "dist:dir": "electron-builder --dir",
+    "dist:mac": "electron-builder --mac dmg zip"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron"]
+  }
+}

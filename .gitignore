@@ -23,3 +23,6 @@ duplicates*.json
 
 # OS noise
 .DS_Store
+
+# Desktop packaging output (apps/desktop)
+apps/desktop/release/
