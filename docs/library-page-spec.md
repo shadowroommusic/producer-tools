@@ -89,6 +89,35 @@ BPM·调性是否一致**；按钮是"保留这条（另一条移入废纸篓）
 
 ## 7. 验收口径（谁做谁跑，Codex 复验）
 
+### 7.1 扫描的前后端契约（2026-09-25 定，二期前端按这个接）
+
+后端（library 二期 ①，已上线）：`scan_folder(path, recursive)` **立即返回 `{job_id, status:"running"}`**，
+然后在 stdout 推 `notifications/scan_progress`：
+
+```jsonc
+{"job_id":1,"total":3,"done":2,"current":"/path/x.wav","failed":0}
+// 完成帧额外带 status/added/updated/unchanged/missing/ms/covers
+```
+
+桥（Codex，已上线）把它转成 SSE：`GET /api/events` → `event: notifications/scan_progress` +
+`data: {"server":"library","params":{…}}`（15 秒心跳）。
+
+前端要做的：调 scan_folder 拿 `job_id` → 订阅一次 SSE → 显示 `正在入库 N/M · 当前 歌名` →
+完成帧写总结（新入库/更新/未变/缺失/失败 + 用时）→ 失败清单走 `scan_job_detail` 或
+`scan_export_failures` 给下载。**不许再读旧的同步字段**（`found/added/ms` 现在只在完成帧里）。
+
+> 踩坑记录：一期前端读的是旧的同步返回，后端改成 job 后界面显示"找到 undefined 个音频文件"。
+> 一期验收脚本 `library-page-acceptance.mjs` 也因此在第 84 行超时——二期必须连同脚本一起改。
+
+### 7.2 Trae 的 UI 建议（用户口径内，已采纳）
+
+1. 右键菜单两段式：上半只放不动文件的高频项，**「试听」放第一项**（唯一出声的动作，符合
+   "先听后动"）；下半红色危险区（从曲库移除 / 移到废纸篓 / 彻底删除）。
+2. 删除确认：按钮序 `[取消] [移入废纸篓]`，**默认焦点在「取消」**；「彻底删除」不做平级按钮，
+   做成废纸篓弹窗里的一行小字链接（"其实想彻底删掉？"）——让误触永远落在可恢复路径上。
+3. 重复弹窗：左右两卡各一首，字段按 格式 → 位深/采样率 → 大小 → 时长 → 路径 排，**不一致的字段高亮**，
+   每卡底部一个「保留这条」，底注写明"不会自动删——另一条移入废纸篓，可找回"。
+
 1. 扫一个真实小目录（≤10 首）：进度事件 ≥2 条（能看到 total/done 递增）、入库后每首都有
    BPM/调性/时长、有封面的那首 `cover_path` 存在且能显示、失败清单为空。
 2. 删除：对一首**副本**测"移到废纸篓"→ 文件从原目录消失、出现在系统废纸篓、DB 行没了；
