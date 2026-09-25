@@ -463,11 +463,23 @@ const http = createServer(async (request, response) => {
       const write = (frame) => response.write(frame);
       eventClients.add(write);
       // A comment line every 15s keeps proxies from closing an idle stream.
-      const heartbeat = setInterval(() => response.write(": ping\n\n"), 15_000);
-      request.on("close", () => {
+      // Every write is guarded: a client that vanished mid-stream must not take the bridge down
+      // with an emitted "error" (2026-09-25: an unguarded heartbeat killed the whole bridge and
+      // every page showed 500 until it was restarted — the SSE stream is the only long-lived
+      // response in this process, so it is where this bites first).
+      const heartbeat = setInterval(() => {
+        try {
+          response.write(": ping\n\n");
+        } catch {
+          cleanup();
+        }
+      }, 15_000);
+      const cleanup = () => {
         clearInterval(heartbeat);
         eventClients.delete(write);
-      });
+      };
+      request.on("close", cleanup);
+      response.on("error", cleanup);
       return;
     }
 
