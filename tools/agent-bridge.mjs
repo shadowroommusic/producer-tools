@@ -749,6 +749,21 @@ const STREAMABLE = new Map([
   [".midi", "audio/midi"],
 ]);
 
+/**
+ * What `GET /api/agent/file` may serve — audio for the players **plus images for cover art**
+ * (the library writes `_library/covers/<id>.jpg`; the page loads it through this endpoint).
+ *
+ * Deliberately a separate map: `STREAMABLE` above doubles as the *import* filter, and letting a
+ * .jpg through the import endpoint would mean "import this cover as an audio file".
+ */
+const SERVEABLE = new Map([
+  ...STREAMABLE,
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+]);
+
 /** The plugins, injected into every thread so the agent has the same tools as the sidebar. */
 const PLUGIN_REPOS = [
   "rekordbox-serato-bridge",
@@ -1878,7 +1893,7 @@ const http = createServer(async (request, response) => {
       }
       const resolved = resolve(target.replace(/^~(?=\/|$)/, HOME));
       const extension = resolved.slice(resolved.lastIndexOf(".")).toLowerCase();
-      const contentType = STREAMABLE.get(extension);
+      const contentType = SERVEABLE.get(extension);
       if (contentType === undefined) {
         json(response, 415, { error: `cannot stream ${extension || "this file"}` });
         return;
