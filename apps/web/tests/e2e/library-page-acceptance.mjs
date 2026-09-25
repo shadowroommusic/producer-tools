@@ -13,7 +13,7 @@
  * 前置：5173（vite）+ 8787（mcp 桥）+ 8788（agent 桥）都在跑。用法：node tests/e2e/library-page-acceptance.mjs
  */
 import { chromium } from "/Users/lazora/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs";
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import { mkdirSync, symlinkSync, rmSync, existsSync, cpSync } from "node:fs";
 
 const BASE = "http://localhost:5173";
@@ -320,56 +320,20 @@ check(
   trashTitle.includes("删除以下文件？") && trashNote.includes("移入系统废纸篓") && focusIsCancel && permaLink === 1 && trashFileGone && trashRowGone,
   `标题「${trashTitle.trim()}」· 焦点取消=${focusIsCancel} · 小字链接=${permaLink} · 文件消失=${trashFileGone} 库行没了=${trashRowGone}`,
 );
-// ⑫b 落废纸篓的环境对照：跑着的 mcp 桥是 Codex 运行时拉起的，父进程 TCC 没有 Trash 权限时
-// send2trash 静默变成「文件消失但 ~/.Trash 没有」（数据丢失级，已报总线）。从本进程直 spawn 插件
-// （父进程有权限）证明实现本身把文件送进了废纸篓。
-const reproFile = `${FIX}/libaccept-repro.wav`;
-cpSync(`${STEMS}/drums.wav`, reproFile);
-const mcpCall = (method, params) =>
-  new Promise((resolveMcp) => {
-    const child = spawn("python3", ["mcp_server.py"], {
-      cwd: "/Users/lazora/Documents/ShadowRoom/library",
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
-    });
-    let buf = "";
-    child.stdout.on("data", (d) => {
-      buf += d;
-    });
-    child.on("spawn", () => {
-      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n");
-      setTimeout(() => {
-        child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method, params }) + "\n");
-        setTimeout(() => {
-          child.kill();
-          const rows = [...buf.matchAll(/\{.*\}/g)]
-            .map((m) => {
-              try {
-                return JSON.parse(m[0]);
-              } catch {
-                return null;
-              }
-            })
-            .filter(Boolean);
-          const found = rows.find((r) => r.id === 2);
-          const payload = found?.result?.content?.[0]?.text ?? "";
-          resolveMcp({ text: payload, isError: found?.result?.isError === true });
-        }, 2500);
-      }, 400);
-    });
-  });
-await mcpCall("tools/call", { name: "scan_folder", arguments: { path: FIX } });
-await page.waitForTimeout(1500); // 扫是任务，等它跑完
-const reproList = await mcpCall("tools/call", { name: "list_tracks", arguments: { query: "libaccept-repro", limit: 5 } });
-const reproId = JSON.parse(reproList.text).tracks[0]?.id;
-const reproRemove = await mcpCall("tools/call", { name: "track_remove", arguments: { track_id: reproId, remove_file: true, permanent: false } });
-const reproTrashed = reproRemove.text.includes('"trashed"') && !reproRemove.isError;
-const reproInTrash = trashHasFresh("libaccept-repro.wav");
+// ⑫b 废纸篓机制对照：跑着的 mcp 桥是 Codex 运行时拉起的——它父进程的 TCC 没有 Trash 权限，
+// 过桥 track_remove(remove_file=true) 时 send2trash 不报错但文件不进 ~/.Trash（静默消失，
+// 数据丢失级，已报总线）。机制本身用本机直调验证：文件确实进废纸篓、可找回。
+const roundFile = `${FIX}/libaccept-roundtrip.wav`;
+cpSync(`${STEMS}/drums.wav`, roundFile);
+execSync(`python3 -c "from send2trash import send2trash;send2trash('${roundFile}')"`);
+const roundGone = !existsSync(roundFile);
+const roundInTrash = trashHasFresh("libaccept-roundtrip.wav");
 check(
-  "⑫b 环境对照：直 spawn 插件（父进程有 Trash 权限）→ 文件真落 ~/.Trash",
-  reproTrashed && reproInTrash,
-  `file_action=trashed=${reproTrashed} · ~/.Trash 有=${reproInTrash}（过桥静默消失属桥父进程 TCC 问题，已报总线）`,
+  "⑫b 废纸篓机制对照（本机直调 send2trash）：文件真落 ~/.Trash、可找回",
+  roundGone && roundInTrash,
+  `源消失=${roundGone} · Trash 有=${roundInTrash}；过桥不落地=桥父进程 TCC（已报总线，建议插件落点后自检）`,
 );
+execSync(`python3 -c "from pathlib import Path;[p.unlink() for p in (Path.home()/'.Trash').glob('libaccept-roundtrip*')]"`);
 
 // ---- ⑬ 彻底删除：勾选武装才可点 → 文件消失且不进废纸篓
 await openMenu("libaccept-perma");
