@@ -4,12 +4,18 @@
 appId: cn.shadowroom.producer-tools
 productName: ShadowRoom
 directories: { output: release }
-files: [ "main.mjs", "home.mjs", "package.json" ]
+files: [ "main.mjs", "home.mjs", "env.mjs", "package.json" ]
 extraResources:
   - from: ../web/dist                   # vite 产物随包（app:// 伺服根）
     to: web-dist
   - from: ../../tools                   # 两个桥
     to: tools
+  # pbs cpython 3.12 runtime + core wheels（§6.2 第 2 步）：首启离线建 _venvs/.core。
+  # 构建前先跑 node scripts/fetch-runtime.mjs 生成 resources-src/（gitignore，不进 git）。
+  - from: resources-src/python-runtime
+    to: python-runtime
+  - from: resources-src/wheels/core
+    to: wheels/core
   # 9 个插件仓源码（第二刀第 1 步：打包态每次启动同步进 HOME/<repo>，桥按老约定找 mcp_server.py）。
   # filter 排除 .git 与字节码缓存；体积共 ~4.2MB（实测）。
   - from: ../../../shadow-music-generator

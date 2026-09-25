@@ -1,0 +1,14 @@
+{
+  "_comment": "core env 装箱清单（desktop-packaging-plan.md §6.2）。pins 全部来自 2026-09-26 实测冻结集（本机现役版本），pip 只做依赖闭包解析。fetch-runtime.mjs 按此下载到 resources-src/（gitignore），electron-builder 再装进 Resources/。运行期 ENV_STAMP = runtime build-id + wheels 目录清单 hash。",
+  "runtime": "cpython-3.12.14+20260924-aarch64-apple-darwin-install_only",
+  "runtimeUrl": "https://registry.npmmirror.com/-/binary/python-build-standalone/20260924/cpython-3.12.14+20260924-aarch64-apple-darwin-install_only.tar.gz",
+  "pins": [
+    "numpy==1.26.4",
+    "mutagen==1.47.0",
+    "Pillow==11.3.0",
+    "send2trash==2.1.0",
+    "pyrekordbox==0.4.4",
+    "yt-dlp==2025.10.14",
+    "pycryptodome==3.23.0"
+  ]
+}

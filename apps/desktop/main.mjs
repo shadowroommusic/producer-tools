@@ -5,11 +5,25 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { homedir } from "node:os";
 import { resolveDesktopHome, syncPluginSources } from "./home.mjs";
+import { ensureCoreEnv } from "./env.mjs";
 
 const DEV = !app.isPackaged;
 // 打包态的 HOME（userData 或用户覆写），由 resolveDesktopHome 在起桥前解析；
 // dev 态保持 undefined——桥沿用自己的默认 ~/Documents/ShadowRoom，dev 工作流零变化。
 let HOME_DIR;
+
+// 单实例锁：两个实例抢 18787/18788 时，后起的桥会 EADDRINUSE 崩掉、UI 变哑巴
+// （2026-09-26 实测撞过一次：并行复验的实例先起 3 秒，后起实例两桥全崩）。
+// 第二个实例直接退出；再点图标时把已有窗口带到前台。
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  console.log("[main] another instance is running, quitting");
+  app.quit();
+}
+let win = null;
+app.on("second-instance", () => {
+  if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+});
 // 开发机 8787/8788 常被 dev 实例占用，桌面包用高位端口；renderer 只见 app:// 相对路径。
 const MCP_PORT = "18787";
 const AGENT_PORT = "18788";
@@ -66,6 +80,7 @@ app.on("before-quit", () => { for (const c of children) c.kill(); });
 app.on("window-all-closed", () => app.quit());
 
 app.whenReady().then(async () => {
+  if (!gotLock) return;
   // 第二刀第 1 步：打包态先定家（可能弹首启向导/跑迁移），再同步插件源码，
   // 最后才起桥开窗——桥和 UI 看到的必须是同一个新家。dev 态完全跳过。
   // 覆写模式（managed=false）下不同步源码：用户指定的地方（如 ~/Documents/ShadowRoom）
@@ -73,7 +88,10 @@ app.whenReady().then(async () => {
   if (!DEV) {
     const { home, managed } = await resolveDesktopHome();
     HOME_DIR = home;
-    if (managed) syncPluginSources(HOME_DIR);
+    if (managed) {
+      ensureCoreEnv(HOME_DIR);        // 先建 env（慢路径含离线 pip install），再同步源码
+      syncPluginSources(HOME_DIR);
+    }
   }
   // 转发必须按 fetch 的 (url, init) 口径拆开传；带 body 时还要 duplex:"half"，
   // 否则 RequestInit 直接抛 TypeError（真机窗口里前端第一个 POST 就踩到，GET-only 冒烟测不出）。
@@ -101,6 +119,6 @@ app.whenReady().then(async () => {
   startBridge("mcp-bridge.mjs");
   startBridge("agent-bridge.mjs");
 
-  const win = new BrowserWindow({ width: 1600, height: 1000, title: "ShadowRoom" });
+  win = new BrowserWindow({ width: 1600, height: 1000, title: "ShadowRoom" });
   win.loadURL("app://sr/index.html");
 });

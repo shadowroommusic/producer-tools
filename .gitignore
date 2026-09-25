@@ -26,3 +26,6 @@ duplicates*.json
 
 # Desktop packaging output (apps/desktop)
 apps/desktop/release/
+
+# Desktop python runtime & wheels (downloaded at build time by apps/desktop/scripts/fetch-runtime.mjs)
+apps/desktop/resources-src/
