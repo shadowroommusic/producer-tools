@@ -489,7 +489,8 @@ export function StudioPage({
 
   // ---------- arrangement editing ----------
 
-  // Decode the audio behind every playable clip once, so the clips can draw themselves.
+  // Resolve the waveform peaks behind every playable clip once (library peaks when the file is in
+  // the library, decode otherwise), so the clips can draw themselves.
   useEffect(() => {
     let cancelled = false;
     const wanted = project.tracks.flatMap((track) =>
