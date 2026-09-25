@@ -161,7 +161,8 @@ dry_run=true 时 `outputs` / `modifies` 给**将要写、将要改**的路径，
 ## 验收口径（实现那一刀用）
 
 1. fixture：3 首 wav（8 hot 槽全占 + 2 memory + 1 memory loop + 1 无 slot hot）→ rekordbox XML：
-   `Num` 恰为 0..7 + 3 个 -1（2 memory + 1 溢出），`overflow_to_memory=1`，`End` 只在 loop 行出现
+   `Num` 恰为 0..7 + **4 个 -1**（2 条 memory cue + 1 条 memory loop + 1 条溢出降级），
+   `overflow_to_memory=1`，`End` 只在 loop 行出现
    （含溢出那条 loop：降级后 `Num=-1` 且 `Type` 仍为 4）
 2. 同 fixture → serato：`dropped_memory=2`（只有 memory cue 被丢），memory loop **不丢**——
    Markers2 回读 8 cue + 2 loop（hot loop + memory loop），两套序号各自独立，crate 顺序 = payload 顺序
@@ -175,7 +176,8 @@ dry_run=true 时 `outputs` / `modifies` 给**将要写、将要改**的路径，
 7. 长 name：一条 50 字符的 cue name 走 serato → 若被截断必须在报告里记（截断长度随
    Markers2 label 实机上限，见「待真机验证」第 3 条）；不截断则原样回读
 8. 致密分配的可追溯：payload slot 稀疏（如 0/2/4）时 serato 实际写 0/1/2，
-   `slot_remapped=3` 如实计数（用户肌肉记忆被改动这件事必须可见）
+   `slot_remapped=2` 如实计数（**只数实际序号与 payload slot 不同的条数**：0→0 不算，2→1、4→2 才算；
+   用户肌肉记忆被改动这件事必须可见）
 9. memory loop 在 rekordbox 出口恒 `Num=-1` + `Type=4`（与 cue 的 memory 区分开）
 
 ## 待真机验证（实现那刀的准入条件）
