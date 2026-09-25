@@ -7,6 +7,7 @@
  * 这页是**只读 + 扫描/学习动作**：cue 与颜色的写路径（`cues_set`）只属于 DJ 页，这里刻意不封装。
  */
 import { callTool } from "./mcp.ts";
+import { fileUrl } from "./studio.ts";
 
 const SERVER = "library";
 
@@ -28,6 +29,7 @@ export type TrackRow = {
   energy: number | null;
   duration_ms: number | null;
   has_stems: number;
+  cover_path: string | null;
 };
 
 export type CueRow = {
@@ -57,15 +59,27 @@ export type TrackDetail = TrackRow & {
   imported_cue_overridden: number;
 };
 
-export type ScanResult = {
+/** scan_folder 的即时返回（二期契约）：任务句柄，结果要轮询 scan_job_detail。 */
+export type ScanStart = { job_id: number; status: string; folder: string; recursive: boolean; note?: string };
+
+/** scan_job_detail：任务全貌。failures 元素形状二期还在定，渲染时防御性取值。 */
+export type ScanJob = {
+  id: number;
   folder: string;
-  recursive: boolean;
-  found: number;
+  recursive: number | boolean;
+  status: string;
+  total: number;
+  done: number;
+  failed: number;
   added: number;
   updated: number;
   unchanged: number;
   missing: number;
-  ms: number;
+  ms: number | null;
+  error: string | null;
+  started_at?: number;
+  finished_at?: number | null;
+  failures: Array<Record<string, unknown>>;
 };
 
 export type Stats = {
@@ -123,7 +137,9 @@ export const listTracks = (filters: TrackFilters) =>
 
 export const trackDetail = (id: number) => tool<TrackDetail>("track_detail", { id });
 
-export const scanFolder = (path: string) => tool<ScanResult>("scan_folder", { path });
+export const scanFolder = (path: string) => tool<ScanStart>("scan_folder", { path });
+
+export const scanJobDetail = (jobId: number) => tool<ScanJob>("scan_job_detail", { job_id: jobId });
 
 export const fetchStats = () => tool<Stats>("stats", {});
 
@@ -140,6 +156,69 @@ export const analyzeMissing = (limit = 25) =>
   tool<{ candidates: number; analysed: number; failed: number; errors: string[]; ms: number }>("analyze_missing", { limit });
 
 export const setList = () => tool<{ sets: SetRow[] }>("set_list", {}).then((res) => res.sets);
+
+// ---------------------------------------------------------------- 二期：菜单/删除/封面/归类/查重
+
+export type CrateRow = { id: number; name: string; created_at: number; tracks: number };
+
+export type RemoveResult = { track_id: number; path: string; title: string; row_deleted: boolean; file_action: string };
+
+export type RenameResult = { track_id: number; title: string; previous_title: string | null; path: string; note: string };
+
+export type MoveToCrateResult = { crate_id: number; crate_name: string; created: boolean; added: number; skipped: number; files_untouched: boolean };
+
+export type CoversResult = {
+  checked: number;
+  extracted: number;
+  from_embedded: number;
+  from_folder: number;
+  none: number;
+  errors: number;
+  missing_files: number;
+  covers_dir: string;
+};
+
+export type DupTrack = {
+  id: number;
+  path: string;
+  title: string | null;
+  artist: string | null;
+  duration_ms: number | null;
+  format: string | null;
+  size: number | null;
+  sample_rate: number | null;
+  bit_depth: number | null;
+  bpm: number | null;
+  key: string | null;
+  camelot: string | null;
+  added_at: number | null;
+};
+
+export type DupGroup = { layer: string; tracks: DupTrack[]; reasons: string[]; ber?: number | null };
+
+export type DupResult = {
+  checked: number;
+  groups: DupGroup[];
+  degraded: string | null;
+  fpcalc: string | null;
+  note?: string;
+};
+
+export const crateList = () => tool<{ crates: CrateRow[] }>("crate_list", {}).then((res) => res.crates);
+
+export const trackRemove = (trackId: number, removeFile: boolean, permanent: boolean) =>
+  tool<RemoveResult>("track_remove", { track_id: trackId, remove_file: removeFile, permanent });
+
+export const trackRename = (trackId: number, newTitle: string) =>
+  tool<RenameResult>("track_rename", { track_id: trackId, new_title: newTitle });
+
+export const trackMoveToCrate = (crateName: string, trackIds: number[]) =>
+  tool<MoveToCrateResult>("track_move_to_crate", { crate_name: crateName, track_ids: trackIds });
+
+export const extractCovers = (trackIds?: number[]) =>
+  tool<CoversResult>("extract_covers", trackIds !== undefined ? { track_ids: trackIds } : {});
+
+export const findDuplicates = (limit = 200) => tool<DupResult>("find_duplicates", { limit });
 
 // ---------------------------------------------------------------- 纯函数（单测钉住）
 
@@ -166,14 +245,29 @@ export function missingOf(track: Pick<TrackRow, "bpm" | "key">): string[] {
   return missing;
 }
 
-/** 扫描结果 → 一句给用户看的中文（数字都在，不说「已优化」这种形容词）。 */
-export function describeScan(result: ScanResult): string {
-  const parts = [`找到 ${result.found} 个音频文件`];
-  parts.push(`新入库 ${result.added}`);
-  if (result.updated > 0) parts.push(`有更新 ${result.updated}`);
-  if (result.unchanged > 0) parts.push(`未变 ${result.unchanged}`);
-  if (result.missing > 0) parts.push(`${result.missing} 行本次没找到（库行保留，不删）`);
-  return `${parts.join(" · ")}，用时 ${result.ms}ms`;
+/** 扫描完成 → 一句给用户看的中文（数字都在，不说「已优化」这种形容词）。 */
+export function describeScan(job: ScanJob): string {
+  const parts = [`找到 ${job.total} 个音频文件`];
+  parts.push(`新入库 ${job.added}`);
+  if (job.updated > 0) parts.push(`有更新 ${job.updated}`);
+  if (job.unchanged > 0) parts.push(`未变 ${job.unchanged}`);
+  if (job.failed > 0) parts.push(`失败 ${job.failed}`);
+  if (job.missing > 0) parts.push(`${job.missing} 行本次没找到（库行保留，不删）`);
+  return `${parts.join(" · ")}，用时 ${job.ms ?? 0}ms`;
+}
+
+/** 扫描中的进度句：喂进度显示位（二期 SSE 来了也显示它）。 */
+export function describeScanProgress(job: ScanJob): string {
+  const failed = job.failed > 0 ? ` · 失败 ${job.failed}` : "";
+  return `正在入库 ${job.done}/${job.total}${failed}`;
+}
+
+/** 失败清单第一条的防御性渲染（failures 形状二期还在定：先 路径/原因，没有就原文）。 */
+export function describeFailure(failure: Record<string, unknown>): string {
+  const path = typeof failure.path === "string" ? failure.path : null;
+  const reason = typeof failure.reason === "string" ? failure.reason : null;
+  if (path !== null && reason !== null) return `${path}（${reason}）`;
+  return path ?? reason ?? String(failure);
 }
 
 /** 历史导入报告 → 一句中文；某家没找到要说清楚，不静默。 */
@@ -249,6 +343,107 @@ export function formatPlayedAt(value: number | string | null): string {
 /** hot cue 槽位 0..7 → A..H（DJ 的肌肉记忆）。 */
 export function slotLetter(slot: number): string {
   return slot >= 0 && slot <= 7 ? String.fromCharCode(65 + slot) : String(slot);
+}
+
+/** 封面图 URL：与音频同一个桥端点（agent bridge /api/agent/file，图片类型见总线 #100 提案）。 */
+export function coverUrl(coverPath: string): string {
+  return fileUrl(coverPath);
+}
+
+/** track_remove 结果 → 一句中文（三种文件结局都说清楚）。 */
+export function describeRemove(result: RemoveResult): string {
+  switch (result.file_action) {
+    case "trashed":
+      return `已移入废纸篓「${result.title}」，曲库记录一并删除`;
+    case "unlinked":
+      return `已彻底删除「${result.title}」——文件无法恢复`;
+    case "file-missing":
+      return `文件早就不在磁盘上了，库行已清「${result.title}」`;
+    default:
+      return `已从曲库移除「${result.title}」（文件还在，重扫会回来）`;
+  }
+}
+
+/** 归类结果 → 一句中文（强调文件没动——规格的归类定义）。 */
+export function describeMoveToCrate(result: MoveToCrateResult): string {
+  const created = result.created ? "（crate 是新建的）" : "";
+  const skipped = result.skipped > 0 ? `，跳过重复 ${result.skipped}` : "";
+  return `已加入「${result.crate_name}」${created}：新加 ${result.added}${skipped}，文件没动`;
+}
+
+/** 封面提取结果 → 一句中文（没有/失败都说，不静默）。 */
+export function describeCovers(result: CoversResult): string {
+  const parts = [`检查 ${result.checked} 首`];
+  parts.push(`提出 ${result.extracted} 张（嵌入 ${result.from_embedded} · 同目录 ${result.from_folder}）`);
+  if (result.none > 0) parts.push(`没有封面 ${result.none}`);
+  if (result.errors > 0 || result.missing_files > 0) parts.push(`读失败 ${result.errors + result.missing_files}`);
+  return `封面：${parts.join(" · ")}`;
+}
+
+/** 重复组按层分开：acoustic 弹窗二选一；exact/suspect 只打角标（口径见规格 §4 与任务单）。 */
+export function partitionDupGroups(groups: DupGroup[]): { acoustic: DupGroup[]; exact: DupGroup[]; suspect: DupGroup[] } {
+  return {
+    acoustic: groups.filter((g) => g.layer === "acoustic"),
+    exact: groups.filter((g) => g.layer === "exact"),
+    suspect: groups.filter((g) => g.layer === "suspect" || g.layer === "metadata"),
+  };
+}
+
+/** trackId → 角标文案（exact 优先于 suspect；acoustic 不打角标——它走弹窗）。 */
+export function dupBadgeMap(groups: DupGroup[]): Map<number, string> {
+  const map = new Map<number, string>();
+  for (const group of groups) {
+    const badge = group.layer === "exact" ? "完全重复" : group.layer === "suspect" || group.layer === "metadata" ? "疑似重复" : null;
+    if (badge === null) continue;
+    for (const track of group.tracks) {
+      if (!map.has(track.id)) map.set(track.id, badge);
+    }
+  }
+  return map;
+}
+
+export type DupFieldRow = { label: string; a: string; b: string; differ: boolean };
+
+/** 两卡对比的字段行（规格 §4 的顺序：格式 → 位深/采样率 → 大小 → 时长 → 路径 → 入库时间 → BPM/调性）。 */
+export function dupFieldRows(a: DupTrack, b: DupTrack): DupFieldRow[] {
+  const rows: Array<[string, (t: DupTrack) => string]> = [
+    ["格式", (t) => (t.format ?? "—").toUpperCase()],
+    [
+      "位深 · 采样率",
+      (t) =>
+        `${t.bit_depth === null ? "—" : `${t.bit_depth}-bit`} · ${t.sample_rate === null ? "—" : `${t.sample_rate / 1000}kHz`}`,
+    ],
+    ["大小", (t) => formatBytes(t.size ?? Number.NaN)],
+    ["时长", (t) => formatMs(t.duration_ms)],
+    ["路径", (t) => t.path],
+    ["入库时间", (t) => formatPlayedAt(t.added_at)],
+    ["BPM", (t) => (t.bpm === null ? "—" : String(Math.round(t.bpm * 10) / 10))],
+    ["调性", (t) => t.camelot ?? t.key ?? "—"],
+  ];
+  return rows.map(([label, get]) => {
+    const av = get(a);
+    const bv = get(b);
+    return { label, a: av, b: bv, differ: av !== bv };
+  });
+}
+
+/** §3 弹窗文案的文件行：`title（8.4 MB · WAV 24bit/48kHz）`——artist 缺省不硬凑。 */
+export function deleteFileLine(detail: Pick<TrackDetail, "title" | "artist" | "path" | "duration_ms"> & {
+  size?: number | null;
+  sample_rate?: number | null;
+  bit_depth?: number | null;
+}): string {
+  const name = detail.artist ? `${detail.artist} - ${detail.title}` : (detail.title ?? detail.path);
+  const ext = detail.path.slice(detail.path.lastIndexOf(".") + 1).toUpperCase();
+  // §3 原样：「8.4 MB · WAV 24-bit/48kHz」——大小与格式块之间用中点，格式/位深/采样率连成一块。
+  const block =
+    ext +
+    (detail.bit_depth !== null && detail.bit_depth !== undefined ? ` ${detail.bit_depth}-bit` : "") +
+    (detail.sample_rate !== null && detail.sample_rate !== undefined ? `/${detail.sample_rate / 1000}kHz` : "");
+  const tech = [detail.size !== null && detail.size !== undefined ? formatBytes(detail.size) : null, block]
+    .filter((part) => part !== null)
+    .join(" · ");
+  return tech === "" ? name : `${name}（${tech}）`;
 }
 
 /** cue 来源一句人话：有效集来自哪里 + 被覆盖的导入 cue 条数。 */

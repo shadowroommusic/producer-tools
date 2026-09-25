@@ -18,16 +18,19 @@
  *   占位（要桌面壳的 shell.openPath）。编辑名称 / 加入分类库 / 移除 / 废纸篓 / 彻底删除
  *   等二期口径落地再加（它们动真实文件，绝不抢跑）。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fileUrl } from "../lib/studio.ts";
 import "../styles/library.css";
 import {
   EMPTY_FILTERS,
   analyzeMissing,
   buildTrackFilters,
   describeCueSource,
+  describeFailure,
   describeImport,
   describeLearn,
   describeScan,
+  describeScanProgress,
   fetchStats,
   filtersActive,
   forgetPreferences,
@@ -39,6 +42,7 @@ import {
   listTracks,
   missingOf,
   preferenceSummary,
+  scanJobDetail,
   setList,
   slotLetter,
   sourceOf,
@@ -50,6 +54,22 @@ import {
   type TrackDetail,
   type TrackRow,
   scanFolder,
+  coverUrl,
+  crateList,
+  deleteFileLine,
+  describeCovers,
+  describeMoveToCrate,
+  describeRemove,
+  dupBadgeMap,
+  dupFieldRows,
+  extractCovers,
+  findDuplicates,
+  partitionDupGroups,
+  trackMoveToCrate,
+  trackRemove,
+  trackRename,
+  type CrateRow,
+  type DupGroup,
 } from "../lib/library";
 
 /** 筛选去抖：输入停 250ms 才打给插件（服务端筛选，库大也不卡）。 */
@@ -72,8 +92,26 @@ export function LibraryPage() {
   const [scanPath, setScanPath] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
-  /** 右键菜单骨架（一期）：只放只读动作——复制路径能用；打开所在文件夹等桌面壳。 */
-  const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  /** 右键菜单（二期全量）：root（动作）/ rename（内联改名）/ crates（加入分类库）三态。 */
+  const [menu, setMenu] = useState<{ x: number; y: number; track: TrackRow } | null>(null);
+  const [menuMode, setMenuMode] = useState<"root" | "rename" | "crates">("root");
+  const [renameValue, setRenameValue] = useState("");
+  const [crates, setCrates] = useState<CrateRow[] | null>(null);
+  const [newCrateName, setNewCrateName] = useState("");
+  /** 试听：一个共享 Audio 元素——流式播放，不像 deck 整文件解码（6 分钟立体声 ≈127MB 的教训）。 */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewing, setPreviewing] = useState<number | null>(null);
+  /** 删除确认（§3/§7.2）：trash 默认焦点取消、permanent 小字链接进入 + 勾选武装。 */
+  const [deleteTarget, setDeleteTarget] = useState<{ track: TrackRow; mode: "trash" | "permanent"; detail: TrackDetail | null } | null>(null);
+  const [permaArmed, setPermaArmed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  /** 查重：结果留作角标；acoustic 组排队进二选一弹窗；exact/suspect 只上报告与角标。 */
+  const [dupBusy, setDupBusy] = useState(false);
+  const [dupGroups, setDupGroups] = useState<DupGroup[] | null>(null);
+  const [dupQueue, setDupQueue] = useState<DupGroup[]>([]);
+  const [dupPanel, setDupPanel] = useState(false);
+  const [dupNote, setDupNote] = useState<string | null>(null);
 
   const [boardOpen, setBoardOpen] = useState(false);
   const [prefSummary, setPrefSummary] = useState<string | null>(null);
@@ -181,26 +219,51 @@ export function LibraryPage() {
       .catch(() => undefined);
   }, [selectedId]);
 
+  // 扫描是任务了（二期契约）：scan_folder 只给 job_id，进度轮询 scan_job_detail，
+  // 成功与失败都只写进度显示位这一个地方（二期 SSE 替换轮询时，UI 一个字都不用改）。
+  const scanSeq = useRef(0);
   const onScan = useCallback(async () => {
     const path = scanPath.trim();
     if (path === "" || scanning) return;
+    const seq = ++scanSeq.current;
     setScanning(true);
     try {
-      const result = await scanFolder(path);
-      // 进度位常驻最后一句结果；通知条（role=alert）同时报一次，验收 ① 断言的就是它。
-      const line = describeScan(result);
-      setScanNote(line);
-      say(line);
+      const start = await scanFolder(path);
+      setScanNote("任务已建立，等进度…");
+      const deadline = Date.now() + 10 * 60 * 1000;
+      let job = await scanJobDetail(start.job_id);
+      while (job.status === "running" && Date.now() < deadline) {
+        if (seq !== scanSeq.current) return; // 用户又起了一次扫描，这次轮询作废
+        setScanNote(describeScanProgress(job));
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        job = await scanJobDetail(start.job_id);
+      }
+      if (seq !== scanSeq.current) return;
+      if (job.status === "completed") {
+        const line =
+          describeScan(job) +
+          (job.failed > 0 && job.failures.length > 0 ? `（第一个失败：${describeFailure(job.failures[0])}）` : "");
+        setScanNote(line);
+        // 封面提取跟在扫描尾巴上（规格 §1：这一步也在这里做；幂等，已有 cover 的跳过）。
+        try {
+          const covers = await extractCovers();
+          if (covers.extracted > 0 && seq === scanSeq.current) setScanNote(`${line}；封面 +${covers.extracted}`);
+        } catch {
+          /* 封面失败不挡扫描结果 */
+        }
+      } else if (job.status === "running") {
+        setScanNote(`扫了 10 分钟还没完（${job.done}/${job.total}）——任务在后台继续，稍后刷新列表看`);
+      } else {
+        setScanNote(`扫描失败：${job.error ?? "任务没跑完，原因没说"}`);
+      }
       await Promise.all([refreshStats(), reloadTracks()]);
       refreshDetail();
     } catch (cause) {
-      const message = `扫描失败：${cause instanceof Error ? cause.message : String(cause)}`;
-      setScanNote(message);
-      say(message);
+      if (seq === scanSeq.current) setScanNote(`扫描失败：${cause instanceof Error ? cause.message : String(cause)}`);
     } finally {
-      setScanning(false);
+      if (seq === scanSeq.current) setScanning(false);
     }
-  }, [scanPath, scanning, say, refreshStats, reloadTracks, refreshDetail]);
+  }, [scanPath, scanning, refreshStats, reloadTracks, refreshDetail]);
 
   const onLearn = useCallback(async () => {
     if (busy !== null) return;
@@ -273,9 +336,188 @@ export function LibraryPage() {
     }
   }, [busy, forgetArmed, forgetHistory, say, fail]);
 
+  // ---- 试听：菜单第一项（唯一出声的动作）。退出路径全停：再点/换歌/播完/报错/离开页面。
+  const stopPreview = useCallback(() => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setPreviewing(null);
+  }, []);
+  const onPreview = useCallback(
+    (track: TrackRow) => {
+      if (previewing === track.id) {
+        stopPreview();
+        return;
+      }
+      audioRef.current?.pause();
+      const audio = new Audio(fileUrl(track.path));
+      audioRef.current = audio;
+      setPreviewing(track.id);
+      audio.onended = () => {
+        if (audioRef.current === audio) stopPreview();
+      };
+      audio.onerror = () => {
+        if (audioRef.current === audio) {
+          stopPreview();
+          say(`试听失败：${track.title ?? track.path}`);
+        }
+      };
+      void audio.play().catch(() => undefined);
+    },
+    [previewing, stopPreview, say],
+  );
+  useEffect(() => {
+    const audio = audioRef;
+    return () => {
+      audio.current?.pause();
+      audio.current = null;
+    };
+  }, []);
+
+  // ---- 改名（内联，改库 title 不动文件名）
+  const onRename = useCallback(async () => {
+    if (menu === null) return;
+    const title = renameValue.trim();
+    if (title === "") return;
+    try {
+      const res = await trackRename(menu.track.id, title);
+      say(`已改名：${res.previous_title ?? menu.track.path.split("/").pop()} → ${res.title}（文件名没动）`);
+      setMenu(null);
+      await reloadTracks();
+      refreshDetail();
+    } catch (cause) {
+      fail("改名失败", cause);
+    }
+  }, [menu, renameValue, say, fail, reloadTracks, refreshDetail]);
+
+  // ---- 加入分类库（归类 = 逻辑分类，文件不动）
+  const onMoveToCrate = useCallback(
+    async (crateName: string) => {
+      if (menu === null || crateName.trim() === "") return;
+      try {
+        const res = await trackMoveToCrate(crateName.trim(), [menu.track.id]);
+        say(describeMoveToCrate(res));
+        setMenu(null);
+        setCrates(null);
+        refreshDetail();
+      } catch (cause) {
+        fail("加入分类库失败", cause);
+      }
+    },
+    [menu, say, fail, refreshDetail],
+  );
+
+  // ---- 从曲库移除（规格：不需要确认——文件不动、可逆）
+  const onRemoveRow = useCallback(
+    async (track: TrackRow) => {
+      try {
+        const res = await trackRemove(track.id, false, false);
+        say(describeRemove(res));
+        setMenu(null);
+        if (selectedId === track.id) setSelectedId(null);
+        await Promise.all([refreshStats(), reloadTracks()]);
+      } catch (cause) {
+        fail("从曲库移除失败", cause);
+      }
+    },
+    [say, fail, selectedId, refreshStats, reloadTracks],
+  );
+
+  // ---- 删除确认（trash / permanent）
+  const openDelete = useCallback(
+    (track: TrackRow, mode: "trash" | "permanent") => {
+      setMenu(null);
+      setPermaArmed(false);
+      setDeleteTarget({ track, mode, detail: null });
+      void trackDetail(track.id)
+        .then((row) => setDeleteTarget((current) => (current?.track.id === track.id ? { ...current, detail: row } : current)))
+        .catch(() => undefined); // detail 读不到也照删——文件行退化为标题/路径
+    },
+    [],
+  );
+  useEffect(() => {
+    if (deleteTarget !== null) cancelRef.current?.focus();
+  }, [deleteTarget?.mode, deleteTarget === null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onDeleteConfirm = useCallback(async () => {
+    if (deleteTarget === null || deleting) return;
+    const { track, mode } = deleteTarget;
+    setDeleting(true);
+    try {
+      const res = await trackRemove(track.id, true, mode === "permanent");
+      say(describeRemove(res));
+      setDeleteTarget(null);
+      if (selectedId === track.id) setSelectedId(null);
+      await Promise.all([refreshStats(), reloadTracks()]);
+    } catch (cause) {
+      fail("删除失败", cause);
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, deleting, say, fail, selectedId, refreshStats, reloadTracks]);
+
+  // 弹窗的 Esc（删除确认与查重二选一共用）。
+  useEffect(() => {
+    if (deleteTarget === null && dupQueue.length === 0) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setDeleteTarget(null);
+      setDupQueue((queue) => queue.slice(1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [deleteTarget !== null, dupQueue.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- 查重：acoustic 弹窗二选一；exact/suspect 只报告与角标（永不自动删）
+  const onDedupe = useCallback(async () => {
+    if (dupBusy) return;
+    setDupBusy(true);
+    try {
+      // 后端 limit 实际按 id 升序取最旧 N（描述写 newest 与行为不符，已报 ZCode）——
+      // 给足覆盖全库的量，否则最新入库的重复对永远查不到；上限 1000 挡超大库的 fpcalc 成本。
+      // stats 现取：useCallback 闭包里的 stats 是挂载时的 null（陈旧闭包实测踩过）。
+      const fresh = await fetchStats().catch(() => stats);
+      const res = await findDuplicates(Math.min(Math.max(fresh?.tracks ?? 200, 200), 1000));
+      const { acoustic, exact, suspect } = partitionDupGroups(res.groups);
+      setDupGroups(res.groups);
+      setDupQueue(acoustic);
+      setDupPanel(exact.length > 0 || suspect.length > 0);
+      setDupNote(res.degraded);
+      say(
+        `查重（${res.checked} 首）：声学重复 ${acoustic.length} 组待二选一 · 完全重复 ${exact.length} 组 · 疑似 ${suspect.length} 组` +
+          (res.degraded ? `（${res.degraded}）` : ""),
+      );
+    } catch (cause) {
+      fail("查重失败", cause);
+    } finally {
+      setDupBusy(false);
+    }
+  }, [dupBusy, say, fail]);
+
+  const onDupKeep = useCallback(
+    async (group: DupGroup, keepId: number, otherId: number, otherTitle: string) => {
+      try {
+        const res = await trackRemove(otherId, true, false); // 规格：另一条移入废纸篓，可找回
+        say(`已保留这条，「${otherTitle}」${res.file_action === "trashed" ? "移入废纸篓" : "已移除"}`);
+        setDupQueue((queue) => queue.filter((g) => g !== group));
+        setDupGroups((current) => (current === null ? current : current.filter((g) => g !== group)));
+        if (selectedId === otherId) setSelectedId(null);
+        await Promise.all([refreshStats(), reloadTracks()]);
+      } catch (cause) {
+        fail("保留失败", cause);
+      }
+    },
+    [say, fail, selectedId, refreshStats, reloadTracks],
+  );
+
+  const dupBadges = useMemo(() => dupBadgeMap(dupGroups ?? []), [dupGroups]);
+  const dupPartition = useMemo(() => partitionDupGroups(dupGroups ?? []), [dupGroups]);
+
   useEffect(() => {
     if (menu === null) return;
-    const close = () => setMenu(null);
+    const close = () => {
+      setMenu(null);
+      setMenuMode("root");
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
@@ -320,6 +562,9 @@ export function LibraryPage() {
           onClick={() => setBoardOpen((open) => !open)}
         >
           统计与偏好
+        </button>
+        <button type="button" className="sr-btn" disabled={dupBusy} onClick={() => void onDedupe()}>
+          {dupBusy ? "查重中…" : "查重"}
         </button>
         <span className="sr-lib-linkage">推荐与排歌在 DJ 页 · 曲目库管「入库 / 可查 / 可学」</span>
       </div>
@@ -417,6 +662,35 @@ export function LibraryPage() {
         </div>
       ) : null}
 
+      {dupPanel && dupGroups !== null ? (
+        <section className="sr-lib-dupreport" aria-label="查重报告">
+          <div className="sr-lib-dupreport-head">
+            <span>
+              查重报告：完全重复 {dupPartition.exact.length} 组 · 疑似重复 {dupPartition.suspect.length} 组——这两层只打角标，
+              永不弹窗、永不自动删。
+            </span>
+            <button type="button" className="sr-lib-close" aria-label="关掉查重报告" onClick={() => setDupPanel(false)}>
+              ×
+            </button>
+          </div>
+          {dupPartition.exact.map((group, index) => (
+            <p key={`exact-${index}`} className="sr-lib-dupreport-row">
+              <span className="sr-lib-dupbadge">完全重复</span>
+              <span className="sr-lib-dupreport-names">{group.tracks.map((t) => t.title ?? t.path).join(" ↔ ")}</span>
+              <span className="sr-lib-count">{group.reasons[0] ?? ""}</span>
+            </p>
+          ))}
+          {dupPartition.suspect.map((group, index) => (
+            <p key={`suspect-${index}`} className="sr-lib-dupreport-row">
+              <span className="sr-lib-dupbadge sr-lib-dupbadge--suspect">疑似重复</span>
+              <span className="sr-lib-dupreport-names">{group.tracks.map((t) => t.title ?? t.path).join(" ↔ ")}</span>
+              <span className="sr-lib-count">{group.reasons[0] ?? ""}</span>
+            </p>
+          ))}
+          {dupNote !== null ? <p className="sr-lib-count">{dupNote}</p> : null}
+        </section>
+      ) : null}
+
       <div className="sr-lib-main" data-drawer={selectedId !== null || undefined}>
         <section className="sr-lib-list" aria-label="曲目列表">
           <div className="sr-lib-filters">
@@ -487,10 +761,30 @@ export function LibraryPage() {
                 onClick={() => setSelectedId((current) => (current === track.id ? null : track.id))}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  setMenu({ x: event.clientX, y: event.clientY, path: track.path });
+                  setMenu({ x: event.clientX, y: event.clientY, track });
+                  setMenuMode("root");
                 }}
               >
+                {track.cover_path !== null ? (
+                  <img className="sr-lib-row-cover" src={coverUrl(track.cover_path)} alt="" loading="lazy" />
+                ) : (
+                  <span className="sr-lib-row-cover sr-lib-row-cover--ph" aria-hidden="true" />
+                )}
                 <span className="sr-lib-row-title">{track.title ?? track.path.split("/").pop()}</span>
+                {dupBadges.has(track.id) ? <span className="sr-lib-dupbadge">{dupBadges.get(track.id)}</span> : null}
+                {previewing === track.id ? (
+                  <span
+                    className="sr-lib-previewing"
+                    role="button"
+                    aria-label="停止试听"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      stopPreview();
+                    }}
+                  >
+                    ■ 停
+                  </span>
+                ) : null}
                 <span className="sr-lib-row-artist">{track.artist ?? "—"}</span>
                 <span className="sr-lib-row-bpm">{track.bpm === null ? "—" : `${Math.round(track.bpm * 10) / 10} BPM`}</span>
                 <span className="sr-lib-row-key">{track.camelot ?? track.key ?? "—"}</span>
@@ -504,9 +798,13 @@ export function LibraryPage() {
         {selectedId !== null ? (
           <aside className="sr-lib-drawer" aria-label="曲目详情">
             <header className="sr-lib-drawer-head">
-              <span className="sr-lib-cover" data-slot="cover" aria-label="封面（二期提取嵌入封面与 cover.jpg）">
-                封面
-              </span>
+              {detail?.cover_path ? (
+                <img className="sr-lib-cover sr-lib-cover--img" data-slot="cover" src={coverUrl(detail.cover_path)} alt={`${detail?.title ?? "曲目"} 封面`} />
+              ) : (
+                <span className="sr-lib-cover" data-slot="cover" aria-label="这首没有封面">
+                  封面
+                </span>
+              )}
               <strong className="sr-lib-drawer-title">{detail?.title ?? "曲目详情"}</strong>
               <button type="button" className="sr-lib-close" aria-label="关闭详情" onClick={() => setSelectedId(null)}>
                 ×
@@ -594,34 +892,214 @@ export function LibraryPage() {
         <div
           className="sr-lib-rowmenu"
           role="menu"
-          style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 120) }}
+          style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 320) }}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <button
-            type="button"
-            role="menuitem"
-            className="sr-lib-rowmenu-item"
-            onClick={() => {
-              void navigator.clipboard
-                .writeText(menu.path)
-                .then(() => say("路径已复制"))
-                .catch(() => say(`复制不了，手动复制：${menu.path}`));
-              setMenu(null);
-            }}
-          >
-            复制路径
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="sr-lib-rowmenu-item"
-            disabled
-            title="浏览器预览里开不了系统文件夹——桌面壳（Electron）里可用"
-          >
-            打开所在文件夹
-          </button>
+          {menuMode === "root" ? (
+            <>
+              <button type="button" role="menuitem" className="sr-lib-rowmenu-item" onClick={() => { onPreview(menu.track); setMenu(null); }}>
+                {previewing === menu.track.id ? "停止试听" : "试听"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="sr-lib-rowmenu-item"
+                disabled
+                title="浏览器预览里开不了系统文件夹——桌面壳（Electron）里可用"
+              >
+                打开所在文件夹
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="sr-lib-rowmenu-item"
+                onClick={() => {
+                  setRenameValue(menu.track.title ?? menu.track.path.split("/").pop() ?? "");
+                  setMenuMode("rename");
+                }}
+              >
+                编辑名称…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="sr-lib-rowmenu-item"
+                onClick={() => {
+                  setMenuMode("crates");
+                  setNewCrateName("");
+                  if (crates === null) void crateList().then(setCrates).catch(() => setCrates([]));
+                }}
+              >
+                加入分类库 ▸
+              </button>
+              <span className="sr-lib-rowmenu-sep" />
+              <button type="button" role="menuitem" className="sr-lib-rowmenu-item sr-lib-rowmenu-danger" onClick={() => void onRemoveRow(menu.track)}>
+                从曲库移除
+              </button>
+              <button type="button" role="menuitem" className="sr-lib-rowmenu-item sr-lib-rowmenu-danger" onClick={() => openDelete(menu.track, "trash")}>
+                移到废纸篓…
+              </button>
+              <button type="button" role="menuitem" className="sr-lib-rowmenu-item sr-lib-rowmenu-perma" onClick={() => openDelete(menu.track, "permanent")}>
+                彻底删除…
+              </button>
+            </>
+          ) : menuMode === "rename" ? (
+            <form
+              className="sr-lib-rowmenu-rename"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void onRename();
+              }}
+            >
+              <input
+                className="sr-input"
+                autoFocus
+                value={renameValue}
+                aria-label="新名称"
+                onChange={(event) => setRenameValue(event.target.value)}
+              />
+              <span className="sr-lib-rowmenu-hint">Enter 保存 · Esc 取消（只改库里的名字，文件名不动）</span>
+            </form>
+          ) : (
+            <div className="sr-lib-rowmenu-crates">
+              {crates === null ? (
+                <span className="sr-lib-rowmenu-hint">crate 读取中…</span>
+              ) : (
+                crates.map((crate) => (
+                  <button
+                    key={crate.id}
+                    type="button"
+                    role="menuitem"
+                    className="sr-lib-rowmenu-item"
+                    onClick={() => void onMoveToCrate(crate.name)}
+                  >
+                    <span className="sr-lib-rowmenu-crate-name">{crate.name}</span>
+                    <span className="sr-lib-count">{crate.tracks} 首</span>
+                  </button>
+                ))
+              )}
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void onMoveToCrate(newCrateName);
+                }}
+              >
+                <input
+                  className="sr-input"
+                  value={newCrateName}
+                  placeholder="新 crate 名… Enter 建"
+                  aria-label="新 crate 名"
+                  onChange={(event) => setNewCrateName(event.target.value)}
+                />
+              </form>
+              <button type="button" role="menuitem" className="sr-lib-rowmenu-item" onClick={() => setMenuMode("root")}>
+                ‹ 返回
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
+
+      {deleteTarget !== null ? (
+        <div className="sr-lib-scrim" onClick={() => setDeleteTarget(null)}>
+          <div
+            className="sr-lib-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={deleteTarget.mode === "trash" ? "移到废纸篓确认" : "彻底删除确认"}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="sr-lib-dialog-title">{deleteTarget.mode === "trash" ? "删除以下文件？" : "彻底删除以下文件？"}</p>
+            <p className="sr-lib-dialog-file">
+              {deleteTarget.detail !== null
+                ? deleteFileLine(deleteTarget.detail)
+                : (deleteTarget.track.title ?? deleteTarget.track.path)}
+            </p>
+            <p className="sr-lib-dialog-note">
+              {deleteTarget.mode === "trash" ? "文件将移入系统废纸篓，曲库记录一并删除。" : "文件直接从磁盘删除，不进废纸篓、无法恢复。"}
+            </p>
+            {deleteTarget.mode === "permanent" ? (
+              <label className="sr-lib-dialog-arm">
+                <input type="checkbox" checked={permaArmed} onChange={(event) => setPermaArmed(event.target.checked)} />
+                我知道无法恢复
+              </label>
+            ) : null}
+            <div className="sr-lib-dialog-actions">
+              <button ref={cancelRef} type="button" className="sr-btn" onClick={() => setDeleteTarget(null)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="sr-btn sr-lib-dialog-danger"
+                disabled={deleting || (deleteTarget.mode === "permanent" && !permaArmed)}
+                onClick={() => void onDeleteConfirm()}
+              >
+                {deleting ? "删除中…" : deleteTarget.mode === "trash" ? "移入废纸篓" : "彻底删除"}
+              </button>
+            </div>
+            {deleteTarget.mode === "trash" ? (
+              <button
+                type="button"
+                className="sr-lib-dialog-permalink"
+                onClick={() => {
+                  setDeleteTarget((current) => (current === null ? current : { ...current, mode: "permanent" }));
+                  setPermaArmed(false);
+                }}
+              >
+                其实想彻底删掉？
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {dupQueue.length > 0 && dupQueue[0].tracks.length >= 2
+        ? (() => {
+            const group = dupQueue[0];
+            const first = group.tracks[0];
+            const second = group.tracks[1];
+            const rows = dupFieldRows(first, second);
+            return (
+              <div className="sr-lib-scrim">
+                <div className="sr-lib-dialog sr-lib-dupdialog" role="dialog" aria-modal="true" aria-label="重复曲目二选一">
+                  <p className="sr-lib-dialog-title">同一首歌的两个文件，保留哪条？（还有 {dupQueue.length} 组）</p>
+                  <p className="sr-lib-dialog-note">
+                    {group.reasons.join("；")}
+                    {group.ber !== null && group.ber !== undefined ? `；BER ${group.ber}` : ""}
+                  </p>
+                  <div className="sr-lib-dupcards">
+                    {[first, second].map((track, index) => (
+                      <div key={track.id} className="sr-lib-dupcard">
+                        <p className="sr-lib-dupcard-title">{track.title ?? track.path}</p>
+                        <dl className="sr-lib-dupfields">
+                          {rows.map((row) => (
+                            <div key={row.label} className="sr-lib-duprow" data-differ={row.differ || undefined}>
+                              <dt>{row.label}</dt>
+                              <dd>{index === 0 ? row.a : row.b}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        <button
+                          type="button"
+                          className="sr-btn sr-btn--accent"
+                          onClick={() => void onDupKeep(group, track.id, (index === 0 ? second : first).id, (index === 0 ? second : first).title ?? (index === 0 ? second : first).path)}
+                        >
+                          保留这条
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="sr-lib-dialog-actions">
+                    <button type="button" className="sr-btn" onClick={() => setDupQueue((queue) => queue.slice(1))}>
+                      两条都保留
+                    </button>
+                  </div>
+                  <p className="sr-lib-dup-foot">不会自动删——选「保留这条」后，另一条移入废纸篓，可找回。</p>
+                </div>
+              </div>
+            );
+          })()
+        : null}
     </div>
   );
 }
