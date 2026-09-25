@@ -10,7 +10,7 @@
  * the playhead crosses its edges, volume following the track's fader and mute/solo.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import type { NotePlayer, NoteVoice } from "../lib/synth";
 import {
@@ -57,6 +57,17 @@ import { PianoRoll } from "./PianoRoll";
 
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
+
+/**
+ * Context menus anchor at the click, but a tall menu (the clip menu carries ~10 items ≈ 820px)
+ * hung past the bottom of a short window and its lower items became unclickable (measured:
+ * 分轨 sat at y=923 in a 900px window). Cap the menu to the remaining viewport and let it scroll.
+ */
+const menuStyle = (x: number, y: number): CSSProperties => ({
+  left: x,
+  top: y,
+  maxHeight: Math.max(160, window.innerHeight - y - 8),
+});
 
 /**
  * 一首歌最长 10 分钟 —— 用户的原话是「最多只支持做十分钟的歌曲，不是非得生成十分钟，
@@ -1842,7 +1853,7 @@ export function StudioPage({
           <div className="sr-menu-backdrop" onPointerDown={() => setTrackMenu(null)} />
           <div
             className="sr-menu sr-track-menu"
-            style={{ left: trackMenu.x, top: trackMenu.y }}
+            style={menuStyle(trackMenu.x, trackMenu.y)}
             role="menu"
             aria-label="加音轨"
           >
@@ -1885,7 +1896,7 @@ export function StudioPage({
               <div className="sr-menu-backdrop" onPointerDown={close} />
               <div
                 className="sr-menu sr-track-menu"
-                style={{ left: headMenu.x, top: headMenu.y }}
+                style={menuStyle(headMenu.x, headMenu.y)}
                 role="menu"
                 aria-label={`${track.name} 操作`}
               >
@@ -1961,7 +1972,7 @@ export function StudioPage({
           <div className="sr-menu-backdrop" onPointerDown={() => setStructureMenu(null)} />
           <div
             className="sr-menu sr-clip-menu"
-            style={{ left: structureMenu.x, top: structureMenu.y }}
+            style={menuStyle(structureMenu.x, structureMenu.y)}
             role="menu"
             aria-label="结构"
           >
@@ -2043,7 +2054,7 @@ export function StudioPage({
               <div className="sr-menu-backdrop" onPointerDown={close} />
               <div
                 className="sr-menu sr-clip-menu"
-                style={{ left: menu.x, top: menu.y }}
+                style={menuStyle(menu.x, menu.y)}
                 role="menu"
                 aria-label={`${clip.name} 操作`}
               >

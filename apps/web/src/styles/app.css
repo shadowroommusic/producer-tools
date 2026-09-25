@@ -1783,6 +1783,12 @@
   position: relative;
   flex: 1;
   min-width: 0;
+  /* A song wider than the pane used to spill under the dock and composer: the right resize
+     handle of a dragged-to-the-edge clip became ungrabable (measured: elementFromPoint at the
+     handle returned the composer card). Horizontal scroll makes the whole song reachable;
+     macOS overlay scrollbars take no layout height, so headers stay aligned. */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .sr-studio-grid {
@@ -2181,13 +2187,16 @@
   z-index: 40;
 }
 
-/* Specificity beats the shared `.sr-menu` rule in conversation.css, which is imported later. */
+/* Specificity beats the shared `.sr-menu` rule in conversation.css, which is imported later.
+   maxHeight comes from menuStyle() (viewport minus the click y); overflow makes the capped
+   menu scroll instead of spilling past the window's bottom edge. */
 .sr-studio .sr-clip-menu,
 .sr-studio .sr-track-menu {
   position: fixed;
   z-index: 41;
   width: 240px;
   bottom: auto;
+  overflow-y: auto;
 }
 
 .sr-menu-item--danger:hover {
