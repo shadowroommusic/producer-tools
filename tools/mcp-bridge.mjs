@@ -173,6 +173,12 @@ class McpServer {
     this.tools = [];
     this.stderr = [];
     this.starting = null;
+    /**
+     * Called for every JSON-RPC **notification** (no id) the plugin prints — e.g. the library's
+     * `notifications/scan_progress`. The SSE endpoint below turns them into `event:` frames for
+     * the UI. Kept as a plain callback so the class stays unaware of HTTP.
+     */
+    this.onNotification = null;
   }
 
   get connected() {
@@ -238,7 +244,12 @@ class McpServer {
       } catch {
         return; // a stray print() from a plugin is noise, not a protocol message
       }
-      if (message.id === undefined) return; // notifications carry no reply
+      if (message.id === undefined) {
+        // Notifications carry no reply, but they are not noise: forward them (the library pushes
+        // scan progress this way). A plugin without a subscriber is unaffected.
+        this.onNotification?.(this.entry.id, message);
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (pending === undefined) return;
       this.pending.delete(message.id);
@@ -360,6 +371,32 @@ function textOf(content) {
 
 const servers = new Map(REGISTRY.map((entry) => [entry.id, new McpServer(entry)]));
 
+/**
+ * Server-sent events: plugin notifications → the browser.
+ *
+ * `GET /api/events` holds the connection open; every JSON-RPC notification a plugin prints lands
+ * here as `event: <method>` + `data: {"server": …, "params": …}`. The library's scan progress is
+ * the first user of this path — the UI listens with a plain `EventSource`, so it never has to
+ * poll a progress endpoint.
+ */
+const eventClients = new Set();
+
+function broadcastNotification(server, message) {
+  if (eventClients.size === 0) return;
+  const frame = `event: ${message.method}\ndata: ${JSON.stringify({ server, params: message.params ?? null })}\n\n`;
+  for (const write of eventClients) {
+    try {
+      write(frame);
+    } catch {
+      eventClients.delete(write);
+    }
+  }
+}
+
+for (const server of servers.values()) {
+  server.onNotification = broadcastNotification;
+}
+
 /** Boot every server at once; failures stay in the snapshot instead of rejecting. */
 async function connectAll() {
   await Promise.allSettled([...servers.values()].map((server) => server.start()));
@@ -410,6 +447,27 @@ const http = createServer(async (request, response) => {
       // `home` travels with the snapshot so the UI can build absolute path defaults (a browser
       // cannot expand `~`).
       send(response, 200, { servers: await connectAll(), home: homedir(), workspaces: WORKSPACES });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/events") {
+      // SSE stream of plugin notifications (library scan progress today, anything else later).
+      // No CORS problem for the vite dev server: the UI reaches this through the vite proxy.
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "access-control-allow-origin": "*",
+      });
+      response.write("retry: 2000\n\n");
+      const write = (frame) => response.write(frame);
+      eventClients.add(write);
+      // A comment line every 15s keeps proxies from closing an idle stream.
+      const heartbeat = setInterval(() => response.write(": ping\n\n"), 15_000);
+      request.on("close", () => {
+        clearInterval(heartbeat);
+        eventClients.delete(write);
+      });
       return;
     }
 
