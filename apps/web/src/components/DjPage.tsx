@@ -139,6 +139,73 @@ function mmss(seconds: number): string {
   return `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
+/**
+ * D5（2026-09-25 巡检）：planner 的 reasons 是英文句子，界面是中文——逐句翻成中文；
+ * 行业词保持原文（BPM / camelot / 风格名如 kick、vocal、clap）。没认出来的句式原样放行，
+ * 宁可露一句英文也不许把意思翻错。句式全集来自 set-planner 的 recommend.py 与 keys.py。
+ */
+function zhReason(reason: string): string {
+  const text = reason.trim();
+  if (text === "bpm unknown; verify by ear") return "BPM 未知，请靠耳朵确认";
+  const bpm = text.match(/^(tempo match|double-time match|half-time match): (.+) → (.+) bpm \(([\d.]+)% apart\)$/);
+  if (bpm !== null) {
+    const label = { "tempo match": "BPM 匹配", "double-time match": "倍速匹配", "half-time match": "半速匹配" }[bpm[1]];
+    return `${label}：${bpm[2]} → ${bpm[3]} BPM（差 ${bpm[4]}%）`;
+  }
+  if (text === "genres unknown; judge this one by ear") return "风格未知，请靠耳朵判断";
+  const shared = text.match(/^shared genres: (.+)$/);
+  if (shared !== null) return `共同风格：${shared[1]}`;
+  if (text === "no shared genre tag") return "无共同风格标签";
+  if (text === "energy unknown; judge this one by ear") return "能量未知，请靠耳朵判断";
+  const energy = text.match(/^(steady energy|energy lift [+\d.]+|energy drop [-\d.]+) \((.+) → (.+)\)$/);
+  if (energy !== null) {
+    const label = energy[1].startsWith("steady")
+      ? "能量持平"
+      : energy[1].startsWith("energy lift")
+        ? `能量提升 ${energy[1].slice("energy lift".length).trim()}`
+        : `能量回落 ${energy[1].slice("energy drop".length).trim()}`;
+    return `${label}（${energy[2]} → ${energy[3]}）`;
+  }
+  const keyUnknown = text.match(/^key unknown \((source|target)\); beatmatch by ear or tag it first$/);
+  if (keyUnknown !== null) return `调性未知（${keyUnknown[1] === "source" ? "当前曲" : "候选曲"}）：靠耳朵对拍或先打标`;
+  const camelot = text.match(/^camelot (\S+) → (\S+) \((same|adjacent|energy boost|relative|two step|distant)\)$/);
+  if (camelot !== null) {
+    const relation = { same: "同调", adjacent: "相邻", "energy boost": "能量推进", relative: "关系调", "two step": "两步", distant: "远调" }[camelot[3]];
+    return `camelot ${camelot[1]} → ${camelot[2]}（${relation}）`;
+  }
+  return text;
+}
+
+/**
+ * D7（2026-09-25 巡检）：顶栏 ⚠ 徽标的出处是 plan_set 的 warnings（英文）——点开说明条时逐句
+ * 翻成中文（句式全集来自 set-planner 的 timing.py 与 keys.py），没认出的原样放行。
+ */
+function zhWarning(warning: string): string {
+  const text = warning.trim();
+  if (text === "no A cue; the segment starts at the beginning of the file") return "没有 A cue，段从文件开头算起";
+  if (text === "no B cue; the segment runs to the end of the track") return "没有 B cue，段一直放到曲末";
+  if (text === "no B cue and no duration; this track cannot be timed") return "没有 B cue 也没有时长，无法计时";
+  let m = text.match(/^cue A at (\d+) ms is past the track end \((\d+) ms\); using the track start$/);
+  if (m !== null) return `cue A（${m[1]} ms）超出曲末（${m[2]} ms），改用曲头`;
+  m = text.match(/^cue B at (\d+) ms is past the track end \((\d+) ms\); clamping to (\d+) ms$/);
+  if (m !== null) return `cue B（${m[1]} ms）超出曲末（${m[2]} ms），截到 ${m[3]} ms`;
+  m = text.match(/^cue A at (\d+) ms is negative; using 0 ms$/);
+  if (m !== null) return `cue A（${m[1]} ms）是负数，改用 0 ms`;
+  m = text.match(/^cue B \((\d+) ms\) is not after cue A \((\d+) ms\); falling back to the whole track$/);
+  if (m !== null) return `cue B（${m[1]} ms）不在 cue A（${m[2]} ms）之后，改用整首`;
+  m = text.match(/^segment is ([\d.]+) bars \(([\d.]+) bpm\); trimming it to a whole bar keeps phrasing clean$/);
+  if (m !== null) return `段长 ${m[1]} 小节（${m[2]} BPM），裁成整小节保持乐句完整`;
+  m = text.match(/^overlap (\d+) ms is longer than the shorter segment; clamped to (\d+) ms$/);
+  if (m !== null) return `重叠 ${m[1]} ms 比短段还长，截到 ${m[2]} ms`;
+  m = text.match(/^tempo changes ([\d.]+) → ([\d.]+) bpm \(([+\-][\d.]+)%\); plan a pitch or tempo-sync transition$/);
+  if (m !== null) return `BPM 变化 ${m[1]} → ${m[2]}（${m[3]}%），建议走 pitch 或 tempo sync 过渡`;
+  m = text.match(/^camelot (\S+) → (\S+) \(distant\); mix through a break or shift the pitch$/);
+  if (m !== null) return `camelot ${m[1]} → ${m[2]}（远调），建议走 break 过渡或移 pitch`;
+  m = text.match(/^key unknown \((source|target)\); beatmatch by ear or tag it first; mix through a break or shift the pitch$/);
+  if (m !== null) return `调性未知（${m[1] === "source" ? "当前曲" : "候选曲"}），靠耳朵对拍或先打标，走 break 过渡或移 pitch`;
+  return text;
+}
+
 /** Parse the bridge's text result; the caller decides what a failure means for the user. */
 async function tool<T>(server: string, name: string, args: unknown): Promise<T> {
   const raw = await callTool<string>(server, name, args);
@@ -206,6 +273,8 @@ export function DjPage() {
   const [setChoices, setSetChoices] = useState<SetSummary[] | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  /** D7：⚠ 徽标的说明条可点开；出处是 plan_set 的 warnings。 */
+  const [warningsOpen, setWarningsOpen] = useState(false);
 
   const say = useCallback((text: string | null) => setNotice(text), []);
 
@@ -444,9 +513,9 @@ export function DjPage() {
         const rows: SuggestionRow[] = lastRes.suggestions.map((s) => {
           const whole = wholeScore.get(s.id);
           const score = whole === undefined ? s.score : (0.6 * s.score + 0.4 * whole) / 1.0;
-          const reasons = [...s.reasons.map((r) => `末首: ${r}`)];
+          const reasons = [...s.reasons.map((r) => `末首：${zhReason(r)}`)];
           const wr = wholeReason.get(s.id);
-          if (whole !== undefined && wr !== "") reasons.push(`整场: ${wr}`);
+          if (whole !== undefined && wr !== undefined && wr !== "") reasons.push(`整场：${zhReason(wr)}`);
           return {
             id: Number(s.id),
             title: s.title,
@@ -692,25 +761,33 @@ export function DjPage() {
           onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
         />
         <span className="sr-dj-count">{draft.trackIds.length} 首</span>
-        <label className="sr-dj-overlap" title="相邻两首的默认重叠时长（v1 全局一个值，逐首覆盖留后）">
-          overlap
-          <input
-            className="sr-input sr-input--num"
-            type="number"
-            min={0}
-            max={120}
-            step={1}
-            value={Math.round(draft.overlapMs / 1000)}
-            aria-label="默认 overlap（秒）"
-            onChange={(event) => {
-              const seconds = Number(event.target.value);
-              if (Number.isFinite(seconds) && seconds >= 0) {
-                setDraft((current) => ({ ...current, overlapMs: Math.round(seconds * 1000) }));
-              }
-            }}
-          />
-          秒
-        </label>
+        {draft.trackIds.length === 0 ? (
+          // D6（2026-09-25 巡检）：空 set 时 16 秒的读数像是"已经有重叠"——空场显示 0 秒，
+          // 草稿里的默认值保留，加歌后自动恢复。
+          <span className="sr-dj-overlap" title="加入曲目后按下面的默认值生效">
+            overlap <span className="sr-input sr-input--num sr-input--static">0</span> 秒
+          </span>
+        ) : (
+          <label className="sr-dj-overlap" title="相邻两首的默认重叠时长（v1 全局一个值，逐首覆盖留后）">
+            overlap
+            <input
+              className="sr-input sr-input--num"
+              type="number"
+              min={0}
+              max={120}
+              step={1}
+              value={Math.round(draft.overlapMs / 1000)}
+              aria-label="默认 overlap（秒）"
+              onChange={(event) => {
+                const seconds = Number(event.target.value);
+                if (Number.isFinite(seconds) && seconds >= 0) {
+                  setDraft((current) => ({ ...current, overlapMs: Math.round(seconds * 1000) }));
+                }
+              }}
+            />
+            秒
+          </label>
+        )}
         {plan !== null ? (
           <span className="sr-dj-timing">
             段 {formatPlanDuration(plan.summary.sum_of_segments_ms)} · 省 {formatPlanDuration(plan.summary.overlap_saved_ms)} · 总{" "}
@@ -718,9 +795,15 @@ export function DjPage() {
           </span>
         ) : null}
         {plan !== null && plan.summary.warning_count > 0 ? (
-          <span className="sr-dj-badge" title={plan.warnings.join("\n")}>
+          <button
+            type="button"
+            className="sr-dj-badge sr-dj-warn-toggle"
+            aria-expanded={warningsOpen}
+            title="plan_set 的警告——点开看原文"
+            onClick={() => setWarningsOpen((open) => !open)}
+          >
             ⚠ {plan.summary.warning_count}
-          </span>
+          </button>
         ) : null}
         <button
           type="button"
@@ -759,6 +842,16 @@ export function DjPage() {
           {exportBusy ? "导出中…" : "导出 m3u"}
         </button>
       </div>
+      {plan !== null && warningsOpen && plan.warnings.length > 0 ? (
+        <div className="sr-dj-warnings" role="note">
+          <span className="sr-dj-warnings-title">plan_set 警告（{plan.warnings.length}）——出处：planner.plan_set 的时间轴计算</span>
+          <ul>
+            {plan.warnings.map((warning, index) => (
+              <li key={index}>{zhWarning(warning)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {setChoices !== null ? (
         <div className="sr-dj-import">
           {setChoices.length === 0 ? (
@@ -796,6 +889,7 @@ export function DjPage() {
               void openTrack(id).then(() => player.deck.play());
             }
           }}
+          onOpen={(id) => void openTrack(id)}
           onAdd={addToSet}
         />
         <SetBoard
@@ -1159,6 +1253,8 @@ function LibraryBrowser(props: {
   deckPath: string | null;
   deckPlaying: boolean;
   onPreview: (trackId: number) => void;
+  /** 点行=载入播放器+选中（不自动播放）；试听按钮才播放（D1，2026-09-25 巡检）。 */
+  onOpen: (trackId: number) => void;
   onAdd: (trackId: number) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -1218,15 +1314,24 @@ function LibraryBrowser(props: {
             <div
               key={item.id}
               className="sr-dj-row sr-dj-suggest-row"
+              data-inset={inSet.has(item.id) || undefined}
               draggable
               onDragStart={(event) => event.dataTransfer.setData(DRAG_TRACK, String(item.id))}
+              onClick={() => props.onOpen(item.id)}
             >
               <span className="sr-dj-badge sr-dj-badge-pick">推荐</span>
               <span className="sr-dj-row-title">{item.title}</span>
               {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
               {item.key ? <span className="sr-chip">{item.key}</span> : null}
               <span className="sr-dj-score">{Math.round(item.score * 100)}</span>
-              <button type="button" className="sr-page-action" onClick={() => props.onAdd(item.id)}>
+              <button
+                type="button"
+                className="sr-page-action"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onAdd(item.id);
+                }}
+              >
                 加入
               </button>
               <div className="sr-dj-reasons">
@@ -1248,8 +1353,19 @@ function LibraryBrowser(props: {
             className="sr-dj-row"
             data-inset={inSet.has(track.id) || undefined}
             data-previewing={props.deckPath === track.path || undefined}
+            data-loaded={props.deckPath === track.path || undefined}
+            role="button"
+            tabIndex={0}
+            aria-label={`载入 ${track.title ?? track.path.split("/").pop()}`}
             draggable
             onDragStart={(event) => event.dataTransfer.setData(DRAG_TRACK, String(track.id))}
+            onClick={() => props.onOpen(track.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                props.onOpen(track.id);
+              }
+            }}
           >
             <span className="sr-dj-row-title">{track.title ?? track.path.split("/").pop()}</span>
             {track.artist ? <span className="sr-dj-row-artist">{track.artist}</span> : null}
@@ -1260,7 +1376,10 @@ function LibraryBrowser(props: {
               type="button"
               className="sr-page-action"
               aria-label={`试听 ${track.title ?? track.id}`}
-              onClick={() => props.onPreview(track.id)}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onPreview(track.id);
+              }}
             >
               {props.deckPath === track.path && props.deckPlaying ? "停" : "试听"}
             </button>
@@ -1269,7 +1388,10 @@ function LibraryBrowser(props: {
               className="sr-page-action"
               aria-label={`加入 set ${track.title ?? track.id}`}
               disabled={inSet.has(track.id)}
-              onClick={() => props.onAdd(track.id)}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onAdd(track.id);
+              }}
             >
               {inSet.has(track.id) ? "已在" : "加入"}
             </button>

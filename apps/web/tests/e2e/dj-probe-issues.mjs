@@ -8,6 +8,8 @@ page.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
 await page.addInitScript(() => {
   window.localStorage.setItem("shadowroom.view", "dj");
   window.localStorage.removeItem("shadowroom.setdraft");
+  // D2 验收测的是默认位置：先清掉历史拖动留下的坐标。
+  window.localStorage.removeItem("shadowroom.orb.position");
 });
 await page.goto("http://localhost:5173", { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".sr-dj-library .sr-dj-row", { timeout: 30000 });
@@ -38,7 +40,7 @@ console.log("③ 导入 set：行数 =", importRows, "面板高度 =", panelBox 
 await page.keyboard.press("Escape").catch(() => {});
 await page.waitForTimeout(500);
 const clip = await page.evaluate(() => {
-  const box = document.querySelector(".sr-dj-suggest-reasons, .sr-dj-suggest");
+  const box = document.querySelector(".sr-dj-suggest-strip, .sr-dj-suggest");
   if (!box) return "无推荐容器";
   return { scrollH: box.scrollHeight, clientH: box.clientHeight, clipped: box.scrollHeight > box.clientHeight + 1 };
 });

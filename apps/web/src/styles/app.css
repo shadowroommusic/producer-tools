@@ -1800,6 +1800,27 @@
   border-bottom: var(--sr-shell-border);
 }
 
+/* S4（2026-09-25 巡检）：0 轨工程的空态引导——铺在网格第一行的高度上，说清内容从哪来。 */
+.sr-studio-empty {
+  padding: 28px 24px;
+  border-bottom: 0.5px dashed var(--sr-border-l2);
+}
+
+.sr-studio-empty-title {
+  margin: 0 0 6px;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14, 14px);
+  font-weight: 600;
+}
+
+.sr-studio-empty-hint {
+  margin: 0;
+  max-width: 520px;
+  color: var(--sr-label-caption);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* The song's shape: one block per section, sitting on top of the bar ruler. */
 .sr-studio-sections {
   position: relative;
@@ -2698,6 +2719,14 @@
   text-align: right;
 }
 
+/* 只读的数字读数（如空 set 的 overlap 0 秒）：沿用输入框外观但不可编辑。 */
+.sr-input--static {
+  display: inline-flex;
+  align-items: center;
+  width: 42px;
+  justify-content: flex-end;
+}
+
 .sr-input--key {
   width: 64px;
   text-align: center;
@@ -3185,10 +3214,12 @@
 .sr-orb {
   position: fixed;
   z-index: 60;
-  /* 尺寸跟着 ButlerOrb 的 ORB_SIZE/ACTIVE_SIZE 走（120 空闲 / 150 说话）；
-     用户两次否掉小尺寸，这里不再是那个 56px 的小点。 */
-  width: 120px;
-  height: 120px;
+  /* 容器不吃事件：fixed 方块盖在内容上点不动（D2）——pointer-events 只挂在球面上。
+     尺寸跟 ButlerOrb 的 --sr-orb-size 走（64 空闲 / 80 说话，2026-09-25 巡检收敛，
+     此前的 120/150 压内容）。 */
+  width: var(--sr-orb-size, 64px);
+  height: var(--sr-orb-size, 64px);
+  pointer-events: none;
   user-select: none;
   touch-action: none;
 }
@@ -3199,10 +3230,11 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: var(--sr-orb-size, 64px);
+  height: var(--sr-orb-size, 64px);
   border-radius: 50%;
   cursor: grab;
+  pointer-events: auto;
 }
 
 .sr-orb-ball:active {
@@ -3414,16 +3446,18 @@
 .sr-orb {
   position: fixed;
   z-index: 60;
-  /* 球体始终按 56px 布局占位；说话时 transform 放大到 72px，不引起布局抖动。 */
-  width: 56px;
-  height: 56px;
+  /* 尺寸跟 --sr-orb-size 走（64 空闲 / 80 说话）；容器不吃事件（D2：fixed 方块不得盖住内容）。 */
+  width: var(--sr-orb-size, 64px);
+  height: var(--sr-orb-size, 64px);
+  pointer-events: none;
   user-select: none;
   touch-action: none;
   transform-origin: center;
 }
 
 .sr-orb--active {
-  transform: scale(1.2857); /* 56 → 72 */
+  /* 说话/干活的尺寸由 --sr-orb-size（80px）接管，不再叠 transform 缩放。 */
+  transform: none;
 }
 
 .sr-orb--dragging {
@@ -3432,10 +3466,11 @@
 
 .sr-orb-ball {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: var(--sr-orb-size, 64px);
+  height: var(--sr-orb-size, 64px);
   border-radius: 50%;
   cursor: grab;
+  pointer-events: auto;
 }
 
 .sr-orb-ball:active {
@@ -3444,9 +3479,9 @@
 
 .sr-orb-canvas {
   position: absolute;
-  inset: -12px; /* fresnel 边缘光会画出球体边界，画布留边 */
-  width: 80px;
-  height: 80px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 /* 细把手：面板顶部一条 24×3 的圆角短线，无文字。 */
@@ -3466,26 +3501,21 @@
   height: calc(100% + 4px);
   pointer-events: none;
 }
-/* 面板展开时与 active 缩放并存。 */
+/* 面板展开时球不再位移：面板自己 absolute 定位（right:0、bottom:calc(球高+12)），
+   球原地、尺寸不缩不放——此前的 translateY/-scale 是 120px 大球时代的遗物，
+   64px 小球配它会把球顶出面板锚点（2026-09-25 巡检 D2 收尾）。 */
 .sr-orb--expanded {
-  transform: translateY(-140px);
+  transform: none;
 }
 .sr-orb--expanded.sr-orb--active {
-  transform: translateY(-140px) scale(1.25);
-}
-/* 面板出现时球上移到面板上方（规格 4）。 */
-.sr-orb--expanded {
-  transform: translateY(-120px);
-}
-.sr-orb--expanded.sr-orb--active {
-  transform: translateY(-120px) scale(1.2727);
+  transform: none;
 }
 
-/* 展开的小面板：锚在球上方，毛玻璃 + 1px 描边 + 圆角 16，开合 180ms（scale 0.96→1 + 淡入）。 */
+/* 展开的小面板：锚在球上方（跟球高走 +12px 缝），毛玻璃 + 1px 描边 + 圆角 16，开合 180ms（scale 0.96→1 + 淡入）。 */
 .sr-orb-panel {
   position: absolute;
   right: 0;
-  bottom: 80px;
+  bottom: calc(var(--sr-orb-size, 64px) + 12px);
   width: 320px;
   padding: 10px;
   border-radius: 16px;
@@ -3544,26 +3574,6 @@
   opacity: 0.6;
 }
 
-/*
-  管家球尺寸覆盖（放在最后，确保生效）：容器必须和 ButlerOrb 的 ORB_SIZE/ACTIVE_SIZE 一致
-  （120 空闲 / 150 说话/干活）。之前容器还是 56px，而 canvas 是 120px —— 结果画布溢出容器、
-  位置夹取也算错，看起来就是"一个小点"（用户两次否掉的原因之一）。
-*/
-.sr-orb {
-  width: 120px;
-  height: 120px;
-}
-
-.sr-orb--active {
-  width: 150px;
-  height: 150px;
-}
-
-.sr-orb-ball {
-  width: inherit;
-  height: inherit;
-}
-
 /* ---------------------------------------------------------------- DJ page */
 
 .sr-dj {
@@ -3585,7 +3595,9 @@
   font-size: var(--sr-text-13);
 }
 
-/* 导入 set picker — the imported Rekordbox/history sets, one row each. */
+/* 导入 set picker — the imported Rekordbox/history sets, one row each.
+   D3（2026-09-25 巡检）：overflow-y:auto 让 flex 项的 min-height:auto 归零，
+   面板被弹性列挤成 24px 一条——flex:none 不许缩，再给 88px 起步高度 + 内部滚动。 */
 .sr-dj-import {
   display: grid;
   gap: 6px;
@@ -3593,6 +3605,8 @@
   border: 0.5px solid var(--sr-border-l2);
   border-radius: var(--sr-radius-md);
   background: var(--sr-surface-2);
+  flex: none;
+  min-height: 88px;
   max-height: 240px;
   overflow-y: auto;
 }
@@ -4115,6 +4129,42 @@
   color: #fb7185;
 }
 
+/* D7（2026-09-25 巡检）：⚠ 徽标不再是没出处的死徽章——是个按钮，点开展开警告说明条。 */
+.sr-dj-warn-toggle {
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sr-dj-warn-toggle[aria-expanded="true"] {
+  outline: 0.5px solid var(--sr-accent);
+}
+
+.sr-dj-warnings {
+  display: grid;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 0.5px solid color-mix(in srgb, var(--sr-warn, #f59e0b) 45%, transparent);
+  border-radius: var(--sr-radius-md);
+  background: color-mix(in srgb, var(--sr-warn, #f59e0b) 8%, transparent);
+  font-size: 12px;
+}
+
+.sr-dj-warnings-title {
+  color: var(--sr-label-secondary);
+}
+
+.sr-dj-warnings ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}
+
+.sr-dj-warnings li {
+  color: var(--sr-label-primary);
+}
+
 .sr-dj-badge-pick {
   background: color-mix(in srgb, var(--sr-accent) 22%, transparent);
   color: var(--sr-accent);
@@ -4125,7 +4175,9 @@
   flex-direction: column;
   gap: 2px;
   flex: none;
-  max-height: 150px;
+  /* D4（2026-09-25 巡检）：150px 放不下三张推荐卡的三行理由（第三行只露半行）——
+     抬到 196px 让第三行完整，仍保留内滚兜底。 */
+  max-height: 196px;
   overflow-y: auto;
   padding-bottom: 6px;
   border-bottom: 0.5px solid var(--sr-border-l2);

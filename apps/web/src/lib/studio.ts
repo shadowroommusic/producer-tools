@@ -729,7 +729,13 @@ export function clipGain(
   return fadeGain(clip, bar, bpm) * rampGain(clip, bar);
 }
 
-/** A project that already looks like a DAW: three labelled tracks, empty clips, 16 bars. */
+/**
+ * A project that starts with nothing but the clock: 0 tracks, 16 bars.
+ *
+ * S4（2026-09-25 巡检）：三条空的 Drums / Bass / Synth 是"看起来像歌却放不出声"的旧病复发——
+ * 用户导入一个文件就变 4 条、还得手动删空轨。工程从 0 轨开始：内容只从导入、录音或
+ * 一句 render 进来；时间线的空态自己说怎么开始。
+ */
 export function defaultProject(): StudioProject {
   return {
     id: newId("project"),
@@ -738,16 +744,7 @@ export function defaultProject(): StudioProject {
     bpm: 128,
     key: "8A",
     bars: 16,
-    /**
-     * Named tracks, no clips. The project used to open with two demo clips that had no audio behind
-     * them — a timeline that looked like a song and played nothing. A project now starts empty: the
-     * song arrives from a render (one sentence) or from an import.
-     */
-    tracks: [
-      { ...newTrack("Drums"), type: "drums", color: 0 },
-      { ...newTrack("Bass"), type: "instrument", color: 1 },
-      { ...newTrack("Synth"), type: "instrument", color: 2 },
-    ],
+    tracks: [],
   };
 }
 

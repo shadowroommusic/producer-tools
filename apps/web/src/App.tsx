@@ -88,6 +88,8 @@ import {
   clipFromNotes,
   defaultProject,
   canAddTracks,
+  defaultTrackName,
+  nextTrackColor,
   trackTypeOf,
   notesRevision,
   structureRevision,
@@ -1747,10 +1749,20 @@ export function App() {
               if (call.name === "hum_to_midi") {
                 const notes = parsed.notes ?? [];
                 if (notes.length === 0) return project.tracks;
+                const clip = clipFromNotes(notes, project.bars, 0, parsed.midi_path ?? "");
+                // S4：0 轨工程建一条旋律轨接住哼唱（与 absorbMelody 同口径）。
+                if (project.tracks.length === 0) {
+                  return [
+                    {
+                      ...newTrack(defaultTrackName(project.tracks, "instrument")),
+                      type: "instrument" as const,
+                      color: nextTrackColor(project.tracks),
+                      clips: [clip],
+                    },
+                  ];
+                }
                 return project.tracks.map((track, index) =>
-                  index === 0
-                    ? { ...track, clips: [...track.clips, clipFromNotes(notes, project.bars, 0, parsed.midi_path ?? "")] }
-                    : track,
+                  index === 0 ? { ...track, clips: [...track.clips, clip] } : track,
                 );
               }
               const parts =
@@ -2360,19 +2372,33 @@ export function App() {
         const notes = parsed.notes ?? [];
         if (notes.length === 0) return;
         setProjects((current) =>
-          current.map((project) =>
-            project.id !== openProjectId
-              ? project
-              : {
-                  ...project,
-                  updatedAt: Date.now(),
-                  tracks: project.tracks.map((track, index) =>
-                    index === 0
-                      ? { ...track, clips: [...track.clips, clipFromNotes(notes, project.bars, 0, parsed.midi_path ?? "")] }
-                      : track,
-                  ),
-                },
-          ),
+          current.map((project) => {
+            if (project.id !== openProjectId) return project;
+            const clip = clipFromNotes(notes, project.bars, 0, parsed.midi_path ?? "");
+            // S4（2026-09-25 巡检）：工程从 0 轨起步——没有轨道时建一条旋律轨接住哼唱，
+            // 而不是让 map 空转、音符无声消失。
+            if (project.tracks.length === 0) {
+              return {
+                ...project,
+                updatedAt: Date.now(),
+                tracks: [
+                  {
+                    ...newTrack(defaultTrackName(project.tracks, "instrument")),
+                    type: "instrument" as const,
+                    color: nextTrackColor(project.tracks),
+                    clips: [clip],
+                  },
+                ],
+              };
+            }
+            return {
+              ...project,
+              updatedAt: Date.now(),
+              tracks: project.tracks.map((track, index) =>
+                index === 0 ? { ...track, clips: [...track.clips, clip] } : track,
+              ),
+            };
+          }),
         );
       } catch {
         /* a tool result we cannot read simply stays in the transcript */

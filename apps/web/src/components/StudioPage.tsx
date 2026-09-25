@@ -198,6 +198,11 @@ export function StudioPage({
   >(null);
   /** The "+ 音轨" menu: three kinds, no sub-menus (an instrument's sound is the agent's job). */
   const [trackMenu, setTrackMenu] = useState<{ x: number; y: number } | null>(null);
+  /**
+   * S2（2026-09-25 巡检）：轨道头的右键菜单——头部已有 M/S/推子/删除按钮，菜单补它们没有的：
+   * 复制音轨（连片段）、清空片段、删除轨道。此前右键只把名字选成蓝底、没有菜单。
+   */
+  const [headMenu, setHeadMenu] = useState<{ trackId: string; x: number; y: number } | null>(null);
   /** A track header being dragged to a new position. */
   const [draggingTrack, setDraggingTrack] = useState<{ id: string; index: number } | null>(null);
   /** The track whose delete button has been armed by a first click. */
@@ -1480,6 +1485,11 @@ export function StudioPage({
                   data-muted={!live || undefined}
                   data-dragging={draggingTrack?.id === track.id || undefined}
                   style={{ ["--sr-track-color" as string]: colour }}
+                  onContextMenu={(event) => {
+                    // S2：右键轨道头出菜单，不再只把名字选成蓝底。
+                    event.preventDefault();
+                    setHeadMenu({ trackId: track.id, x: event.clientX, y: event.clientY });
+                  }}
                 >
                   <span className="sr-track-colour" aria-hidden="true" />
                   <input
@@ -1677,6 +1687,15 @@ export function StudioPage({
                 aria-hidden="true"
               />
             ))}
+            {project.tracks.length === 0 ? (
+              <div className="sr-studio-empty" role="note">
+                <p className="sr-studio-empty-title">这是一个空工程（0 轨）</p>
+                <p className="sr-studio-empty-hint">
+                  用上方「导入音频」把文件拖进来、按「录音」录一段，或让管家说一句渲染一句。
+                  音轨只从真实内容长出来，不再默认铺三条空轨（S4，2026-09-25 巡检）。
+                </p>
+              </div>
+            ) : null}
             {project.tracks.map((track, laneIndex) => (
               <div
                 key={track.id}
@@ -1855,6 +1874,87 @@ export function StudioPage({
           </div>
         </>
       )}
+
+      {headMenu !== null &&
+        (() => {
+          const track = project.tracks.find((entry) => entry.id === headMenu.trackId);
+          if (track === undefined) return null;
+          const close = () => setHeadMenu(null);
+          return (
+            <>
+              <div className="sr-menu-backdrop" onPointerDown={close} />
+              <div
+                className="sr-menu sr-track-menu"
+                style={{ left: headMenu.x, top: headMenu.y }}
+                role="menu"
+                aria-label={`${track.name} 操作`}
+              >
+                <p className="sr-menu-title sr-mono">{track.name}</p>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={!canAddTracks(project.tracks, 1)}
+                  onClick={() => {
+                    // 复制音轨：连同片段一起复制一份，落在当前轨道之后。
+                    onChange((current) => {
+                      const index = current.tracks.findIndex((entry) => entry.id === track.id);
+                      if (index === -1) return current;
+                      const stamp = Date.now().toString(36);
+                      const taken = new Set(current.tracks.map((entry) => entry.name));
+                      let name = `${track.name} 副本`;
+                      for (let n = 2; taken.has(name) && n < 100; n += 1) name = `${track.name} 副本 ${n}`;
+                      const copy: StudioTrack = {
+                        ...track,
+                        id: `${track.id}-copy-${stamp}`,
+                        name,
+                        soloed: false,
+                        clips: track.clips.map((clip) => ({ ...clip, id: `${clip.id}-copy-${stamp}` })),
+                      };
+                      const next = [...current.tracks];
+                      next.splice(index + 1, 0, copy);
+                      return { ...current, tracks: next };
+                    });
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">复制音轨（含片段）</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item"
+                  disabled={track.clips.length === 0}
+                  onClick={() => {
+                    onChange((current) => ({
+                      ...current,
+                      tracks: current.tracks.map((entry) => (entry.id === track.id ? { ...entry, clips: [] } : entry)),
+                    }));
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">清空片段</span>
+                  <span className="sr-menu-hint sr-mono">轨道留着，片段全删（可撤销）</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sr-menu-item sr-menu-item--danger"
+                  onClick={() => {
+                    onChange((current) => ({
+                      ...current,
+                      tracks: current.tracks.filter((entry) => entry.id !== track.id),
+                    }));
+                    close();
+                  }}
+                >
+                  <span className="sr-menu-label">删除轨道</span>
+                  <span className="sr-menu-hint sr-mono">整条删除，⌘Z 可撤销</span>
+                </button>
+              </div>
+            </>
+          );
+        })()}
 
       {structureMenu !== null && (
         <>

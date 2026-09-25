@@ -19,11 +19,16 @@ export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working"
 
 const POSITION_KEY = "shadowroom.orb.position";
 /**
- * 尺寸：用户两次否掉小尺寸（"这么小给谁看呢""太小"），定 **120px 空闲 / 150px 说话**——
- * 像 Siri 那颗球一样，一眼就能看见，但默认待机时仍比说话时淡、不抢视线。
+ * 尺寸：用户巡检 2026-09-25（D2）指出 120px 空闲球压在推荐卡末行与 Studio 时间线中央、还吃掉
+ * 点击——收敛为 **64px 空闲 / 80px 说话**：够一眼看见，又不再抢戏；历史定稿 120/150 作废。
  */
-const ORB_SIZE = 120;
-const ACTIVE_SIZE = 150;
+const ORB_SIZE = 64;
+const ACTIVE_SIZE = 80;
+/**
+ * 通话开关的命中半径（球心到指针的距离）：可见球面直径 64px，命中半径再宽一圈（64px 直径 =
+ * 44×44 最小点击目标），点"边上"也算；球面之外的方形角落（容器吃掉的区域）只拖不点。
+ */
+const HIT_RADIUS = 32;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
@@ -120,8 +125,9 @@ function avoidProtected(next: { x: number; y: number }): { x: number; y: number 
 }
 
 function defaultPosition(): { x: number; y: number } {
-  // 屏幕中下方：水平居中、距底 140px——不压任何控件（用户定稿，两次迭代结论）。
-  return { x: (window.innerWidth - ORB_SIZE) / 2, y: window.innerHeight - 140 - ORB_SIZE };
+  // 右下角：距右/底 24px——不再压 DJ 推荐卡末行与 Studio 时间线中央（D2，2026-09-25 巡检）；
+  // 再对受保护控件做一次退避，永不停在按钮上。
+  return avoidProtected({ x: window.innerWidth - ORB_SIZE - 24, y: window.innerHeight - ORB_SIZE - 24 });
 }
 
 export function ButlerOrb({
@@ -231,7 +237,15 @@ export function ButlerOrb({
     return () => window.removeEventListener("keydown", onKey);
   }, [callOn]);
 
-  // 拖动。
+  // 拖动 + 点球即通话。
+  // 指针事件只挂在球面上，但**只有距球心 32px 内（64px 命中圆）的轻点才是点球**：球面外圈
+  // 边角只拖不点，底下的内容不再被"看不见的手"按到（D2）。
+  const hitBall = (event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return (
+      Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2)) <= HIT_RADIUS
+    );
+  };
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
@@ -255,10 +269,11 @@ export function ButlerOrb({
       (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
     }
     const wasDrag = drag?.moved === true;
+    const wasClick = drag?.moved === false && hitBall(event);
     setDragging(false);
     if (wasDrag) setPosition(snapToViewport(position));
-    if (!wasDrag && !expanded) toggleCall();
-    else if (!wasDrag) setExpanded(false);
+    if (wasClick && !expanded) toggleCall();
+    else if (wasClick) setExpanded(false);
   };
 
   useEffect(() => {
@@ -290,14 +305,15 @@ export function ButlerOrb({
     <div
       className={`sr-orb${expanded ? " sr-orb--expanded" : ""}${dragging ? " sr-orb--dragging" : ""}${active ? " sr-orb--active" : ""}`}
       data-mode={effectiveMode}
-      style={{ left: position.x, top: position.y }}
+      style={{ left: position.x, top: position.y, ["--sr-orb-size" as string]: `${size}px` }}
     >
+      {/* 容器不吃事件（fixed 方块盖住内容就是 D2 的病根）；事件只挂在球面上，点空白穿透。 */}
       <div
         className="sr-orb-ball"
         role="button"
         tabIndex={0}
         aria-label={callOn ? "结束通话" : "开始通话"}
-        title={callOn ? "通话中：再点一下或按 Esc 挂断" : "点一下开始说话（共享麦克风）· 拖动移动 · 双击打开面板"}
+        title={callOn ? "通话中：再点一下或按 Esc 挂断" : "点一下开始说话（共享麦克风）· 拖动移动"}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

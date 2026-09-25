@@ -39,9 +39,9 @@ try {
   console.log("导入后轨道数 =", await page.locator(".sr-studio-track, .sr-track-head").count());
 } catch (e) { console.log("导入失败：" + e.message); }
 
-// 播放
+// 播放（S3：走带按钮有统一的可访问名字，用 aria-label 定位，不按图标文本）
 try {
-  await page.locator("button").filter({ hasText: /^▶/ }).first().click({ timeout: 5000 });
+  await page.getByRole("button", { name: "播放" }).first().click({ timeout: 5000 });
   await page.waitForTimeout(3500);
   await page.screenshot({ path: `${OUT}/04-playing.png` });
   const t = await page.locator(".sr-studio-transport").first().innerText();
