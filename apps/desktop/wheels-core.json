@@ -9,6 +9,9 @@
     "send2trash==2.1.0",
     "pyrekordbox==0.4.4",
     "yt-dlp==2025.10.14",
-    "pycryptodome==3.23.0"
-  ]
+    "pycryptodome==3.23.0",
+    "requests>=2.31",
+    "imageio-ffmpeg==0.6.0"
+  ],
+  "_pins_note": "requests/imageio-ffmpeg 是 grabber 声明依赖但旧 venv 未装的子集（2026-09-26 单测补装：test_premium 要 requests，find_ffmpeg/ncm/RealConvert 要 imageio-ffmpeg 的内置 ffmpeg）。imageio-ffmpeg 同时是 bin/ffmpeg 的装箱来源（§2.3）。"
 }

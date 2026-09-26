@@ -632,6 +632,32 @@ numpy 但 src 无 import〔实测 grep〕）；8 个插件从 python 3.9 换到 
 4. 9 仓单测在 pbs 3.12 下全绿（各自通过数实现时填入）；冒烟 5 条全过；
 5. app 升级（wheels stamp 变化）：首启自动重建 env，用户数据不动（db 行数不变）。
 
+> **执行记录（2026-09-26，ZCode，第 2 步已落地；实现由 Codex 代存于 wip `ec23348`，收尾 commit 见总线）**：
+> 落地 = `wheels-core.json`（pins 9 条，实测从 7 补到 9：grabber 的 `requests`/`imageio-ffmpeg` 是
+> 声明依赖但旧 venv 从未装过的子集，单测逼出）+ `scripts/fetch-runtime.mjs`（构建期抓取：
+> pbs 走 npmmirror 24MB、wheels 走 PyPI 直连〔实测 15MB/1.2s，无需镜像〕，幂等 stamp）+
+> `env.mjs`（首启**离线**建 `_venvs/.core`：venv + `pip --no-index` + 七件套软链；`ENV_STAMP` =
+> runtime build-id + wheels 集合 hash，变更自动重建、healthy 探针自愈——.app 被挪动导致解释器
+> 路径失效的场景也覆盖）+ yml extraResources + main.mjs 接线（建 env 先于源码同步）。
+> 实测数字：**pbs cpython 3.12.14+20260924**（解包 75M）+ **22 wheels 50M**（imageio-ffmpeg 内置
+> ffmpeg 占 ~26M）；.core 构建 **4.4–4.8s**；stamp 幂等命中 ~150ms。
+> **① 干净模拟**（mv 走整个 _venvs + `open`）：**7 秒**就绪 **8/9 ready / 75 工具**——优于预估的
+> 7/7/71：splitter 的 mcp_server 顶层不 import torch，桥的 pythonFor 兜底系统 python3 即可列工具
+> （真正分轨才需要 torch，第 3 步首用下载补）；soundfont error 预期内（mcp_server 顶层 import
+> fluidsynth）。全程零 TCC 弹窗。**② 单测**（.core 3.12，core 七仓）：audio **65 OK** / planner
+> **48 OK** / library **74 OK** / steward 无 tests 目录；grabber **132 用例 8 挂**（3.9 基线 87 用例
+> 22 挂——**零回归**，多解放 45 个用例；剩 8 个与基线逐条相同：tkinter GUI ×2、Windows 路径断言
+> ×1、POSIX X_OK 假件 ×2、BitDepth 夹具 ×3）；converter **57 用例 2 挂** + generator **125 用例
+> 4 挂** = **6 个 3.12 新失败，全部是测试前提绑定 3.9 行为**（修复都在插件仓测试里、各 1–2 行，
+> 不在本步范围，见证据索引与回执）。**③ dmg/zip 对账**：`dist:mac` 出 dmg **200M** / zip **201M**
+> （≤220MB 估达标）；.app = zip = dmg 三方 + resources-src 源头**四方全等**（22 whl 集合 md5
+> `69f9d85a…` + runtime build-id 逐字节同）。**④ 退出**：⌘Q 0 进程 0 孤儿；**单实例锁**新增并实测
+> （来由：与 Codex 并行复验的两个实例抢 18787/18788，后起实例两桥 EADDRINUSE 全崩、UI 变哑巴——
+> 第二实例现在打印 quitting 即退、锁焦点交还）。
+> 构建顺序注意：`node scripts/fetch-runtime.mjs` → `pnpm run dist:dir/dist:mac`（fetch 只写
+> resources-src，**必须重打包** wheels 才进 .app；ENV_STAMP 重建吃的是包内 wheels）；打包后
+> `git checkout -- pnpm-workspace.yaml pnpm-lock.yaml`（§5 老坑仍在）。
+
 ### 6.3 出包与签名
 
 **不签名最小路径（今天就能跑，零用户输入）**：
@@ -687,7 +713,9 @@ notarytool，证书+凭据齐了就全自动。
 
 1. **数据迁移 + TCC 根治**（不动 python：仍用本机 venv，只换 HOME）→ ✅ **已落地（2026-09-26，
    验收 2/3/4/5 全过 + 真迁移实测；1 的干净账号复验留待 Codex/用户，"8/8 ready"部分依赖第 2 步）**；
-2. **core env 装箱**（pbs + wheels 随包，8 插件 74 工具）→ 验收 6.2.1/2/4/5；
+2. **core env 装箱**（pbs + wheels 随包，8 插件 74 工具）→ ✅ **已落地（2026-09-26；干净模拟 7s
+   8/9 75 工具零 TCC、稳态 9/9 78、.core 4.4s 离线建成、单测零回归、dmg 200M 四方对账全等；
+   6 个 3.12 新测试失败均为插件仓测试前提问题，修复建议已出）**；
 3. **soundfont dylib 闭包**（≤20M 随包，否则首用）＋ **splitter 首用下载** → 6.2.3；
 4. **dmg/zip 出包**（不签名）→ 6.3.1；——**到这里即可发内测 dmg**；
 5. 签名+公证（等用户证书到位）→ 6.3.2；
@@ -735,5 +763,9 @@ notarytool，证书+凭据齐了就全自动。
 | **cp -c -R 软链 realpath 行为**：拷贝会把软链目标存成 realpath 形式（/tmp→/private/tmp），软链改写的字面前缀比对会漏——须 realpath 归一后再比（fixture 测试抓到） | 本机实测（2026-09-26） |
 | **覆写模式下源码同步是雷**：(c)/env/config 覆写把 HOME 指回用户目录时，sync 会 rm+覆盖用户自己的 git 检出（fixture 抓到：9 个仓被塞进 fixture）——修复为 managed=false 时禁同步，复验旧家 md5 不变 | 本机实测（2026-09-26） |
 | electron-builder 直调 `.bin` 时 collector 对包管理器的兜底识别是 npm（`npm_config_user_agent` 缺失），机器无 npm 即 ENOENT 间歇失败；`pnpm run dist:dir`（pnpm 会注入 user agent）稳定命中 pnpm；另 files 列表漏 home.mjs 会让 app 秒退、package.json 缺 `productName` 会让 userData 变 `…/@shadowroom/desktop` | 本机实测（2026-09-26，第 1 步落地过程） |
+| **第 2 步装箱实测**：pbs cpython 3.12.14+20260924（npmmirror 24MB→解包 75M，ssl/sqlite3/zlib OK）+ 22 wheels 50M（imageio-ffmpeg 0.6.0 内置 ffmpeg 占 ~26M）；.core 离线构建 4.4–4.8s、stamp 幂等 ~150ms；干净模拟（无 _venvs）`open` 后 **7 秒 8/9 ready 75 工具零 TCC**（splitter 兜底系统 python3 可列工具——mcp_server 顶层不 import torch；soundfont error 预期）；稳态 9/9 78 | 本机实测（2026-09-26） |
+| **core 七仓单测（.core 3.12）**：audio 65 OK、planner 48 OK、library 74 OK、steward 无 tests；grabber 132 用例 8 挂 vs 3.9 基线 87 用例 22 挂（零回归，剩 8 与基线逐条同）；converter 2 挂 + generator 4 挂 = 全部 3.12 新失败都是测试前提绑定旧行为：① converter sqlite WAL 副档件断言（3.12 sqlite 行为变化）② generator YUE_COMMAND 模板 `sys.executable` 未加引号（shlex 契约要求引号，路径含空格即炸——userData 带空格才暴露）③ generator wave：**3.12 已能读 WAVE_FORMAT_EXTENSIBLE**，测试前提"wave refuses"失效 | 本机实测（2026-09-26；修复都在插件仓测试，各 1–2 行，待派） |
+| **dmg/zip 对账**：`dist:mac` 出 dmg 200M / zip 201M；.app=zip=dmg+源头四方全等（22 whl 集合 md5 `69f9d85a…`、runtime build-id `cpython-3.12.14+20260924` 逐字节同） | 本机实测（2026-09-26） |
+| **双实例抢端口**：两个 app 实例并行时后起实例两桥 EADDRINUSE 全崩、UI 哑巴（与 Codex 并行复验时实测相撞）；修复 = `app.requestSingleInstanceLock()`，第二实例即退 + `second-instance` 聚焦已有窗口 | 本机实测（2026-09-26，第 2 步落地过程） |
 
 （完。执行第一刀时如与本文件冲突，以实测为准并回写本文件。）
