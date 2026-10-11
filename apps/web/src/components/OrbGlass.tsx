@@ -130,13 +130,13 @@ export function GlassSphere({
       ctx.fillStyle = core;
       ctx.fill(wobblePath);
 
-      // ③ 思考：中心旋流（注意力在打转）
+      // ③ 思考：中心旋流（注意力在打转）——半径/扫过角/亮度都给足，静态截图也要一眼认出
       if (current.swirl > 0.02 && !still) {
         const spin = (t * current.drift * 2.2) % 1;
         ctx.beginPath();
-        ctx.arc(cx, cy, rimR * 0.42, spin * TAU, spin * TAU + TAU * 0.3);
-        ctx.strokeStyle = `hsla(${current.hueB}, 95%, 78%, ${0.6 * current.swirl})`;
-        ctx.lineWidth = Math.max(1, r * 0.05);
+        ctx.arc(cx, cy, rimR * 0.55, spin * TAU, spin * TAU + TAU * 0.42);
+        ctx.strokeStyle = `hsla(${current.hueB}, 95%, 80%, ${0.75 * current.swirl})`;
+        ctx.lineWidth = Math.max(1, r * 0.07);
         ctx.stroke();
       }
 

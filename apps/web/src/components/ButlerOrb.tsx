@@ -10,17 +10,24 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
+import {
+  ORB_SIZE,
+  clampToViewport,
+  defaultPosition,
+  loadPosition,
+  savePosition,
+  snapToViewport,
+  type Rect,
+} from "../lib/orb-position.ts";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
 import { GlassSphere } from "./OrbGlass";
 
 export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working";
 
-const POSITION_KEY = "shadowroom.orb.position";
 /**
  * 尺寸：用户巡检 2026-09-25（D2）指出 120px 空闲球压在推荐卡末行与 Studio 时间线中央、还吃掉
  * 点击——收敛为 **64px 空闲 / 80px 说话**：够一眼看见，又不再抢戏；历史定稿 120/150 作废。
  */
-const ORB_SIZE = 64;
 const ACTIVE_SIZE = 80;
 /**
  * 通话开关的命中半径（球心到指针的距离）：可见球面直径 64px，命中半径再宽一圈（64px 直径 =
@@ -30,102 +37,26 @@ const HIT_RADIUS = 32;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
-function loadPosition(): { x: number; y: number } | null {
-  try {
-    const raw = window.localStorage.getItem(POSITION_KEY);
-    if (raw === null) return null;
-    const parsed = JSON.parse(raw) as { x: number; y: number };
-    if (typeof parsed.x !== "number" || typeof parsed.y !== "number") return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
+/** 受保护控件（吸附点不得压上去）：新建会话/导入/导出/录音/缩放药丸/底部输入框/发送。 */
+const PROTECTED_SELECTORS = [
+  ".sr-new-session",
+  ".sr-studio-import",
+  ".sr-studio-export",
+  ".sr-studio-record",
+  ".sr-transport-zoom button",
+  "textarea",
+  'button[title="发送"]',
+];
 
-/** 视口边界夹取：窗口内留 12px 边距，不许只露半个球。 */
-function clampToViewport(x: number, y: number): { x: number; y: number } {
-  const margin = 12;
-  return {
-    x: Math.max(margin, Math.min(window.innerWidth - ORB_SIZE - margin, x)),
-    y: Math.max(margin, Math.min(window.innerHeight - ORB_SIZE - margin, y)),
-  };
-}
-
-/** 松手吸附：离任一边缘不足 48px 时贴到该边缘的 12px 边距处；再对受保护控件做保护性退避。 */
-function snapToViewport(pos: { x: number; y: number }): { x: number; y: number } {
-  const margin = 12;
-  const snapDistance = 48;
-  const maxX = window.innerWidth - ORB_SIZE - margin;
-  const maxY = window.innerHeight - ORB_SIZE - margin;
-  const next = clampToViewport(pos.x, pos.y);
-  if (next.x - margin < snapDistance) next.x = margin;
-  if (maxX - next.x < snapDistance) next.x = maxX;
-  if (next.y - margin < snapDistance) next.y = margin;
-  if (maxY - next.y < snapDistance) next.y = maxY;
-  return avoidProtected(next);
-}
-
-/**
- * 保护性退避：吸附点若与受保护控件（新建会话/导入/导出/录音/缩放药丸/底部输入框/发送）相交，
- * 垂直退、退不动整行扫描，直到无相交——球永不停在控件上。
- */
-function avoidProtected(next: { x: number; y: number }): { x: number; y: number } {
-  const selectors = [
-    ".sr-new-session",
-    ".sr-studio-import",
-    ".sr-studio-export",
-    ".sr-studio-record",
-    ".sr-transport-zoom button",
-    "textarea",
-    'button[title="发送"]',
-  ];
-  const protectedRects: Array<{ x: number; y: number; w: number; h: number }> = [];
-  for (const selector of selectors) {
+function protectedRects(): Rect[] {
+  const rects: Rect[] = [];
+  for (const selector of PROTECTED_SELECTORS) {
     for (const el of document.querySelectorAll(selector)) {
       const rect = el.getBoundingClientRect();
-      protectedRects.push({ x: rect.x, y: rect.y, w: rect.width, h: rect.height });
+      rects.push({ x: rect.x, y: rect.y, w: rect.width, h: rect.height });
     }
   }
-  const hits = (point: { x: number; y: number }) =>
-    protectedRects.some(
-      (rect) => !(point.x > rect.x + rect.w || point.x + ORB_SIZE < rect.x || point.y > rect.y + rect.h || point.y + ORB_SIZE < rect.y),
-    );
-  if (!hits(next)) return next;
-  let nearest = protectedRects[0];
-  let bestDistance = Infinity;
-  for (const rect of protectedRects) {
-    const dx = rect.x + rect.w / 2 - (next.x + ORB_SIZE / 2);
-    const dy = rect.y + rect.h / 2 - (next.y + ORB_SIZE / 2);
-    const distance = dx * dx + dy * dy;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      nearest = rect;
-    }
-  }
-  const awayX = Math.sign(next.x + ORB_SIZE / 2 - (nearest.x + nearest.w / 2)) || -1;
-  const awayY = Math.sign(next.y + ORB_SIZE / 2 - (nearest.y + nearest.h / 2)) || -1;
-  let candidate = { ...next };
-  // 垂直优先退让，顶住后整行水平扫描。
-  for (let step = 0; step < 24; step += 1) {
-    const moved = clampToViewport(candidate.x, candidate.y + awayY * 24);
-    if (moved.y === candidate.y) break;
-    candidate = moved;
-    if (!hits(candidate)) return candidate;
-  }
-  const scanStart = awayX > 0 ? next.x : window.innerWidth - ORB_SIZE - 12;
-  for (let step = 0; step < 24; step += 1) {
-    const moved = clampToViewport(scanStart + (awayX > 0 ? step : -step) * 32, candidate.y);
-    if (moved.x === candidate.x) continue;
-    candidate = moved;
-    if (!hits(candidate)) return candidate;
-  }
-  return candidate;
-}
-
-function defaultPosition(): { x: number; y: number } {
-  // 右下角：距右/底 24px——不再压 DJ 推荐卡末行与 Studio 时间线中央（D2，2026-09-25 巡检）；
-  // 再对受保护控件做一次退避，永不停在按钮上。
-  return avoidProtected({ x: window.innerWidth - ORB_SIZE - 24, y: window.innerHeight - ORB_SIZE - 24 });
+  return rects;
 }
 
 export function ButlerOrb({
@@ -143,7 +74,11 @@ export function ButlerOrb({
   onSubmit?: () => void;
   running?: boolean;
 }) {
-  const [position, setPosition] = useState(() => loadPosition() ?? defaultPosition());
+  const [position, setPosition] = useState(
+    () =>
+      loadPosition(window.localStorage) ??
+      defaultPosition({ width: window.innerWidth, height: window.innerHeight }, protectedRects()),
+  );
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [callOn, setCallOn] = useState(false);
@@ -266,7 +201,7 @@ export function ButlerOrb({
     if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) setDragging(true);
     if (drag.moved || Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       drag.moved = true;
-      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy));
+      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy, { width: window.innerWidth, height: window.innerHeight }));
     }
   };
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -278,14 +213,14 @@ export function ButlerOrb({
     const wasDrag = drag?.moved === true;
     const wasClick = drag?.moved === false && hitBall(event);
     setDragging(false);
-    if (wasDrag) setPosition(snapToViewport(position));
+    if (wasDrag) setPosition(snapToViewport(position, { width: window.innerWidth, height: window.innerHeight }, protectedRects()));
     if (wasClick && !expanded) toggleCall();
     else if (wasClick) setExpanded(false);
   };
 
   useEffect(() => {
     if (dragging) return;
-    window.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+    savePosition(window.localStorage, position);
   }, [position, dragging]);
 
   // 单 rAF：把 RMS 平滑进 level ref，交给 r3f 的 useFrame（玻璃珠渲染在 Canvas 内部循环）。
@@ -348,8 +283,8 @@ export function ButlerOrb({
             <input
               className="sr-input"
               value={value}
-              placeholder={running ? "管家正在干活…" : "跟管家说一句…"}
-              aria-label="跟管家说一句话"
+              placeholder={running ? "正在干活…" : "说一句…"}
+              aria-label="给悬浮球的一句话"
               onChange={(event) => setValue(event.target.value)}
             />
             <button type="submit" className="sr-btn sr-btn--accent" disabled={value.trim() === "" || running}>
