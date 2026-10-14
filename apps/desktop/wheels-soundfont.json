@@ -1,0 +1,9 @@
+{
+  "_comment": "soundfont env 装箱清单（desktop-packaging-plan.md §6.2 soundfont 档 / §6.4 第 3 步）。numpy/pyfluidsynth 是 soundfont 现役冻结集（本机 dist-info 实测 2026-09-26）。fluidsynth dylib 闭包不进 wheels：fetch-runtime.mjs 用 otool -L 从 dylibSource 指的 conda venv 里递归抽出（非系统 @rpath 依赖逐层收齐），直接并入 python-runtime/lib——runtime python 自带 LC_RPATH=@executable_path/../lib，venv python 符号链解析到真身，dlopen 裸名与 @rpath 依赖都从这里命中。运行期 venv 里另写 sitecustomize.py 把 DYLD_FALLBACK_LIBRARY_PATH 指到同一目录（ctypes.util.find_library 是纯路径计算、不看 rpath，pyfluidsynth 靠它定位）。实测闭包 21 个 dylib 13.4MB（≤20M 达标，随包）。",
+  "pins": [
+    "numpy==2.5.3",
+    "pyfluidsynth==1.4.0"
+  ],
+  "dylibSource": "/Users/lazora/Documents/ShadowRoom/_venvs/soundfont-renderer/lib",
+  "dylibSeeds": ["libfluidsynth.dylib"]
+}

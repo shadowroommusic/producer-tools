@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { homedir } from "node:os";
 import { resolveDesktopHome, syncPluginSources } from "./home.mjs";
-import { ensureCoreEnv } from "./env.mjs";
+import { ensureCoreEnv, ensureSoundfontEnv } from "./env.mjs";
 
 const DEV = !app.isPackaged;
 // 打包态的 HOME（userData 或用户覆写），由 resolveDesktopHome 在起桥前解析；
@@ -47,6 +47,9 @@ function bridgeEnv(extra) {
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1",
     SHADOWROOM_BRIDGE_PORT: MCP_PORT, SHADOWROOM_AGENT_PORT: AGENT_PORT, ...extra };
   if (HOME_DIR !== undefined) env.SHADOWROOM_HOME = HOME_DIR;
+  // 包内 pbs runtime 的位置：stem-splitter 首次分轨自举 venv 时优先用它（3.12，torch 有
+  // cp312 车轮）；dev 态不设，装完插件沿用系统解释器。桥与插件进程都从环境里读。
+  if (!DEV) env.SHADOWROOM_PYTHON_RUNTIME = join(process.resourcesPath, "python-runtime");
   return env;
 }
 const children = [];
@@ -90,6 +93,13 @@ app.whenReady().then(async () => {
     HOME_DIR = home;
     if (managed) {
       ensureCoreEnv(HOME_DIR);        // 先建 env（慢路径含离线 pip install），再同步源码
+      // soundfont env 失败只降级（插件 error、其余照常）——它重建自包内 wheels，
+      // 不像 .core 那样一坏就整 app 起不来（§6.4 第 3 步的取舍）。
+      try {
+        ensureSoundfontEnv(HOME_DIR);
+      } catch (error) {
+        console.error(`[env] soundfont env failed (degraded): ${error?.message ?? error}`);
+      }
       syncPluginSources(HOME_DIR);
     }
   }

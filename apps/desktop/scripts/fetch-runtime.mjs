@@ -6,7 +6,7 @@
 // 而 3.12 是 soundfont 现役版本、numpy 1.26.4 / 全部 pins 都有 cp312 arm64 wheel。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -56,6 +56,58 @@ if (existsSync(stampFile) && readFileSync(stampFile, "utf8").trim() === stampWan
   const py = join(runtimeDir, "bin", "python3");
   sh(py, ["-m", "pip", "download", "--quiet", "-d", wheelsDir, ...spec.pins]);
   writeFileSync(stampFile, stampWant);
+}
+
+// 2b) soundfont 档（§6.4 第 3 步）：wheels 走 pip；fluidsynth dylib 闭包用 otool -L 从
+//     dylibSource（本机 conda venv 的 lib/，42M+ 全量）递归抽出非系统的 @rpath 依赖，
+//     cp -L 解引用（conda 的 soname 是符号链，版本化真身必须一起进来）。
+//     抽出的闭包直接并入 python-runtime/lib/：runtime python 的 LC_RPATH 指向那里，
+//     venv python（符号链到真身）dlopen 裸名与 @rpath 依赖都命中——不碰 DYLD 全局变量。
+const soundfont = JSON.parse(readFileSync(join(ROOT, "wheels-soundfont.json"), "utf8"));
+const sfWheelsDir = join(SRC, "wheels", "soundfont");
+const sfStamp = join(sfWheelsDir, ".fetch-stamp");
+const sfWant = createHash("sha256")
+  .update(soundfont.pins.join("|") + spec.runtime + soundfont.dylibSource + soundfont.dylibSeeds.join(","))
+  .digest("hex");
+if (existsSync(sfStamp) && readFileSync(sfStamp, "utf8").trim() === sfWant
+    // 闭包完成的凭据是 DYLIBS.txt（stamp 在全部成功后才写；runtime 重建会连 lib 一起清空）
+    && existsSync(join(sfWheelsDir, "DYLIBS.txt"))
+    && existsSync(join(runtimeDir, "lib", soundfont.dylibSeeds[0]))) {
+  console.log(`[fetch] soundfont wheels already present (${readdirSync(sfWheelsDir).filter(f => f.endsWith(".whl")).length} whl)`);
+} else {
+  rmSync(sfWheelsDir, { recursive: true, force: true });
+  mkdirSync(sfWheelsDir, { recursive: true });
+  const py = join(runtimeDir, "bin", "python3");
+  sh(py, ["-m", "pip", "download", "--quiet", "-d", sfWheelsDir, ...soundfont.pins]);
+
+  // dylib 闭包：种子是 fluidsynth 的 soname；宽度优先收齐非系统 @rpath 依赖。
+  const srcLib = soundfont.dylibSource;
+  if (!existsSync(srcLib)) throw new Error(`dylibSource 不存在：${srcLib}（构建机需要有 soundfont 的 conda venv）`);
+  const copied = new Map(); // name -> bytes（去重统计）
+  const queue = [...soundfont.dylibSeeds];
+  const isSystem = (dep) => dep.startsWith("/usr/lib/") || dep.startsWith("/System/");
+  for (let round = 0; queue.length > 0 && round < 200; round += 1) {
+    const name = queue.shift();
+    if (copied.has(name)) continue;
+    const dst = join(runtimeDir, "lib", name);
+    sh("/bin/cp", ["-L", join(srcLib, name), dst]);
+    copied.set(name, statSync(dst).size);
+    const otool = spawnSync("/usr/bin/otool", ["-L", dst], { encoding: "utf8" });
+    if (otool.status !== 0) throw new Error(`otool -L ${dst} failed`);
+    for (const line of otool.stdout.split("\n").slice(1)) {
+      const dep = line.trim().split(" ")[0];
+      if (dep.startsWith("@rpath/") && !isSystem(dep)) {
+        const base = dep.slice("@rpath/".length);
+        if (!copied.has(base) && existsSync(join(srcLib, base))) queue.push(base);
+      }
+    }
+  }
+  const total = [...copied.values()].reduce((a, b) => a + b, 0);
+  console.log(`[fetch] fluidsynth dylib closure: ${copied.size} files, ${(total / 1024 / 1024).toFixed(2)} MB -> python-runtime/lib/`);
+  if (total > 20 * 1024 * 1024) throw new Error(`dylib closure ${(total / 1024 / 1024).toFixed(1)}MB 超过 20M 红线（§6.2：超线改首用下载，不许随包）`);
+  writeFileSync(join(sfWheelsDir, "DYLIBS.txt"),
+    `${[...copied.keys()].sort().join("\n")}\nTotal: ${total} bytes\n`);
+  writeFileSync(sfStamp, sfWant);
 }
 
 // 3) 清单（验收 ③ 对账用：名字 + 大小 + sha256）

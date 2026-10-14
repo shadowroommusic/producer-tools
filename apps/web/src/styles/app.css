@@ -3016,6 +3016,17 @@
   font-size: var(--sr-text-13);
 }
 
+/* 分轨首用组件的预装块（#94-A.3）：体积明示 + 进度一行 + 失败的可读出路。 */
+.sr-plugin-install {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--sr-border-strong);
+  border-radius: 10px;
+}
+
 .sr-spin {
   animation: sr-spin 900ms linear infinite;
 }

@@ -2,8 +2,8 @@
 // 首启（或 ENV_STAMP 变化 / venv 坏了）时，用包内 pbs runtime 离线建 _venvs/.core，
 // 装上 wheels/core 里全部 wheel，再把 7 个 core 插件的 _venvs/<repo> 软链过去——
 // 桥的 pythonFor() 找 _venvs/<repo>/bin/python，软链目录即命中，桥零改动。
-// soundfont / splitter 不在这步：soundfont 有独立 env（fluidsynth dylib 是第 3 步），
-// splitter 重依赖首用下载（第 3 步）。这台机器上它们继续用第 1 步迁移过来的 venv。
+// soundfont 的独立 env 在第 3 步加入（ensureSoundfontEnv，numpy 2.5.3 不同轨）；
+// splitter 的重依赖（torch）不随包：插件自己在首次分轨时下载（stem-splitter installer.py）。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -72,4 +72,54 @@ export function ensureCoreEnv(home) {
   }
   writeFileSync(stampFile, stamp);
   console.log(`[env] .core ready: ${whls.length} wheels, 7 plugins linked, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+}
+
+/**
+ * soundfont env（§6.4 第 3 步）：numpy 2.5.3 与 core 的 1.26.4 不同轨，独立 venv。
+ * dylib 闭包在包内 python-runtime/lib（构建期 fetch-runtime.mjs 并入），这个 venv 只管
+ * wheels + sitecustomize——后者把 DYLD_FALLBACK_LIBRARY_PATH 指到 <base_prefix>/lib，
+ * 让 pyfluidsynth 的 ctypes.util.find_library（纯路径计算，不看 rpath/dlopen）命中闭包；
+ * CDLL 拿到绝对路径后，@rpath 依赖由 runtime python 自带的 LC_RPATH 解析，同一目录。
+ * 失败只降级（console.error），不许挡 app 启动——soundfont 挂了其余 8 插件照常。
+ */
+export function ensureSoundfontEnv(home) {
+  const wheelsDir = join(process.resourcesPath, "wheels", "soundfont");
+  if (!existsSync(wheelsDir)) return; // 旧包没带这节，静默跳过
+  const venvDir = join(home, "_venvs", "soundfont-renderer");
+  const venvPython = join(venvDir, "bin", "python");
+  const stampFile = join(home, "ENV_STAMP.soundfont");
+  const buildId = readFileSync(join(process.resourcesPath, "python-runtime", ".build-id"), "utf8").trim();
+  const wheels = readdirSync(wheelsDir).filter((f) => f.endsWith(".whl")).sort()
+    .map((f) => `${f}:${statSync(join(wheelsDir, f)).size}`).join("|");
+  const stamp = createHash("sha256").update(`${buildId}\n${wheels}`).digest("hex");
+  const healthyProbe = () => {
+    const r = spawnSync(venvPython, ["-c", "import fluidsynth"], { timeout: 20_000, stdio: "ignore" });
+    return r.status === 0;
+  };
+  if (existsSync(stampFile) && readFileSync(stampFile, "utf8").trim() === stamp && healthyProbe()) return;
+
+  const t0 = Date.now();
+  console.log(`[env] (re)building soundfont venv (stamp ${stamp.slice(0, 8)}) ...`);
+  rmSync(venvDir, { recursive: true, force: true });
+  let r = spawnSync(join(process.resourcesPath, "python-runtime", "bin", "python3"),
+    ["-m", "venv", venvDir], { stdio: "inherit" });
+  if (r.status !== 0) throw new Error("soundfont venv creation failed");
+  const whls = readdirSync(wheelsDir).filter((f) => f.endsWith(".whl")).sort()
+    .map((f) => join(wheelsDir, f));
+  r = spawnSync(venvPython, ["-m", "pip", "install", "--no-index", "--no-input", "--quiet", ...whls],
+    { stdio: "inherit" });
+  if (r.status !== 0) throw new Error("soundfont pip install --no-index failed");
+  // find_library 的钥匙（见函数头注释）。prepend：用户自己设过的回退路径仍生效。
+  const sitePackages = join(venvDir, "lib", "python3.12", "site-packages");
+  writeFileSync(join(sitePackages, "sitecustomize.py"),
+    `# 桌面打包写入：pyfluidsynth 靠 ctypes.util.find_library 定位 libfluidsynth，\n` +
+    `# 而它只算 DYLD_FALLBACK_LIBRARY_PATH（默认 ~/lib:/usr/local/lib:...），不看 rpath。\n` +
+    `# 闭包在包内 runtime 的 lib/（= 本 venv 的 base_prefix/lib），dlopen 与 @rpath 都从那里解析。\n` +
+    `import os, sys\n` +
+    `_lib = sys.base_prefix + "/lib"\n` +
+    `_prev = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH")\n` +
+    `os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = _lib if not _prev else _lib + ":" + _prev\n`);
+  if (!healthyProbe()) throw new Error("soundfont venv unhealthy: import fluidsynth failed");
+  writeFileSync(stampFile, stamp);
+  console.log(`[env] soundfont ready: ${whls.length} wheels, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }

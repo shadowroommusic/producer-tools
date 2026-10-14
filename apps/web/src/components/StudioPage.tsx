@@ -195,6 +195,25 @@ export function StudioPage({
   );
   /** Clips whose separation is running right now. */
   const [splitting, setSplitting] = useState<string[]>([]);
+  /**
+   * 首次分轨的下载明示（#94-A.3）：本地 Demucs 还没装时，stem_backends 会给出
+   * 「首次分轨需下载模型（约 XXX MB，仅一次）」——在用户点分轨**之前**就摆进菜单提示，
+   * 而不是点了才在 job 里发现要等 160MB。桥/插件不可达时静默回退到老文案。
+   */
+  const [splitInstallNote, setSplitInstallNote] = useState<string | null>(null);
+  const probeSplitBackend = useCallback(async () => {
+    try {
+      const described = JSON.parse(
+        String(await callTool<string>("splitter", "stem_backends", {})),
+      ) as { install?: { needed?: boolean; note?: string } };
+      setSplitInstallNote(described.install?.needed ? (described.install.note ?? null) : null);
+    } catch {
+      setSplitInstallNote(null);
+    }
+  }, []);
+  useEffect(() => {
+    void probeSplitBackend();
+  }, [probeSplitBackend]);
   /** The clip whose「生成钢琴/贝斯/弦乐轨」is rendering right now. */
   const [generating, setGenerating] = useState<string | null>(null);
   /**
@@ -2301,6 +2320,8 @@ export function StudioPage({
                       length: clip.length,
                     });
                     setSplitting((current) => current.filter((entry) => entry !== clip.id));
+                    // 首次分轨会把组件装齐（或失败）——重新对一次账，提示随之消失/保留
+                    void probeSplitBackend();
                   }}
                 >
                   <span className="sr-menu-label">
@@ -2308,9 +2329,8 @@ export function StudioPage({
                   </span>
                   <span className="sr-menu-hint sr-mono">
                     {isPlayable(clip.source)
-                      ? clip.stemsDir === undefined
-                        ? "Demucs 本地分离，几分钟"
-                        : "已分轨，可再分一次"
+                      ? splitInstallNote ??
+                        (clip.stemsDir === undefined ? "Demucs 本地分离，几分钟" : "已分轨，可再分一次")
                       : "只有音频片段能分"}
                   </span>
                 </button>

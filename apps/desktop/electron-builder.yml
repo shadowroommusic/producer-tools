@@ -16,6 +16,10 @@ extraResources:
     to: python-runtime
   - from: resources-src/wheels/core
     to: wheels/core
+  # soundfont 档（§6.4 第 3 步）：wheels 随包、首启离线建独立 venv（numpy 2.5.3 与 core 不同轨）；
+  # fluidsynth dylib 闭包（实测 13.4MB，≤20M 红线内）由 fetch-runtime.mjs 并进 python-runtime/lib 随 runtime 进包。
+  - from: resources-src/wheels/soundfont
+    to: wheels/soundfont
   # 9 个插件仓源码（第二刀第 1 步：打包态每次启动同步进 HOME/<repo>，桥按老约定找 mcp_server.py）。
   # filter 排除 .git 与字节码缓存；体积共 ~4.2MB（实测）。
   - from: ../../../shadow-music-generator

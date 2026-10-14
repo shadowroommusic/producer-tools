@@ -658,6 +658,33 @@ numpy 但 src 无 import〔实测 grep〕）；8 个插件从 python 3.9 换到 
 > resources-src，**必须重打包** wheels 才进 .app；ENV_STAMP 重建吃的是包内 wheels）；打包后
 > `git checkout -- pnpm-workspace.yaml pnpm-lock.yaml`（§5 老坑仍在）。
 
+> **执行记录（2026-10-15，ZCode，第 3 步已落地）**：
+> 落地 = `wheels-soundfont.json`（pins numpy 2.5.3 + pyfluidsynth 1.4.0，dylib 源指向本机 conda venv）
+> + `fetch-runtime.mjs` 增 soundfont 档（wheels 走 pip；**fluidsynth dylib 闭包**用 otool -L 递归抽出
+> 非系统 @rpath 依赖、cp -L 解引用，**实测 20 个 dylib 12.75MB（13,370,224B ≤ 20M 红线，随包）**，
+> 并入 `python-runtime/lib/`——runtime python 自带 LC_RPATH=@executable_path/../lib，venv python
+> 符号链解析到真身后 dlopen 裸名与 @rpath 依赖都命中；stamp 在 wheels+闭包全部成功后才写，
+> 跳过条件另查 DYLIBS.txt，半程崩溃不留假象）+ `env.mjs` 增 `ensureSoundfontEnv`（独立 venv，
+> numpy 2.5.3 与 core 1.26.4 不同轨；**sitecustomize.py 把 DYLD_FALLBACK_LIBRARY_PATH 指到
+> `<base_prefix>/lib`**——pyfluidsynth 走 ctypes.util.find_library，那是纯路径计算、不看 rpath，
+> CDLL 拿到绝对路径后 @rpath 依赖由 rpath 解析，同一目录；失败只降级不挡启动）+
+> `main.mjs` 接线（调 env + `SHADOWROOM_PYTHON_RUNTIME` 透传给桥，splitter 自举优先 pbs）+
+> yml 增 wheels/soundfont。
+> **实测（模拟包内资源布局，node 直跑 env.mjs）**：soundfont venv 离线构建 **5.6s**、幂等复跑
+> **39ms**；**真机渲染复验：打包路径渲染 8 音 C 大调与直装 conda venv 的产物 MD5 逐字节一致**
+>（`1d7b5186…`，917,324B；5200ms 时长、RMS −21.72 dBFS、首渲 311ms，真 sf2）。
+> **splitter 首用下载**（本仓 UI + stem-splitter 仓 `ae473a8` 安装器）：Studio 分轨菜单在
+> demucs 缺失时提前明示「首次分轨需下载模型（约 169 MB，仅一次）」（stem_backends 的
+> install 账），插件页有预装按钮+进度；下载失败可读可续传可重试，STEM_SPLIT_COMMAND 机器
+> 零下载（resolve 天然优选 command）。**从零到一真机 E2E：61.4s** 完成 venv 创建 +
+> torch/demucs/numpy/soundfile 车轮（85MB，走 PIP_INDEX_URL 镜像；当日 PyPI 直连实测
+> ~15KB/s 不可用）+ htdemucs 84,141,911B 真下载（fbaipublicfiles 实测 7.5MB/s、Range 206）
+> + 6s 歌四轨分离 status=ok。两个实测踩出的硬钉：**numpy 必须 1.26.4**（2.x 下 torch 2.2.2
+> 后端初始化必挂）、**soundfile 必须 0.13.1**（torchaudio 2.2.2 在 macOS 唯一 wav 后端，
+> demucs 不声明它）；ffmpeg 缺失影响 demucs 的 AudioFile 探测路径（ffprobe 不存在时走
+> torchaudio+soundfile 即可读 wav），安装器会幂等补 `<workspace>/bin/ffmpeg` 软链兜底。
+> 78 工具/9-9 ready 的整包 smoke 留给 Codex 端到端验收（dist:dir 产物见回执）。
+
 ### 6.3 出包与签名
 
 **不签名最小路径（今天就能跑，零用户输入）**：
@@ -765,6 +792,7 @@ notarytool，证书+凭据齐了就全自动。
 | electron-builder 直调 `.bin` 时 collector 对包管理器的兜底识别是 npm（`npm_config_user_agent` 缺失），机器无 npm 即 ENOENT 间歇失败；`pnpm run dist:dir`（pnpm 会注入 user agent）稳定命中 pnpm；另 files 列表漏 home.mjs 会让 app 秒退、package.json 缺 `productName` 会让 userData 变 `…/@shadowroom/desktop` | 本机实测（2026-09-26，第 1 步落地过程） |
 | **第 2 步装箱实测**：pbs cpython 3.12.14+20260924（npmmirror 24MB→解包 75M，ssl/sqlite3/zlib OK）+ 22 wheels 50M（imageio-ffmpeg 0.6.0 内置 ffmpeg 占 ~26M）；.core 离线构建 4.4–4.8s、stamp 幂等 ~150ms；干净模拟（无 _venvs）`open` 后 **7 秒 8/9 ready 75 工具零 TCC**（splitter 兜底系统 python3 可列工具——mcp_server 顶层不 import torch；soundfont error 预期）；稳态 9/9 78 | 本机实测（2026-09-26） |
 | **core 七仓单测（.core 3.12）**：audio 65 OK、planner 48 OK、library 74 OK、steward 无 tests；grabber 132 用例 8 挂 vs 3.9 基线 87 用例 22 挂（零回归，剩 8 与基线逐条同）；converter 2 挂 + generator 4 挂 = 全部 3.12 新失败都是测试前提绑定旧行为：① converter sqlite WAL 副档件断言（3.12 sqlite 行为变化）② generator YUE_COMMAND 模板 `sys.executable` 未加引号（shlex 契约要求引号，路径含空格即炸——userData 带空格才暴露）③ generator wave：**3.12 已能读 WAVE_FORMAT_EXTENSIBLE**，测试前提"wave refuses"失效 | 本机实测（2026-09-26；修复都在插件仓测试，各 1–2 行，待派） |
+| **3.12 测试前提修复落地 + 复跑（2026-10-14）**：converter `b02ecbc`（WAL 断言按构建无关不变量收窄；实测定性=**sqlite 构建差异而非 Python 版本差异**：3.9 链 Apple sqlite 3.54.0 拒绝读无边车 WAL 库、pbs 3.12 内置 3.53.1 放行并自写 -shm/-wal）；generator `d70a399`（YUE_COMMAND 的 `sys.executable` 加引号）+ `db52e9f`（wave 断言跟进 3.12）。复跑（main 上，.core 3.12.14 与系统 3.9.6 各一遍）：converter **3.9=57/57 OK、3.12=57/57 OK**；generator **3.9=125/125 OK、3.12=125/125 OK**。注意：两仓两版本并行同跑会出现 flaky 1 error，串行复跑全绿——验收按串行跑；另注意在 MiniMax 分支工作区直接跑会 2 挂（缺 b02ecbc），验收须在 main worktree 上跑 | 本机实测（Codex 复跑，2026-10-14） |
 | **dmg/zip 对账**：`dist:mac` 出 dmg 200M / zip 201M；.app=zip=dmg+源头四方全等（22 whl 集合 md5 `69f9d85a…`、runtime build-id `cpython-3.12.14+20260924` 逐字节同） | 本机实测（2026-09-26） |
 | **双实例抢端口**：两个 app 实例并行时后起实例两桥 EADDRINUSE 全崩、UI 哑巴（与 Codex 并行复验时实测相撞）；修复 = `app.requestSingleInstanceLock()`，第二实例即退 + `second-instance` 聚焦已有窗口 | 本机实测（2026-09-26，第 2 步落地过程） |
 
