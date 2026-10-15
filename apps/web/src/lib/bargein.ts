@@ -42,8 +42,16 @@ export const DEFAULT_THRESHOLDS: BargeInThresholds = {
 export type BargeInEvents = {
   /** The user might be talking: stop the sound for a moment without giving up the turn. */
   onPause?: () => void;
-  /** The user is talking: the answer is cancelled and the turn is theirs. */
-  onCancel?: () => void;
+  /**
+   * The user is talking: the answer is cancelled and the turn is theirs.
+   *
+   * `sinceMs` is when this speech burst started (the pause-threshold crossing that eventually
+   * escalated to a cancel), on the same `performance.now()` timeline the caller feeds — it is where
+   * an interrupt-rescue audio slice should begin. It is the *current* run's start: a dip below the
+   * pause threshold resets it, so a cough followed by a sentence rescues from the sentence, not the
+   * cough.
+   */
+  onCancel?: (info: { sinceMs: number }) => void;
 };
 
 export type BargeInDetector = {
@@ -116,7 +124,7 @@ export function createBargeInDetector(events: BargeInEvents = {}, overrides: Par
       if (!cancelled && aboveCancelSince !== null && now - aboveCancelSince >= config.cancelHoldMs) {
         cancelled = true;
         paused = false;
-        events.onCancel?.();
+        events.onCancel?.({ sinceMs: abovePauseSince ?? aboveCancelSince });
         return;
       }
       if (!paused && abovePauseSince !== null && now - abovePauseSince >= config.pauseHoldMs) {

@@ -129,7 +129,12 @@ export function createBridgeTTS(options: {
     speak: (text, speakOptions) => {
       void synthesize(text)
         .then((buffer) => {
-          if (buffer === null) return;
+          // 没拿到音频也没有错（桥答了空）：这次「朗读」已经结束，onEnd 必须回调，
+          // 否则调用方等一个永不到来的收尾（通话会卡在 speaking）。
+          if (buffer === null) {
+            speakOptions?.onEnd?.();
+            return;
+          }
           const source = audioContext().createBufferSource();
           playing?.stop();
           playing = source;

@@ -186,10 +186,43 @@ export type VoiceCapture = {
   level: () => number;
   /** WAV of everything since the previous call, and moves the marker forward. */
   takeWav: () => Blob | null;
+  /**
+   * WAV of everything from `sinceMs` (the `performance.now()` timeline `feed`/detectors use) to now.
+   * Consumes the *whole* buffer like `takeWav` — the part before `sinceMs` is the answer's own tail
+   * and must not leak into the next request. Used to rescue the words spoken during an interruption.
+   */
+  takeWavSince: (sinceMs: number) => Blob | null;
   /** Sample rate, so the recorded file can be described. */
   sampleRate: number;
   stop: () => void;
 };
+
+/** 打断救话的切片上限：连续喊多久也只救最后这么多秒，防超长 WAV 打爆桥的 base64 上限。 */
+export const MAX_RESCUE_MS = 15_000;
+
+/**
+ * `takeWavSince` 的纯核心（node 单测直接打这里）。`stamps[i]` 是第 i 块音频**入队的时刻**，
+ * 也就是它覆盖区间的右端：`stamps[i] >= since` 即该块至少尾部在起音之后——跨在起音上的那块
+ * 也保进来，多带 ≤ 一个处理块（4096/采样率 ≈ 85ms）的前音远好过砍掉首音节。
+ * marker 一律推到底：起音之前的缓冲是答案的尾巴，不进下一回合（与 `takeWav` 的丢弃语义一致）。
+ */
+export function rescueRange(
+  stamps: readonly number[],
+  marker: number,
+  sinceMs: number,
+  nowMs: number,
+  maxMs: number = MAX_RESCUE_MS,
+): { start: number; marker: number } {
+  const since = Math.max(sinceMs, nowMs - maxMs);
+  let start = stamps.length;
+  for (let index = marker; index < stamps.length; index += 1) {
+    if (stamps[index] >= since) {
+      start = index;
+      break;
+    }
+  }
+  return { start, marker: stamps.length };
+}
 
 export async function startCapture(): Promise<VoiceCapture | null> {
   if (navigator.mediaDevices?.getUserMedia === undefined) return null;
@@ -207,12 +240,27 @@ export async function startCapture(): Promise<VoiceCapture | null> {
 
   const processor = context.createScriptProcessor(4096, 1, 1);
   const chunks: Float32Array[] = [];
+  /** 入队时刻（performance.now()），与端点/打断检测器同一个钟：救话切片按它对齐。 */
+  const stamps: number[] = [];
   let marker = 0;
   processor.onaudioprocess = (event) => {
     chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    stamps.push(performance.now());
   };
   source.connect(processor);
   processor.connect(context.destination);
+
+  const merge = (slice: Float32Array[]): Blob | null => {
+    const total = slice.reduce((count, chunk) => count + chunk.length, 0);
+    if (total === 0) return null;
+    const merged = new Float32Array(total);
+    let offset = 0;
+    for (const chunk of slice) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return encodeWav(merged, context.sampleRate);
+  };
 
   const wave = new Uint8Array(analyser.fftSize);
   return {
@@ -228,15 +276,12 @@ export async function startCapture(): Promise<VoiceCapture | null> {
     takeWav: () => {
       const slice = chunks.slice(marker);
       marker = chunks.length;
-      const total = slice.reduce((count, chunk) => count + chunk.length, 0);
-      if (total === 0) return null;
-      const merged = new Float32Array(total);
-      let offset = 0;
-      for (const chunk of slice) {
-        merged.set(chunk, offset);
-        offset += chunk.length;
-      }
-      return encodeWav(merged, context.sampleRate);
+      return merge(slice);
+    },
+    takeWavSince: (sinceMs) => {
+      const { start, marker: consumed } = rescueRange(stamps, marker, sinceMs, performance.now());
+      marker = consumed;
+      return merge(chunks.slice(start));
     },
     sampleRate: context.sampleRate,
     stop: () => {

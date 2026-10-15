@@ -999,6 +999,19 @@ export function App() {
   /** Bumped on every interruption, so a canceled answer's `onend` cannot resume the call twice. */
   const answerToken = useRef(0);
   /**
+   * 回合制识别在途。`moveVoice("thinking")` 与 `await transcribe` 之间有一次渲染（识别提示
+   * 触发的），那时 running 还是 false、答案也还没落地——说话 effect 的空答案检查会把 thinking
+   * 翻回 listening，于是**第一回合的回答永远不会自动开口**（真机上被下一回合的 thinking 顺带
+   * 触发掩盖）。识别在途期间门住那个翻转；识别失败路径本就显式回 listening，语义不变。
+   */
+  const recognizingRef = useRef(false);
+  /**
+   * 有句子交给了 TTS 但还没收到 onEnd。speak() 是异步起播（fetch+decode 完才挂 playing），
+   * effect 因状态切换重跑时 `speaking()` 还查不到——没有这个 ref，「没有下一句」分支会在
+   * 开口 ~200ms 内把 speaking 状态收掉。onEnd 负责清零，也负责真正的收尾交接。
+   */
+  const awaitingSpeakEndRef = useRef(false);
+  /**
    * Every listening session carries a token: `SpeechRecognition` fires `onend`/`onresult` from the
    * session that was already replaced, and without this the stale session wrote the previous turn's
    * words into the next one (measured: one phrase came back as the phrase twice).
@@ -1098,7 +1111,13 @@ export function App() {
       }
       moveVoice("thinking");
       setVoiceNotice("正在识别…");
-      const result = await provider.transcribe(wav);
+      recognizingRef.current = true;
+      let result: Awaited<ReturnType<NonNullable<typeof provider.transcribe>>>;
+      try {
+        result = await provider.transcribe(wav);
+      } finally {
+        recognizingRef.current = false;
+      }
       if ("error" in result) {
         setVoiceNotice(result.error);
         moveVoice("listening");
@@ -1173,25 +1192,59 @@ export function App() {
        *
        * 打断后的「接着说的那句话」怎么处理，两种识别方式不一样（MiniMax 交叉验证 #356 抓的洞）：
        * - 流式（浏览器识别）：识别器一直在跑，打断词都在 interruptRef 里，拼成下一回合的开头；
-       * - 回合制（桥式 STT）：没有 partial，interruptRef 恒空，刚才那几百毫秒的音频就在缓冲里——
-       *   旧代码直接 takeWav() 丢掉且不留话，用户必须重说（静默丢话）。
-       * 现在回合制下如实告诉用户「没接住，请再说一次」；把那段音频救回来（按打断时刻切片重识别）
-       * 是后续改进，不在这一刀里暗改。
+       * - 回合制（桥式 STT）：没有 partial，interruptRef 恒空——但音频都在缓冲里。从起音时刻
+       *   （sinceMs）切片救回来交给 transcribe，认出来就直接当下一回合的用户话提交，用户不用
+       *   重说一遍；认不出才退回「请再说一次」。切片同时消费掉整个缓冲：起音之前的部分是
+       *   答案自己的尾巴，不进下一回合（与旧 takeWav 的丢弃语义一致）。
        */
-      onCancel: () => {
+      onCancel: ({ sinceMs }) => {
         if (voiceStateRef.current !== "speaking" && voiceStateRef.current !== "thinking") return;
         const turnBased = currentSTT().transcribe !== undefined;
         answerToken.current += 1;
         currentTTS().cancel();
-        capture.current?.takeWav(); // the answer's tail is not part of the next request
+        const rescued = capture.current?.takeWavSince(sinceMs) ?? null;
         controller?.abort();
         if (store.activeId !== undefined) void interruptTurn(store.activeId);
         const heard = interruptRef.current.trim();
         interruptRef.current = "";
         heardRef.current = heard === "" ? heardRef.current : heard === heardRef.current ? heard : `${heard} ${heardRef.current}`.trim();
         partialRef.current = "";
-        setVoiceNotice(turnBased ? "（已打断）刚才那句没接住，请再说一次" : "（打断了，接着说）");
-        moveVoice("listening");
+        if (heard !== "") {
+          setVoiceNotice("（打断了，接着说）");
+          moveVoice("listening");
+          return;
+        }
+        if (!turnBased || rescued === null) {
+          setVoiceNotice(turnBased ? "（已打断）刚才那句没接住，请再说一次" : "（打断了，接着说）");
+          moveVoice("listening");
+          return;
+        }
+        /**
+         * 回合制救话。token 防竞态：挂断或下一次打断都会递增 answerToken，迟到的识别结果直接弃。
+         * submit 不带录音附件：那句话的字就是内容，上传切片只为存档，慢一个网络来回不值。
+         */
+        const token = answerToken.current;
+        moveVoice("thinking");
+        setVoiceNotice("正在识别（救回打断的话）…");
+        recognizingRef.current = true;
+        void (async () => {
+          const provider = currentSTT();
+          const result = provider.transcribe === undefined ? { error: "识别器不在" } : await provider.transcribe(rescued);
+          recognizingRef.current = false;
+          if (!voiceModeRef.current || answerToken.current !== token || voiceStateRef.current !== "thinking") return;
+          const text = "error" in result ? "" : result.text.trim();
+          if (text === "") {
+            setVoiceNotice("（已打断）刚才那句没接住，请再说一次");
+            moveVoice("listening");
+            return;
+          }
+          setVoiceNotice(null);
+          heardRef.current = "";
+          partialRef.current = "";
+          setVoicePartial("");
+          turnRef.current?.reset();
+          submitRef.current(text);
+        })();
       },
     });
     setVoiceMode(true);
@@ -1249,7 +1302,7 @@ export function App() {
     if (!voiceMode) return;
     if (voiceState === "thinking" && running) return;
     const answer = lastAssistant?.role === "assistant" ? speechText(lastAssistant.text.trim()) : "";
-    if (answer === "" && voiceState === "thinking") {
+    if (answer === "" && voiceState === "thinking" && !recognizingRef.current) {
       moveVoice("listening");
       return;
     }
@@ -1261,7 +1314,7 @@ export function App() {
       return;
     }
 
-    if (voiceState === "thinking") {
+    if (voiceState === "thinking" && !recognizingRef.current) {
       spokenUpTo.current = 0;
       speakingToken.current += 1;
       moveVoice("speaking");
@@ -1270,6 +1323,8 @@ export function App() {
     if (voiceStateRef.current !== "speaking") return;
 
     const token = speakingToken.current;
+    /** 打断/挂断都会 bump answerToken：迟到的 onended（cancel 触发的事件）不得再走「自然播完」收尾。 */
+    const turnToken = answerToken.current;
     const sentences = splitSentences(answer);
     const finished = !running;
     /** While the model is still writing, the last piece is a half sentence — do not speak it yet. */
@@ -1277,7 +1332,14 @@ export function App() {
     const next = speakable.slice(spokenUpTo.current);
     if (next.length === 0) {
       if (!finished) return;
-      // Nothing left to say: the turn is over, hand the microphone back explicitly.
+      /**
+       * 上一句还在放的时候不许在这里收麦克风：本 effect 会因 thinking→speaking 的状态切换
+       * 立刻重跑一次，那时音频刚开始、`spokenUpTo` 却已标记到头——不看 `speaking()` 的话，
+       * 回答会在开口 ~200ms 内被状态层"结束"（音频照放、麦克风已交接、打断检测停喂），
+       * 模型 done 时刻正在播的句子每次都被抢。真放完的收尾由每个 speak 的 onEnd 链负责。
+       */
+      if (currentTTS().speaking() || awaitingSpeakEndRef.current) return;
+      // Nothing left to say (and nothing playing): the turn is over, hand the microphone back.
       capture.current?.takeWav();
       moveVoice("listening");
       speakEndedAt.current = performance.now();
@@ -1286,10 +1348,12 @@ export function App() {
     spokenUpTo.current = speakable.length;
     const text = next.join(" ");
     setSpokenSentence(text);
+    awaitingSpeakEndRef.current = true;
     currentTTS().speak(text, {
       voiceId: currentVoiceId(),
       onEnd: () => {
-        if (!voiceModeRef.current || speakingToken.current !== token) return;
+        awaitingSpeakEndRef.current = false;
+        if (!voiceModeRef.current || speakingToken.current !== token || answerToken.current !== turnToken) return;
         /** If that was the last piece of a finished answer, the turn is over. */
         if (!runningRef.current && spokenUpTo.current >= splitSentences(answer).length) {
           capture.current?.takeWav();

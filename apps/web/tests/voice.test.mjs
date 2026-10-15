@@ -146,3 +146,57 @@ test("the nicest voices a machine has come first, and nothing invented", () => {
   assert.deepEqual(rankVoices(available, "en").map((voice) => voice.label), ["Samantha"]);
   assert.deepEqual(rankVoices([], "zh"), [], "a machine with no voices says so instead of guessing");
 });
+
+/**
+ * 打断救话（MiniMax #356 的洞）：回合制通话里打断时说出的话，按起音时刻从音频缓冲切出来
+ * 重新识别。这里测纯核心的两半——切片边界与起音时刻的传递。
+ */
+import { rescueRange } from "../src/lib/voice.ts";
+
+test("rescueRange：空缓冲/全旧/跨块/未来起音/超长截断 五个边界", () => {
+  // 空：marker 后一个块都没有 → 无可救，marker 不动（本来就到底了）
+  assert.deepEqual(rescueRange([], 0, 0, 1000), { start: 0, marker: 0 });
+
+  const stamps = [100, 200, 300, 400, 500];
+  // 全旧：起音早于一切 → 从 marker 起全救（切片语义下界 = marker，已消费的不回头）
+  assert.deepEqual(rescueRange(stamps, 0, 0, 600), { start: 0, marker: 5 });
+  // 跨块：since=250 落在第 2 块(200) 与第 3 块(300) 之间 → 从 300 那块起（跨在起音上的块保进来）
+  assert.deepEqual(rescueRange(stamps, 0, 250, 600), { start: 2, marker: 5 });
+  assert.deepEqual(rescueRange(stamps, 0, 300, 600), { start: 2, marker: 5 }, "since 恰在块尾上 → 该块算起音后");
+  // 未来：起音晚于一切已入队音频（钟差/极端情况）→ 无可救，但缓冲照旧消费光（尾巴不留给下一回合）
+  assert.deepEqual(rescueRange(stamps, 0, 999, 600), { start: 5, marker: 5 });
+  // marker 生效：已消费的块不回头救
+  assert.deepEqual(rescueRange(stamps, 3, 150, 600), { start: 3, marker: 5 });
+
+  // 超长：起音太老被 15s 上限截回 now-15000=3000 → 只救 3000 之后的块（8000 起，共 3 块）
+  assert.deepEqual(rescueRange([1000, 8000, 16000, 17000], 0, 0, 18000), { start: 1, marker: 4 });
+  // 上限内不干预：since=500, now=3000 → 不触发截断
+  assert.deepEqual(rescueRange([400, 500, 600], 0, 500, 3000), { start: 1, marker: 3 });
+});
+
+test("barge-in cancel 带回起音时刻（救话切片的起点）", () => {
+  const seen = [];
+  const detector = createBargeInDetector({
+    onCancel: (info) => seen.push(info.sinceMs),
+  });
+  detector.start(0);
+  let now = 0;
+  const feed = (ms, level) => {
+    for (const _ of frames(ms, level)) {
+      detector.feed(level, now);
+      now += 16;
+    }
+  };
+  // 答案自己的泄漏（默认阈值，前 300ms 校准基线）
+  feed(1000, 0.2);
+  // 咳嗽：高于 pause 但没撑到 cancel，然后落回
+  feed(150, 0.45);
+  feed(350, 0.2);
+  // 真正的句子：持续高于 cancel 阈值 200ms
+  const onset = now;
+  feed(500, 0.6);
+  assert.equal(seen.length, 1, "canceled exactly once");
+  // 起音 = 这一轮连续高于 pause 的第一帧，不是咳嗽那次，也不是 cancel 判定时刻（onset+200 之后）
+  assert.equal(seen[0], onset);
+  assert.ok(seen[0] < now - 200, "and it is the onset, not the moment cancel was confirmed");
+});
