@@ -3,6 +3,11 @@
 //
 // 用法：node apps/web/tests/e2e/user-pass-dj-studio.mjs [输出目录]
 // 需要：vite :5173、mcp 桥 :8787、agent 桥 :8788，以及库里已有素材。
+//
+// 2026-10-16 修订（Codex）：① Studio 段先点「新建工程」再走（此前缺这一步，后三段的报错全是选择器空找）；
+// ② DJ 行改点标题 span（行中心命中「试听」按钮，会把"载入"悄悄变成"载入+播放"）；
+// ③ 走带断言改成读秒增量 vs 墙钟；④ 打点步骤转只读——它写真实曲库，巡检不该留痕
+// （cue 编辑的写入语义由 dj-page-*-acceptance 在 fixture 上覆盖）。
 import { chromium } from "/Users/lazora/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -51,32 +56,59 @@ try {
   await page.waitForTimeout(500);
 } catch (e) { note("筛选失败：" + e.message); }
 
-// 点一行载入播放器
+// 点一行载入播放器：优先挑 ≥1 分钟的曲目（3 秒的短文件在 4 秒采样窗口里就放完了，读秒 Δ 恒为 0 没有信号）
 try {
-  await page.locator(".sr-dj-library .sr-dj-row").first().click();
+  const rows_ = page.locator(".sr-dj-library .sr-dj-row");
+  const count = await rows_.count();
+  let pick = 0;
+  for (let i = 0; i < count; i += 1) {
+    const text = (await rows_.nth(i).locator(".sr-dj-row-time").innerText().catch(() => "—")).trim();
+    const m = text.match(/^(\d+):(\d{2})$/);
+    if (m !== null && Number(m[1]) * 60 + Number(m[2]) >= 60) { pick = i; break; }
+  }
+  // 点标题 span = 纯载入（onOpen），不自动播放；行中心会命中「试听」按钮。
+  await rows_.nth(pick).locator(".sr-dj-row-title").click();
   await page.waitForTimeout(1500);
   await shot("dj-03-loaded");
   const title = await page.locator(".sr-dj-deck-title, .sr-dj-deck").first().innerText();
-  note("载入后播放器：" + title.split("\n").slice(0, 3).join(" / "));
+  note(`载入后播放器（第 ${pick + 1} 行）：` + title.split("\n").slice(0, 3).join(" / "));
 } catch (e) { note("载入失败：" + e.message); }
 
-// 播放 3 秒看走带
+// 播放 3 秒看走带（读秒增量必须≈墙钟增量——这是用户报过的那类 bug 的哨兵）
 try {
-  await page.locator(".sr-icon-btn, button").filter({ hasText: /^▶|播放/ }).first().click({ timeout: 5000 });
-  await page.waitForTimeout(3000);
-  await shot("dj-04-playing");
-  const clock = await page.locator(".sr-dj-clock").first().innerText().catch(() => "?");
-  note("播放 3 秒后读秒：" + clock.replace(/\n/g, " "));
+  // 走带的播/停在 transport 上是 icon 按钮（DjPage 106–1050 行），只有 aria-label，没有文字——
+  // 按文字过滤永远点不到（旧脚本的误报）。aria-label 随状态在「播放/暂停」之间切。
+  const transport = page.locator('button[aria-label="播放"], button[aria-label="暂停"]').first();
+  if (await transport.isDisabled()) {
+    note("走带禁用：deck 未就绪（多半是素材文件不在场），跳过播放与打点");
+  } else {
+    const readClock = async () => (await page.locator(".sr-dj-clock").first().innerText().catch(() => "?")).trim();
+    const parse = (text) => {
+      const m = String(text).match(/(\d+):(\d{2})/);
+      return m === null ? null : Number(m[1]) * 60 + Number(m[2]);
+    };
+    if ((await transport.getAttribute("aria-label")) === "暂停") await transport.click(); // 收敛到停
+    const before = await readClock();
+    await transport.click({ timeout: 5000 });
+    const wall0 = Date.now();
+    await page.waitForTimeout(4000);
+    await shot("dj-04-playing");
+    const wall = (Date.now() - wall0) / 1000;
+    const after = await readClock();
+    const delta = parse(after) !== null && parse(before) !== null ? parse(after) - parse(before) : null;
+    const ended = (await transport.getAttribute("aria-label")) !== "暂停";
+    note(
+      `走带：${before} → ${after}（墙钟 ${wall.toFixed(1)}s，读秒 Δ=${delta === null ? "?" : delta}s${ended ? "，采样窗口内已放完" : ""}）`,
+    );
+  }
 } catch (e) { note("播放按钮点不到：" + e.message); }
 
 // 打一个点
+// 只读：打点会写进真实 library.db，巡检不留痕。
 try {
-  const before = await page.locator(".sr-dj-cue").count();
-  await page.locator(".sr-dj-cue-add").first().click({ timeout: 5000 });
-  await page.waitForTimeout(900);
-  const after = await page.locator(".sr-dj-cue").count();
-  await shot("dj-05-cue-added");
-  note(`打点：${before} → ${after} 条`);
+  const add = page.locator(".sr-dj-cue-add").first();
+  const cues = await page.locator(".sr-dj-cue").count();
+  note(`cue 列表 ${cues} 条；打点按钮 ${(await add.isDisabled()) ? "禁用（deck 未就绪）" : "可用"}（只读巡检，不写入）`);
 } catch (e) { note("打点失败：" + e.message); }
 
 // AI 设 cue 预览
@@ -120,6 +152,18 @@ for (const label of ["导入 set", "AI 排序", "导出 m3u", "新建 set"]) {
 await goto("studio");
 await page.waitForTimeout(1500);
 await shot("studio-01-land");
+
+// Studio 现在先落在工程列表：导入/播放/轨道控件都要先有一个打开的工程。
+// 像用户一样先点「新建工程」，再往下走——之前的版本在这个脚本里漏了这一步，
+// 后三段的报错全是「没进工程」（选择器找不到），不是按钮坏了。
+try {
+  const fresh = page.locator(".sr-project-new");
+  if ((await fresh.count()) > 0) {
+    await fresh.first().click();
+    await page.waitForTimeout(1500);
+    await shot("studio-01b-new-project");
+  }
+} catch (e) { note("新建工程失败：" + e.message); }
 
 try {
   const input = page.locator('input[type="file"]').first();
