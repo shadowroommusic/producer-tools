@@ -129,3 +129,28 @@ test("待核实预设：needsVerification 与 note 不丢（界面要写原因�
   }
   assert.equal(presetById("claude-subscription").needsVerification, true);
 });
+
+/**
+ * note 内容守卫（MiniMax preset-note-sweep #410 ② 提的）：原来只查「非空」，所以一段**挂错家**
+ * 的 note（ZenMux 上写着 MiniMax 的实测——今晚真发生过的 bug）照样绿灯。加两条内容口径：
+ *   ① needsVerification 的 note 必须真的解释「为什么待核实」（待核实/未实测/不支持）；
+ *   ② 其余 note 必须提到这家自己——baseUrl 的域名、预设 id、或 label 的第一个词。
+ * 拿历史 bug 验一次：把 MiniMax 那段「…实测 OpenAI 兼容端点是…」放回 ZenMux 上，① 会红
+ * （它说「实测」而不是「未实测」）；把 zenmux.ai 写成别的域名，② 会红。
+ */
+test("note 内容守卫：挂错家 / 说不清原因都要红", () => {
+  const host = (url) => new URL(url).host;
+  for (const preset of PROVIDER_PRESETS) {
+    if (typeof preset.note !== "string" || preset.note === "") continue;
+    if (preset.needsVerification === true) {
+      assert.match(preset.note, /待核实|未实测|不支持/, `${preset.id} 的 note 没解释为什么待核实：${preset.note.slice(0, 40)}`);
+      continue;
+    }
+    const labelToken = preset.label.split(/[\s（(·]/)[0] ?? "";
+    const mentionsSelf =
+      preset.note.includes(host(preset.baseUrl)) ||
+      preset.note.includes(preset.id) ||
+      (labelToken !== "" && preset.note.toLowerCase().includes(labelToken.toLowerCase()));
+    assert.ok(mentionsSelf, `${preset.id} 的 note 没提到这家自己（host/id/label 都没有）：${preset.note.slice(0, 40)}`);
+  }
+});

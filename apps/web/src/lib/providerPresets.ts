@@ -87,6 +87,8 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
       image: { protocol: "volcengine-ark-image", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", models: [] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+    /** MiniMax preset-note-sweep #410 ④：有能力却零说明——note 是界面唯一的说明位。 */
+    note: "ark.cn-beijing.volces.com/api/v3：目录给的端点，未实测；image 能力没带模型名，保存 Key 后先到「模型」页签拉取，再做生图。",
   },
   {
     id: "volcengine-agent-plan",
@@ -97,6 +99,7 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
       image: { protocol: "volcengine-ark-image", baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3", models: ["doubao-seedream-5.0-lite"] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+    note: "ark.cn-beijing.volces.com/api/plan/v3：目录给的端点，未实测；image 能力带 doubao-seedream-5.0-lite，配好后用一次生图验真。",
   },
   {
     id: "volcengine-coding-plan",
@@ -123,8 +126,10 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
      * 这条 note 原来错挂在 ZenMux 上——内容是 MiniMax 的域名/协议实测（Codex 05:1x 复盘 #406 时发现：
      * minimax 预设自己没有 note，界面永远不显示那段说明；ZenMux 反而在讲别人的 key）。
      * 现在归位：MiniMax 的实测说明搬到 minimax 预设；ZenMux 留一句真话（端点尚未实测）。
+     * 补充（MiniMax preset-note-sweep #410 ⑤）：原来那句「配好 Key 后点测试连接」和界面对不上——
+     * 这家 models 为空，「测试连接」按钮是 disabled 的，用户照 note 做不了；改成先拉模型的路径。
      */
-    note: "端点待核实：目录里给的是 zenmux.ai/api/v1，我们没实测过这家；配好 Key 后点「测试连接」验证。",
+    note: "端点待核实：目录里给的是 zenmux.ai/api/v1，我们没实测过这家。这家没内置模型——先到「模型」页签拉取（或手动加一个），再回「连接」点「测试连接」验证。",
   },
   {
     id: "moonshot-cn",
@@ -150,6 +155,7 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
       textToSpeech: { protocol: "mimo-tts", baseUrl: "https://api.xiaomimimo.com/v1", models: ["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+    note: "api.xiaomimimo.com/v1：目录给的端点，未实测；这家自带语音能力（speech mimo-v2.5-asr / textToSpeech mimo-v2.5-*）——把「语音识别」角色指到它，通话就不必依赖 Chrome 的在线识别。",
   },
   {
     id: "minimax",
@@ -166,8 +172,12 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
       music: { protocol: "minimax-music", baseUrl: "https://api.minimaxi.com", models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
-    /** 实测口径（原来错挂在 zenmux 上）：国内 key 认 api.minimaxi.com，国际版换 api.minimax.io；音乐 API 已对新用户关闭。 */
-    note: "国内 key（sk-cp-…）走 api.minimaxi.com：实测 OpenAI 兼容端点是 https://api.minimaxi.com/v1（857ms 回复），同一把 key 在 api.minimax.io 会报 invalid api key；shadow 预设里的 /anthropic 是 Anthropic 协议，我们的适配器不会说，所以这里改成了 /v1。国际版把 Base URL 与各能力端点换成 api.minimax.io。另外 MiniMax 的 music API 已对新用户关闭（HTTP 410 / 2153），音乐请用本地合成器。",
+    /**
+     * 实测口径（原来错挂在 zenmux 上）：国内 key 认 api.minimaxi.com，国际版换 api.minimax.io；
+     * 音乐 API 已对新用户关闭。MiniMax preset-note-sweep #410 ③ 补：语音识别也是这家，
+     * 而且它直接决定通话能不能用（没配 speech 时通话只能退回 Chrome 在线识别=国内不通）。
+     */
+    note: "国内 key（sk-cp-…）走 api.minimaxi.com：实测 OpenAI 兼容端点是 https://api.minimaxi.com/v1（857ms 回复），同一把 key 在 api.minimax.io 会报 invalid api key；shadow 预设里的 /anthropic 是 Anthropic 协议，我们的适配器不会说，所以这里改成了 /v1。国际版把 Base URL 与各能力端点换成 api.minimax.io。另外 MiniMax 的 music API 已对新用户关闭（HTTP 410 / 2153），音乐请用本地合成器。语音识别（speech, asr-1.0）同样走这一家：把它选成「语音识别」角色，通话就用桥式 STT，不再依赖 Chrome 的在线识别。",
   },
   {
     id: "aliyun",
