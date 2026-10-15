@@ -20,7 +20,7 @@ import {
   type Rect,
 } from "../lib/orb-position.ts";
 import { callOrbMode, type OrbVisualMode } from "../lib/orb-states.ts";
-import type { CallState } from "../lib/call-words.ts";
+import type { CallState } from "../lib/call-states.ts";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
 import { GlassSphere } from "./OrbGlass";
 
@@ -89,7 +89,7 @@ export function ButlerOrb({
   running?: boolean;
   /** 真通话（App.tsx 的通话状态机）开着没有——球的姿态随它走，不再自己骗自己。 */
   voiceMode?: boolean;
-  /** 通话五态（call-words.ts 是唯一词源）：听/想/说 + 没听清/断线。 */
+  /** 通话五态（类型住 lib/call-states，词与字幕住 lib/call-words——球只消费态，不碰词）。 */
   voiceState?: CallState;
   /** App 侧实时电平（0–1）：说话时球的呼吸跟着真麦克风，不另开一路采集。 */
   voiceLevel?: () => number;

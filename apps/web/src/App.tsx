@@ -117,7 +117,8 @@ import {
 import { createBridgeTTS, createSystemTTS, splitSentences, type TTSProvider } from "./lib/tts";
 import { createBridgeSTT, createBrowserSTT, type STTProvider, type STTSession } from "./lib/stt";
 import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
-import { CALL_START_HINT, UNCLEAR_HOLD_MS, callWord, type CallState } from "./lib/call-words";
+import { CALL_START_HINT, OFFLINE_CAPTION, UNCLEAR_CAPTION, UNCLEAR_HOLD_MS, callWord } from "./lib/call-words";
+import type { CallState } from "./lib/call-states";
 
 declare global {
   interface Window {
@@ -2968,9 +2969,9 @@ export function App() {
            * 通话没起来（麦克风被拒等）时也要把话说出来——否则用户点球什么都不发生，
            * 字幕是唯一能解释「为什么没反应」的地方。
            *
-           * F-1 五态各一行（状态词全部来自 call-words.ts，一处改、处处改）：
-           * 没听清 = 一句话 + 「改成打字」按钮（≤12 字，留给用户做的决定）；
-           * 断了 = 「点球重连」（琥珀，不是红——可恢复）。
+           * F-1 五态各一行（通话相关文案只有 call-words.ts 一处：状态词 callWord + 两条字幕常量）：
+           * 没听清 = UNCLEAR_CAPTION + 「改成打字」按钮（≤12 字，留给用户做的决定）；
+           * 断了 = OFFLINE_CAPTION（琥珀，不是红——可恢复）。
            */
           voiceMode
             ? voiceState === "speaking"
@@ -2978,9 +2979,9 @@ export function App() {
               : voiceState === "thinking"
                 ? (voiceNotice ?? callWord("thinking"))
                 : voiceState === "unclear"
-                  ? "没听清，再说一遍？"
+                  ? UNCLEAR_CAPTION
                   : voiceState === "offline"
-                    ? "断了 · 点球重连"
+                    ? OFFLINE_CAPTION
                     : voicePartial !== ""
                       ? voicePartial
                       : callHintOn

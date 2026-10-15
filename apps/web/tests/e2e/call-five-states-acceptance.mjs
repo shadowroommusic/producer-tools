@@ -155,10 +155,12 @@ try {
       text: document.querySelector("[data-call-caption]")?.textContent ?? "",
       action: document.querySelector("[data-caption-action]")?.textContent ?? null,
     }));
+    /** 字幕字面量从词表模块读（MiniMax #393 ③：App 里写死的字面量会漂移且测不出，改成与模块比）。 */
+    const wantUnclear = await page.evaluate(async () => (await import("/src/lib/call-words.ts")).UNCLEAR_CAPTION);
     check(
       "① 转写回空 → unclear（琥珀晃 + 字幕 + 「改成打字」）",
-      reached === "unclear" && detail.dot === "unclear" && detail.text.includes("没听清") && detail.action === "改成打字",
-      `data-mode=${reached} 点=${detail.dot} 字幕=「${detail.text.trim()}」 按钮=${detail.action}（stt 调用 ${sttCalls.length} 次）`,
+      reached === "unclear" && detail.dot === "unclear" && detail.text.includes(wantUnclear) && detail.action === "改成打字",
+      `data-mode=${reached} 点=${detail.dot} 字幕=「${detail.text.trim()}」（词表=${wantUnclear}） 按钮=${detail.action}（stt 调用 ${sttCalls.length} 次）`,
     );
     await page.screenshot({ path: `${SHOTS}/unclear.png` });
     await page.context().close();
@@ -223,6 +225,7 @@ try {
     const reached = await startCallAndReach(page, "offline");
     const text = (await caption(page)).trim();
     const dot = await page.locator(".sr-orb-caption-dot").getAttribute("data-state").catch(() => null);
+    const wantOffline = await page.evaluate(async () => (await import("/src/lib/call-words.ts")).OFFLINE_CAPTION);
     await page.screenshot({ path: `${SHOTS}/offline.png` });
     const t0 = Date.now();
     await page.locator(".sr-orb-ball").click();
@@ -235,8 +238,8 @@ try {
     const notice = await page.locator(".sr-voicebar-notice").count();
     check(
       "④ 转写报错 → offline（字幕 ≤12 字）→ 点球重连 ≤300ms",
-      reached === "offline" && text.length <= 12 && dot === "offline" && (await mode(page)) === "listening" && ms <= 300 && notice === 0,
-      `data-mode=${reached} 字幕=「${text}」(${text.length} 字) 点=${dot} 重连 ${ms}ms，重连后错误行 ${notice} 条`,
+      reached === "offline" && text === wantOffline && text.length <= 12 && dot === "offline" && (await mode(page)) === "listening" && ms <= 300 && notice === 0,
+      `data-mode=${reached} 字幕=「${text}」(${text.length} 字，词表=${wantOffline}) 点=${dot} 重连 ${ms}ms，重连后错误行 ${notice} 条`,
     );
     await page.context().close();
   }

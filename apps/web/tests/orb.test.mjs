@@ -50,18 +50,25 @@ test("运动通道专属守卫（MiniMax #387 ④）：通话五态不许只靠�
   /**
    * 上面那条统计的是全部 10 个通道，纯颜色差就能满足——色盲用户（约 8%）就分不出来了。
    * 这条只看运动五通道（drift/wobble/ripple/swirl/breathe）：
-   *   任意两态 ≥1 个运动通道不同；F-1 新两态（unclear/offline）对其它任一态 ≥2 个不同。
+   *   任意两态之间，必须有**可感知**的运动差——MiniMax #393 ④ 打回第一版：只数「几个通道不同」
+   *   会放过 drift 差 0.0001 这种肉眼为零的差异。所以口径改成幅度线：
+   *   ① 存在某个连续运动通道 |差| ≥ 0.02（drift 单位 turns/s，0.02 ≈ 肉眼可辨的最小档），
+   *      或 ② 开关类通道（ripple/swirl，0↔1）翻转。
+   *   覆盖范围也扩到七态（#393 ④ 缺口 b）：原版只查通话五态，把 listening↔working 这对
+   *   既有债放过去了——那条债已在 ORB_STATES.working.drift（0.08→0.16）里治掉。
    */
   const MOTION = ["drift", "wobble", "ripple", "swirl", "breathe"];
-  const CALL = ["listening", "thinking", "speaking", "unclear", "offline"];
-  const diff = (a, b) => MOTION.filter((c) => Math.abs(ORB_STATES[a][c] - ORB_STATES[b][c]) > 1e-9).length;
-  for (let i = 0; i < CALL.length; i += 1) {
-    for (let j = i + 1; j < CALL.length; j += 1) {
-      const n = diff(CALL[i], CALL[j]);
-      assert.ok(n >= 1, `${CALL[i]} 与 ${CALL[j]} 的运动签名完全相同（只靠颜色分）`);
-      if (CALL[i] === "unclear" || CALL[i] === "offline" || CALL[j] === "unclear" || CALL[j] === "offline") {
-        assert.ok(n >= 2, `${CALL[i]} 与 ${CALL[j]} 只有 ${n} 个运动通道不同（新两态要更明显）`);
-      }
+  const TOGGLES = ["ripple", "swirl"];
+  const RAMP = ["drift", "wobble", "breathe"];
+  const perceivable = (a, b) =>
+    TOGGLES.some((c) => ORB_STATES[a][c] !== ORB_STATES[b][c]) ||
+    RAMP.some((c) => Math.abs(ORB_STATES[a][c] - ORB_STATES[b][c]) >= 0.02);
+  for (let i = 0; i < MODES.length; i += 1) {
+    for (let j = i + 1; j < MODES.length; j += 1) {
+      assert.ok(
+        perceivable(MODES[i], MODES[j]),
+        `${MODES[i]} 与 ${MODES[j]} 的运动差不可感知（幅度 <0.02 且无开关通道翻转）——只靠颜色分`,
+      );
     }
   }
 });

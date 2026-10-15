@@ -47,7 +47,12 @@ export const ORB_STATES: Record<
   listening: { hueA: 228, hueB: 300, drift: 0.06, rimAlpha: 0.88, rimWidth: 0.16, glow: 0.7, breathe: 0, wobble: 0.03, ripple: 0, swirl: 0 },
   speaking: { hueA: 140, hueB: 190, drift: 0.05, rimAlpha: 0.85, rimWidth: 0.12, glow: 0.72, breathe: 0, wobble: 0.03, ripple: 1, swirl: 0 },
   thinking: { hueA: 272, hueB: 318, drift: 0.55, rimAlpha: 0.9, rimWidth: 0.1, glow: 0.75, breathe: 0, wobble: 0.02, ripple: 0, swirl: 1 },
-  working: { hueA: 210, hueB: 262, drift: 0.08, rimAlpha: 0.6, rimWidth: 0.1, glow: 0.55, breathe: 0, wobble: 0.025, ripple: 0, swirl: 0 },
+  /**
+   * 干活：drift 0.08 → 0.16（MiniMax #393 ④ 缺口 b）。原来 listening(0.06) 与 working(0.08)
+   * 在运动五通道上只差 0.02 漂移——肉眼几乎分不开、全靠颜色，色盲用户就分不出来。翻倍后
+   * 与在听拉开 0.10（≥0.02 幅度线），且仍在「追边最快的是 thinking 0.55」之下，通道分工不乱。
+   */
+  working: { hueA: 210, hueB: 262, drift: 0.16, rimAlpha: 0.6, rimWidth: 0.1, glow: 0.55, breathe: 0, wobble: 0.025, ripple: 0, swirl: 0 },
   /**
    * 没听清：琥珀慢闪 + 明显横向晃动（wobble 全场最高、drift 慢），一眼区别于 listening 的呼吸。
    * 它是「请你再说一次」的邀请，不是错误——所以不熄灭、不红。

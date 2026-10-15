@@ -10,8 +10,6 @@
  */
 import type { CallState } from "./call-states.ts";
 
-export type { CallState };
-
 const WORDS: Record<CallState, string> = {
   listening: "在听…",
   thinking: "在想…",
@@ -37,3 +35,13 @@ export const UNCLEAR_HOLD_MS = 2500;
  * 第一句话开始就撤掉——提示不该在整通话里占着字幕位。
  */
 export const CALL_START_HINT = "说就行 · 点球挂断";
+
+/**
+ * unclear / offline 两态的球字幕：状态词 + **行动指引**（两件事，所以不复用 WORDS 里那两行）。
+ *
+ * 为什么也放这里（MiniMax #393 ③ 的缺口）：字幕字面量散在 App.tsx 里时，改词表不会同步字幕、
+ * 漂移也没有测试能发现；放进词表模块 = 「球上出现的通话文案只有一处」这条规矩才真的成立。
+ * 两条都 ≤12 字（F-1 验收线），点球在 unclear=重说、offline=重连，Esc 永远是挂断。
+ */
+export const UNCLEAR_CAPTION = "没听清，再说一遍？";
+export const OFFLINE_CAPTION = "断了 · 点球重连";
