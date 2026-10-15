@@ -10,12 +10,30 @@ import { useEffect, useState } from "react";
 import { callTool } from "../lib/mcp";
 import type { ToolCall } from "./ToolCallRow";
 
-type Tab = "library" | "preview" | "convert";
+type Tab = "library" | "preview" | "convert" | "backup";
 type Direction = "rb2serato" | "serato2rb";
 
 type Paths = { rekordboxDatabase: string; rekordboxDir: string; seratoDatabase: string };
 
 type SetList = { set_count?: number; sets?: Array<{ name: string; track_count: number }> };
+
+/** #93 第 3 刀：设备库备份——候选设备与快照报告（与桥 device_candidates/device_snapshot 同形）。 */
+type DeviceCandidate = { path: string; name: string; has_pdb: boolean; has_anlz: boolean };
+type DeviceCandidates = { candidates?: DeviceCandidate[] };
+type SnapshotReport = {
+  mode?: string;
+  device_root?: string;
+  snapshot_dir?: string;
+  playlists?: number;
+  tracks?: number;
+  bpm?: number;
+  cues?: number;
+  cues_hot?: number;
+  cues_memory?: number;
+  warnings?: string[];
+  pruned?: string[];
+  keep?: number;
+};
 
 type Preview = {
   direction?: string;
@@ -97,6 +115,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "library", label: "曲库" },
   { id: "preview", label: "预览" },
   { id: "convert", label: "转换" },
+  { id: "backup", label: "设备备份" },
 ];
 
 const MATCH_LABEL: Record<string, string> = {
@@ -180,6 +199,11 @@ export function ConverterPanel({
   const [apply, setApply] = useState(false);
   const [xmlPath, setXmlPath] = useState("");
 
+  // #93 第 3 刀：设备库备份（只读设备；档位留存 N=5 在桥层做）
+  const [candidates, setCandidates] = useState<DeviceCandidate[] | null>(null);
+  const [backupRoot, setBackupRoot] = useState("");
+  const [snapshot, setSnapshot] = useState<SnapshotReport | null>(null);
+
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
   }, [paths]);
@@ -197,6 +221,14 @@ export function ConverterPanel({
 
   const rb = { rekordbox_database: paths.rekordboxDatabase, rekordbox_dir: paths.rekordboxDir };
   const ready = connected && !busy;
+
+  // 打开「设备备份」tab 时列一次候选设备（/Volumes 下有 PIONEER 目录的根；只读）
+  useEffect(() => {
+    if (tab === "backup" && candidates === null && connected) {
+      void invoke("device_candidates", {}, "列设备候选");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, connected]);
 
   async function invoke(tool: string, args: Record<string, unknown>, summary: string) {
     const id = `${tool}-${Date.now()}`;
@@ -225,6 +257,18 @@ export function ConverterPanel({
         onEnd(id, {
           status: "ok",
           summary: `${value.source?.track_count ?? 0} → ${value.target?.asset_count ?? 0}`,
+          detail: text.slice(0, 4000),
+        });
+      } else if (tool === "device_candidates") {
+        const value = parsed as DeviceCandidates;
+        setCandidates(value.candidates ?? []);
+        onEnd(id, { status: "ok", summary: `${value.candidates?.length ?? 0} 个候选设备`, detail: text.slice(0, 4000) });
+      } else if (tool === "device_snapshot") {
+        const value = parsed as SnapshotReport;
+        setSnapshot(value);
+        onEnd(id, {
+          status: "ok",
+          summary: `${value.playlists ?? 0} 个歌单 · ${value.tracks ?? 0} 首 · cue ${value.cues ?? 0}`,
           detail: text.slice(0, 4000),
         });
       } else {
@@ -337,6 +381,80 @@ export function ConverterPanel({
               <p className="sr-plugin-hint sr-plugin-hint--dim">
                 点一个名字可以填进"转换"里的播放列表字段。
               </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === "backup" && (
+        <>
+          <div className="sr-plugin-options sr-plugin-options--stack">
+            <label className="sr-field">
+              <span className="sr-field-label sr-mono">设备根（只读快照，绝不写设备）</span>
+              <input
+                className="sr-input"
+                value={backupRoot}
+                placeholder="/Volumes/HIKSEMI"
+                spellCheck={false}
+                onChange={(event) => setBackupRoot(event.target.value)}
+              />
+            </label>
+            <div className="sr-plugin-candidates">
+              {(candidates ?? []).map((candidate) => (
+                <button
+                  key={candidate.path}
+                  type="button"
+                  className="sr-chip"
+                  data-on={backupRoot === candidate.path || undefined}
+                  title={`${candidate.path}（${candidate.has_pdb ? "有 pdb" : "无 pdb"} · ${candidate.has_anlz ? "有 ANLZ" : "无 ANLZ"}）`}
+                  onClick={() => setBackupRoot(candidate.path)}
+                >
+                  {candidate.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="sr-chip"
+                disabled={!ready}
+                onClick={() => void invoke("device_candidates", {}, "列设备候选")}
+              >
+                {candidates === null ? "扫描 /Volumes…" : "刷新候选"}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="sr-btn sr-btn--accent sr-plugin-run"
+            disabled={!ready || backupRoot.trim().length === 0}
+            onClick={() => void invoke("device_snapshot", { device_root: backupRoot.trim() }, "设备库快照")}
+          >
+            {busy ? "快照中…" : "备份设备库"}
+          </button>
+          <p className="sr-plugin-hint sr-plugin-hint--dim">
+            档位落在 exports/device-backups/&lt;设备&gt;-&lt;时间戳&gt;/，保留最近 5 份（多出的按旧到新剪除）。
+          </p>
+          {snapshot && (
+            <div className="sr-plugin-result">
+              <div className="sr-plugin-stats">
+                <Stat label="歌单" value={snapshot.playlists ?? 0} />
+                <Stat label="曲目" value={snapshot.tracks ?? 0} />
+                <Stat label="BPM" value={snapshot.bpm ?? 0} />
+                <Stat label="cue" value={snapshot.cues ?? 0} />
+                <Stat label="剪除旧档" value={(snapshot.pruned ?? []).length} />
+              </div>
+              <p className="sr-plugin-hint sr-mono">{snapshot.snapshot_dir}</p>
+              {(snapshot.warnings ?? []).map((warning) => (
+                <p key={warning} className="sr-plugin-hint">{warning}</p>
+              ))}
+              {(snapshot.pruned ?? []).length > 0 && (
+                <ul className="sr-plugin-list">
+                  {(snapshot.pruned ?? []).map((dir) => (
+                    <li key={dir} className="sr-plugin-timeline-row">
+                      <span className="sr-plugin-timeline-title sr-mono">已剪除 {dir}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </>
