@@ -61,8 +61,34 @@ const trashHas = (base) => trashHasFresh(base, 0);
 // 下一次 send2trash 静默覆盖、新文件凭空消失，清理不干净后面两条 trash 断言就会假摔）。
 const cleanTrashFixtures = () => {
   execSync(
-    `python3 -c "from pathlib import Path;[p.unlink() for p in (Path.home()/'.Trash').glob('libaccept-*')]"`,
+    `python3 -c "from pathlib import Path;home=Path.home();[p.unlink() for pattern in ('libaccept-*','trash-capability-probe*') for p in (home/'.Trash').glob(pattern)]"`,
   );
+};
+
+/**
+ * 废纸篓能力探针（2026-10-16 实修）：这条命令链（Codex 终端 → node → python3）常常**没有**
+ * 废纸篓写入权限，此时 send2trash 会「源文件消失、废纸篓里没有」地静默失败。插件端的自检
+ * （core.track_remove 落点复验）会如实报错并保留库行——这是防「静默丢文件」的设计，不是 bug。
+ * 所以：探针不过时，下面三条依赖废纸篓的断言转成 SKIP（打印原因），不冒充产品失败。
+ */
+const trashCapable = (() => {
+  const probe = `${FIX}/trash-capability-probe.wav`;
+  cpSync(`${RECORDINGS}/hum-test.wav`, probe);
+  const started = Date.now();
+  try {
+    execSync(`python3 -c "from send2trash import send2trash;send2trash('${probe}')"`);
+  } catch {
+    return false;
+  }
+  const landed = ["trash-capability-probe.wav", "trash-capability-probe 2.wav"].some((name) => {
+    const target = `${TRASH}/${name}`;
+    return existsSync(target) && statSync(target).mtimeMs >= started - 1000;
+  });
+  return landed;
+})();
+const checkTrash = (name, ok, detail) => {
+  if (trashCapable) { check(name, ok, detail); return; }
+  console.log(`SKIP  ${name} — ${detail}（本进程链无废纸篓权限：send2trash 静默删除且文件不入 ~/.Trash；插件自检按设计报错并保留库行）`);
 };
 
 // ---- fixture：软链 8 首 + 三类副本 + ffmpeg 重编码的声学对/同名对 + 真 cover.jpg
@@ -130,7 +156,10 @@ await page.getByRole("button", { name: "扫描文件夹", exact: true }).click()
 await page.waitForFunction(
   (want) => document.querySelector('[data-slot="scan-progress"]')?.textContent?.includes(want),
   `新入库 ${AUDIO_COUNT}`,
-  { timeout: 30000 },
+  // 30s 是 #94 B1 之前的窗口：那时扫完就结束。现在扫完自动接「封面+分析」管线，
+  // 16 首（fpcalc + BPM + 调性）在冷缓存上要 1–2 分钟，总结句要等管线收尾才出现。
+  // 实测（2026-10-16）：窗口拉到 240s 后 16 行正常入库；过短会留下 fixture 残留。
+  { timeout: 240000 },
 );
 const scanLine = await page.locator('[data-slot="scan-progress"]').textContent();
 const statsAfter = await call("stats", {});
@@ -143,6 +172,14 @@ check(
   `stats ${statsBefore.tracks}→${statsAfter.tracks}；进度位：${scanLine.trim()}；通用通知条=${strayNotice}`,
 );
 await page.screenshot({ path: `${SHOTS}/02-scanned.png` });
+
+// ② 的数字基准必须在扫描**之后**重取：#94 B1 起扫描尾巴会自动给全库缺分析的曲目补 BPM/调性，
+// 行数在扫描期间会变（2026-10-16 实测：16 首 fixture 触发全库补分析，bpm80-90 从 20 涨到 100+，
+// 旧脚本拿扫描前的快照等，等到超时）。
+const capped = (count) => Math.min(count, 200); // UI 一屏最多 200 行，桥口径要跟着封顶
+expected.bpm = capped((await call("list_tracks", { bpm_min: 80, bpm_max: 90, limit: 300 })).tracks.length);
+expected.camelot = capped((await call("list_tracks", { camelot: "8A", limit: 300 })).tracks.length);
+expected.tag = capped((await call("list_tracks", { tags: ["house"], limit: 300 })).tracks.length);
 
 // ---- ② 筛选逐项
 await search("libaccept");
@@ -263,7 +300,7 @@ if (onAccGroup) {
   const accFileGone = !existsSync(`${FIX}/libaccept-acc.wav`);
   const accRowGone = (await call("list_tracks", { query: "libaccept-acc", limit: 20 })).tracks.filter((t) => t.path.endsWith("libaccept-acc.wav")).length === 0;
   dupDetail = `字段高亮行=${differRows} · 底注「${foot.trim()}」 · reasons「${reasons.trim().slice(0, 40)}」 · 保留后 文件消失=${accFileGone} 库行没了=${accRowGone}`;
-  check(
+  checkTrash(
     "⑮ 查重弹窗：两卡对比+不一致高亮+不会自动删；保留这条→另一条移出原位、库行删（落 Trash 见 ⑫b）",
     differRows >= 1 && foot.includes("不会自动删") && accFileGone && accRowGone,
     dupDetail,
@@ -315,7 +352,7 @@ await page.getByRole("button", { name: "移入废纸篓", exact: true }).click()
 await page.waitForTimeout(1000);
 const trashFileGone = !existsSync(`${FIX}/libaccept-trash.wav`);
 const trashRowGone = (await call("list_tracks", { query: "libaccept-trash", limit: 10 })).tracks.length === 0;
-check(
+checkTrash(
   "⑫ 移到废纸篓：§3 文案+默认焦点取消+小字链接；文件离原位、库行删",
   trashTitle.includes("删除以下文件？") && trashNote.includes("移入系统废纸篓") && focusIsCancel && permaLink === 1 && trashFileGone && trashRowGone,
   `标题「${trashTitle.trim()}」· 焦点取消=${focusIsCancel} · 小字链接=${permaLink} · 文件消失=${trashFileGone} 库行没了=${trashRowGone}`,
@@ -328,7 +365,7 @@ cpSync(`${STEMS}/drums.wav`, roundFile);
 execSync(`python3 -c "from send2trash import send2trash;send2trash('${roundFile}')"`);
 const roundGone = !existsSync(roundFile);
 const roundInTrash = trashHasFresh("libaccept-roundtrip.wav");
-check(
+checkTrash(
   "⑫b 废纸篓机制对照（本机直调 send2trash）：文件真落 ~/.Trash、可找回",
   roundGone && roundInTrash,
   `源消失=${roundGone} · Trash 有=${roundInTrash}；过桥不落地=桥父进程 TCC（已报总线，建议插件落点后自检）`,
@@ -360,13 +397,22 @@ await page.locator(".sr-lib-row", { hasText: "libaccept-04" }).first().click();
 await page.waitForSelector(".sr-lib-drawer .sr-lib-cues", { timeout: 10000 });
 const drawerText = await page.locator(".sr-lib-drawer").textContent();
 const coverSlot = await page.locator('.sr-lib-drawer [data-slot="cover"]').count();
+const metaFields = await page.locator(".sr-lib-drawer .sr-lib-meta span").count();
+const missBadges = await page.locator(".sr-lib-drawer .sr-lib-miss").count();
+// #94 B1 起扫尾自动补分析会把 fixture 也补上：抽屉里 BPM/调性可能是值、也可能是「—」+缺徽标。
+// 断言只锁「元信息块渲染了、cue 只读说明在、封面位在」，不锁具体是值还是缺口。
 const drawerHas =
-  drawerText.includes("libaccept-04") && drawerText.includes("时长") && drawerText.includes("缺 BPM") && drawerText.includes("缺 调性") && drawerText.includes("这首还没有 cue") && drawerText.includes("在 DJ 页编辑");
+  drawerText.includes("libaccept-04") &&
+  drawerText.includes("时长") &&
+  drawerText.includes("BPM") &&
+  drawerText.includes("调性") &&
+  drawerText.includes("这首还没有 cue") &&
+  drawerText.includes("在 DJ 页编辑");
 await page.screenshot({ path: `${SHOTS}/04-drawer.png` });
 check(
   "③ 详情抽屉有元信息/缺口/cue 只读块 + 封面位",
-  drawerHas && coverSlot === 1,
-  `标题/时长/缺口徽标/cue 来源句/只读说明 ${drawerHas ? "齐" : "缺"} · 封面位=${coverSlot}`,
+  drawerHas && coverSlot === 1 && metaFields >= 4,
+  `标题/时长/BPM/调性/cue 来源句/只读说明 ${drawerHas ? "齐" : "缺"} · 元信息字段=${metaFields} · 缺徽标=${missBadges} · 封面位=${coverSlot}`,
 );
 const cueWriteControls = await page.locator(".sr-lib-cues").locator("button, input, select, textarea, [contenteditable='true']").count();
 const colorInputs = await page.locator(".sr-lib").locator("input[type='color']").count();
