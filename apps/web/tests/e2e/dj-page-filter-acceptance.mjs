@@ -14,7 +14,8 @@ await page.waitForTimeout(1800);
 for (const query of ["lofi", "voice", "bass"]) {
   await page.getByLabel("搜索").fill(query);
   await page.waitForTimeout(900); // 250ms 防抖 + 查询
-  const text = await page.locator(".sr-dj-count").innerText();
+  // .sr-dj-count 现在有四处（set 看板/set 列表/曲目库/推荐）——范围锁到曲目库那一个
+  const text = await page.locator(".sr-dj-library .sr-dj-count").innerText();
   const ui = Number((text.match(/共\s*(\d+)/) ?? [])[1]);
   const bridgeRows = (await callTool("library", "list_tracks", { query, limit: 200 })).tracks.length;
   console.log(`${ui === bridgeRows ? "PASS" : "FAIL"}  筛选「${query}」：UI ${text} vs bridge ${bridgeRows} 行`);

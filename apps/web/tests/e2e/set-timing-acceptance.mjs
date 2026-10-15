@@ -92,11 +92,33 @@ check(
 );
 
 // ② AI 排序 = order_set 输出
+// 期望值必须用**页面同一份 payload**：页面走 lib/dj-plan.ts 的 plannerTrackPayload（真实 bpm/
+// camelot/energy/cue 名 A/B）。旧脚本塞的是 bpm/key/energy=null 的假 payload，planner 看到的
+// 输入不同 → 顺序天然可能不同，是量法错不是功能错（2026-10-16 实修）。
 const planPayload = {
-  tracks: expectedSegments.map((row) => ({
-    id: String(row.id), title: row.title, bpm: null, key: null, energy: null, duration_ms: row.duration,
-    cues: [{ position_ms: row.inMs, role: "in" }, { position_ms: row.outMs, role: "out" }],
-  })),
+  tracks: await Promise.all(
+    expectedSegments.map(async (row) => {
+      const detail = await callTool("library", "track_detail", { id: row.id });
+      return {
+        id: String(detail.id),
+        title: detail.title ?? "",
+        artist: detail.artist ?? "",
+        bpm: detail.bpm,
+        key: detail.camelot ?? detail.key,
+        genres: detail.genre ? [detail.genre] : [],
+        energy: detail.energy,
+        duration_ms: detail.duration_ms,
+        cues: (detail.cues ?? [])
+          .filter((cue) => cue.role === "in" || cue.role === "out" || (cue.kind === "loop" && cue.end_ms != null))
+          .map((cue) => ({
+            name: cue.role === "out" ? "B" : "A",
+            position_ms: cue.position_ms,
+            kind: cue.kind === "loop" ? "loop" : "cue",
+            end_ms: cue.kind === "loop" ? (cue.end_ms ?? undefined) : undefined,
+          })),
+      };
+    }),
+  ),
 };
 const ordered = await callTool("planner", "order_set", { set: planPayload });
 const expectedOrder = (ordered.ordered_ids ?? ordered.order ?? []).map((x) => (typeof x === "string" ? x : x.id));
