@@ -21,7 +21,11 @@ export const CAPABILITIES: ReadonlyArray<{ kind: CapabilityKind; label: string; 
   { kind: "agent", label: "主模型 · Main", hint: "对话、写歌、调用工具——只有它出现在对话页的模型开关里" },
   { kind: "tts", label: "语音合成 · TTS", hint: "把文字念出来（朗读回复、语音通话里的声音）" },
   { kind: "voice_clone", label: "音色克隆 · Voice Clone", hint: "用一段样本做自己的音色，给语音合成用" },
-  { kind: "stt", label: "语音识别 · STT", hint: "把你说的话转成文字（默认用浏览器自带的）" },
+  {
+    kind: "stt",
+    label: "语音识别 · STT",
+    hint: "把你说的话转成文字。不配就用浏览器自带的——Chrome 的识别要连 Google（国内常连不上），桌面包里没有它；配一家（如 MiniMax asr-1.0）通话才算真的能用。",
+  },
   { kind: "image", label: "生图 · Image", hint: "封面、配图这类图像生成" },
   { kind: "music", label: "音乐生成 · Music", hint: "让模型按描述写一段音乐（本地合成器之外的第二条路）" },
 ];

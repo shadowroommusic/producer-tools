@@ -211,6 +211,27 @@ const MEDIA_PROTOCOLS = {
   },
 };
 
+/**
+ * 语音识别（STT）协议表 —— 和 TTS 一样是「每家形状不同」的适配层。
+ *
+ * MiniMax 的形状是**实测**出来的（2026-10-16，用户 key 真打）：`POST /v1/speech_to_text`，
+ * `multipart/form-data`，表单字段 `model=asr-1.0` + `file=<wav>`，返回 JSON `{text, duration}`。
+ * （先按 OpenAI 的 `/audio/transcriptions` 猜了一轮全是 404；官方错误信息里点名了要求的字段与型号。）
+ * OpenAI 兼容端点走同一张表的 `openai-transcriptions`（`/audio/transcriptions` + file/model）。
+ */
+const STT_PROTOCOLS = {
+  "minimax-asr": {
+    path: "/v1/speech_to_text",
+    fields: (input) => ({ model: input.model || "asr-1.0" }),
+    pick: (payload) => ({ text: String(payload?.text ?? ""), duration: payload?.duration ?? null }),
+  },
+  "openai-transcriptions": {
+    path: "/audio/transcriptions",
+    fields: (input) => ({ model: input.model }),
+    pick: (payload) => ({ text: String(payload?.text ?? "") }),
+  },
+};
+
 
 /** 一轮 chat 请求：把文本与工具调用都收齐（文本仍然按流式解析）。 */
 export async function runChatRound({ base, headers, model, messages, tools, temperature, onTextDelta }) {
@@ -714,13 +735,13 @@ function resolveCredential(reference) {
 const CREDENTIAL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 /** One HTTP call to a provider, with the key attached the way that protocol expects. */
-async function callProvider({ baseUrl, reference, protocol }, path, init) {
+async function callProvider({ baseUrl, reference, protocol }, path, init, options = {}) {
   const credential = reference === null || reference === undefined ? null : resolveCredential(reference);
   const headers = { ...(init?.headers ?? {}) };
   if (credential !== null && protocol !== "elevenlabs") headers.authorization = `Bearer ${credential.value}`;
   if (credential !== null && protocol === "elevenlabs") headers["xi-api-key"] = credential.value;
   const url = `${String(baseUrl).replace(/\/+$/, "")}${path}`;
-  const response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(20_000) });
+  const response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(options.timeoutMs ?? 20_000) });
   return { response, credential };
 }
 
@@ -1539,6 +1560,57 @@ const http = createServer(async (request, response) => {
         });
       } catch (cause) {
         json(response, 200, { error: `取音色失败：${cause instanceof Error ? cause.message : String(cause)}` });
+      }
+      return;
+    }
+
+    /**
+     * 语音识别：把一句录音（base64 WAV）交给供应商的 STT，拿回文字。
+     *
+     * 为什么要有这条：浏览器自带的 SpeechRecognition 要连 Google 的识别服务（国内基本连不上），
+     * 桌面包里干脆没有这个 API（DECISIONS ADR-018）。没有它，通话只能「听见自己」——
+     * 用户 2026-10 的实测结论就是「根本用不了」。这里按 STT_PROTOCOLS 适配各家形状，
+     * key 只留在桥里（和 TTS 同一条规矩）。
+     */
+    if (request.method === "POST" && url.pathname === "/api/agent/providers/stt") {
+      const body = await readJsonBody(request, 64 * 1024 * 1024);
+      const audioBase64 = String(body.audio ?? "");
+      const provider = {
+        baseUrl: String(body.baseUrl ?? "").trim(),
+        reference: body.credentialRef ?? null,
+        protocol: body.protocol ?? "openai",
+      };
+      const protocolName = typeof body.protocolName === "string" && body.protocolName !== "" ? body.protocolName : String(provider.protocol);
+      const adapter = STT_PROTOCOLS[protocolName];
+      if (adapter === undefined) {
+        json(response, 400, { error: `未知识别协议：${protocolName}（可用：${Object.keys(STT_PROTOCOLS).join(", ")}）` });
+        return;
+      }
+      if (audioBase64 === "" || provider.baseUrl === "") {
+        json(response, 400, { error: "缺少 audio 或端点" });
+        return;
+      }
+      try {
+        const audio = Buffer.from(audioBase64, "base64");
+        const form = new FormData();
+        for (const [key, value] of Object.entries(adapter.fields({ model: body.model, format: body.format }))) {
+          if (value !== undefined && value !== null && value !== "") form.set(key, String(value));
+        }
+        form.set("file", new Blob([audio], { type: String(body.format ? `audio/${body.format}` : "audio/wav") }), "turn.wav");
+        const started = Date.now();
+        const { response: upstream } = await callProvider(
+          { ...provider, protocol: provider.protocol ?? "openai" },
+          adapter.path,
+          { method: "POST", body: form },
+          { timeoutMs: 120_000 },
+        );
+        if (!upstream.ok) throw new Error(await providerFailure(upstream));
+        const payload = await upstream.json().catch(() => ({}));
+        const picked = adapter.pick(payload);
+        console.log(`[agent] stt ${protocolName} ${audio.length}B → ${JSON.stringify(picked.text).slice(0, 60)} (${Date.now() - started}ms)`);
+        json(response, 200, picked);
+      } catch (cause) {
+        json(response, 200, { error: `识别失败：${cause instanceof Error ? cause.message : String(cause)}` });
       }
       return;
     }

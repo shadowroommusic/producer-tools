@@ -66,6 +66,10 @@ export function ButlerOrb({
   onDraftChange,
   onSubmit,
   running = false,
+  voiceMode,
+  voiceState = "listening",
+  voiceLevel,
+  onCallToggle,
 }: {
   mode?: OrbMode;
   progress?: number;
@@ -73,6 +77,14 @@ export function ButlerOrb({
   onDraftChange?: (next: string) => void;
   onSubmit?: () => void;
   running?: boolean;
+  /** 真通话（App.tsx 的通话状态机）开着没有——球的姿态随它走，不再自己骗自己。 */
+  voiceMode?: boolean;
+  /** 通话阶段：听（麦克风波）/ 想（识别+模型）/ 说（TTS 播放）。 */
+  voiceState?: "listening" | "thinking" | "speaking";
+  /** App 侧实时电平（0–1）：说话时球的呼吸跟着真麦克风，不另开一路采集。 */
+  voiceLevel?: () => number;
+  /** 有了它，点球 = 开始/挂断真通话；没有则退回本地电平演示（旧行为）。 */
+  onCallToggle?: () => void;
 }) {
   const [position, setPosition] = useState(
     () =>
@@ -81,7 +93,8 @@ export function ButlerOrb({
   );
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [callOn, setCallOn] = useState(false);
+  /** 本地演示通话（没有 onCallToggle 时的旧行为：只有麦克风电平，不接会话）。 */
+  const [localCallOn, setLocalCallOn] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [localDraft, setLocalDraft] = useState("");
   const meterRef = useRef<VoiceMeter | null>(null);
@@ -90,7 +103,8 @@ export function ButlerOrb({
   const rafRef = useRef<number | null>(null);
   const reducedMotion = useRef(false);
   /** 点球即通话：面板/拖动之外，单击球的语义。 */
-  const [voiceLevel, setVoiceLevel] = useState(0);
+  /** 本地模式下球自己的麦克风电平（外部通话时改用 App 的 voiceLevel getter）。 */
+  const [micLevel, setMicLevel] = useState(0);
 
   const value = draft ?? localDraft;
   const setValue = onDraftChange ?? setLocalDraft;
@@ -100,8 +114,22 @@ export function ButlerOrb({
   });
 
   const forced = (typeof window !== "undefined" ? window.localStorage.getItem("qa-orb-force") : null) as OrbMode | null;
+  /**
+   * 通话状态以 App 为准（外部模式）还是以球自己为准（本地模式）。
+   * 用户点球最重要的期待是「说话它能听见并回答」——只要 App 给了 onCallToggle，
+   * 球就不再自己维护一份 callOn，界面与真通话无法走散。
+   */
+  const externalCall = onCallToggle !== undefined;
+  const callOn = externalCall ? voiceMode === true : localCallOn;
+  const callPhase: OrbMode = externalCall
+    ? voiceState === "speaking"
+      ? "speaking"
+      : voiceState === "thinking"
+        ? "thinking"
+        : "listening"
+    : "listening";
   const effectiveMode: OrbMode =
-    mode ?? forced ?? (running ? "working" : callOn ? (voiceActive ? "listening" : "listening") : "idle");
+    mode ?? forced ?? (running ? "working" : callOn ? callPhase : "idle");
   // 验收钩子（生产不触发）：qa-orb-progress 只在强制模式下顶替 progress，让「干活」弧可确定性截图。
   const qaProgress =
     forced !== null && typeof window !== "undefined"
@@ -126,7 +154,7 @@ export function ButlerOrb({
 
   // 点球即通话：通话开着才持有共享麦克风引用；RMS 喂给玻璃珠。
   useEffect(() => {
-    if (!callOn) return;
+    if (!callOn || externalCall) return;
     let cancelled = false;
     let detach: (() => void) | null = null;
     void acquireMicrophone()
@@ -149,35 +177,43 @@ export function ButlerOrb({
       detach?.();
       releaseMicrophone();
     };
-  }, [callOn]);
+  }, [callOn, externalCall]);
 
   useEffect(() => {
-    if (!callOn) {
+    if (!callOn || externalCall) {
       setVoiceActive(false);
-      setVoiceLevel(0);
+      setMicLevel(0);
       return;
     }
     const id = window.setInterval(() => {
       const meter = meterRef.current;
       if (meter === null) return;
       const level = FINITE(meter.level(), 0);
-      setVoiceLevel(level);
+      setMicLevel(level);
       setVoiceActive(latch.current.update(level));
     }, 33);
     return () => window.clearInterval(id);
-  }, [callOn]);
+  }, [callOn, externalCall]);
 
-  const toggleCall = useCallback(() => setCallOn((on) => !on), []);
+  const toggleCall = useCallback(() => {
+    if (externalCall) onCallToggle?.();
+    else setLocalCallOn((on) => !on);
+  }, [externalCall, onCallToggle]);
 
   // Esc 挂断。
   useEffect(() => {
     if (!callOn) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setCallOn(false);
+      if (event.key !== "Escape") return;
+      if (externalCall) {
+        if (voiceMode) onCallToggle?.();
+      } else {
+        setLocalCallOn(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [callOn]);
+  }, [callOn, externalCall, onCallToggle, voiceMode]);
 
   // 拖动 + 点球即通话。
   // 指针事件只挂在球面上，但**只有距球心 32px 内（64px 命中圆）的轻点才是点球**：球面外圈
@@ -230,7 +266,9 @@ export function ButlerOrb({
     const tick = (now: number) => {
       const dt = FINITE(now - last, 16) / 120;
       last = now;
-      const target = effectiveMode === "listening" ? voiceLevel : 0;
+      /* 外部通话的电平来自 App 的同一条采集流；本地模式才用球自己的表。 */
+      const live = externalCall ? (voiceLevel?.() ?? 0) : micLevel;
+      const target = effectiveMode === "listening" ? live : 0;
       levelRef.current += (FINITE(target, 0) - levelRef.current) * Math.min(1, dt);
       rafRef.current = window.requestAnimationFrame(tick);
     };
@@ -238,7 +276,7 @@ export function ButlerOrb({
     return () => {
       if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
     };
-  }, [effectiveMode, voiceLevel]);
+  }, [effectiveMode, voiceLevel, micLevel, externalCall]);
 
   const size = active ? ACTIVE_SIZE : ORB_SIZE;
 

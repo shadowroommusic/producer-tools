@@ -152,6 +152,10 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
     capabilities: {
       image: { protocol: "minimax-image", baseUrl: "https://api.minimaxi.com", models: ["image-01", "image-01-live"] },
       textToSpeech: { protocol: "minimax-t2a", baseUrl: "https://api.minimaxi.com", models: ["speech-2.8-hd", "speech-2.8-turbo"] },
+      // 语音识别：形状 2026-10-16 用用户 key 实测（/v1/speech_to_text，multipart，asr-1.0）。
+      // 之前 MiniMax 这家没有 speech 一条 —— 所以「语音识别」在设置里根本选不到它，
+      // 通话只能退回 Chrome 自带的识别（要连 Google，国内不通）= 用户说的「根本用不了」。
+      speech: { protocol: "minimax-asr", baseUrl: "https://api.minimaxi.com", models: ["asr-1.0"] },
       music: { protocol: "minimax-music", baseUrl: "https://api.minimaxi.com", models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",

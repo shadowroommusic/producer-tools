@@ -115,7 +115,7 @@ import {
   type VoiceCapture,
 } from "./lib/voice";
 import { createBridgeTTS, createSystemTTS, splitSentences, type TTSProvider } from "./lib/tts";
-import { createBrowserSTT, type STTSession } from "./lib/stt";
+import { createBridgeSTT, createBrowserSTT, type STTProvider, type STTSession } from "./lib/stt";
 import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
 import {
   createSession,
@@ -237,7 +237,36 @@ export function App() {
   const voiceSession = useRef<STTSession | null>(null);
   /** One recogniser and one speaker for the whole call — implemented behind the interfaces in
       `lib/stt.ts` / `lib/tts.ts`, so the desktop build swaps them without touching this logic. */
-  const stt = useRef(createBrowserSTT());
+  const stt = useRef<STTProvider | null>(null);
+  const sttKey = useRef("");
+  /**
+   * Where speech-to-text comes from.
+   *
+   * A configured 语音识别 role wins: the recording goes through the bridge (key stays there) and the
+   * text comes back as one piece at the end of the turn. With no role configured the browser's own
+   * recogniser keeps working — but be honest about it: Chrome's recogniser needs Google's service
+   * (measured unusable on this network) and Electron has none at all (ADR-018). That's why the
+   * settings hint for STT now says to配置一家供应商.
+   */
+  const currentSTT = (): STTProvider => {
+    const target = roleTarget(modelSettings, "stt");
+    const key = target === undefined ? "browser" : `${target.provider.id}:${target.model}:${target.provider.credentialRef ?? ""}`;
+    if (stt.current === null || sttKey.current !== key) {
+      if (target === undefined) {
+        stt.current = createBrowserSTT();
+      } else {
+        const capability = capabilityTarget(target.provider, "stt");
+        stt.current = createBridgeSTT({
+          baseUrl: capability.baseUrl,
+          credentialRef: target.provider.credentialRef,
+          protocol: capability.protocol,
+          model: target.model,
+        });
+      }
+      sttKey.current = key;
+    }
+    return stt.current;
+  };
   /**
    * Which voice the call speaks with.
    *
@@ -971,6 +1000,11 @@ export function App() {
   }, []);
 
   const listen = useCallback(() => {
+    /**
+     * 回合制识别（桥式）：没有流式会话可开——说话时只走端点检测，回合结束由 finishTurn
+     * 把 WAV 交给 transcribe。浏览器识别则是流式的，照旧开会话收 partial/final。
+     */
+    if (currentSTT().transcribe !== undefined) return;
     if (voiceSession.current !== null) return;
     const token = listenToken.current + 1;
     listenToken.current = token;
@@ -980,7 +1014,7 @@ export function App() {
     setVoicePartial("");
     // A fresh turn: the endpointer starts from "nothing heard yet".
     turnRef.current?.reset();
-    voiceSession.current = stt.current.start({
+    voiceSession.current = currentSTT().start({
       onPartial: (text) => {
         if (!current()) return;
         /**
@@ -1033,10 +1067,38 @@ export function App() {
 
   /** The user stopped talking: hand the turn over, with the WAV of that phrase attached. */
   const finishTurn = useCallback(async () => {
-    const text = [heardRef.current, partialRef.current]
+    let text = [heardRef.current, partialRef.current]
       .map((part) => part.trim())
       .filter((part) => part !== "")
       .join(" ");
+    const wav = capture.current?.takeWav() ?? null;
+    /**
+     * 回合制识别：流式识别器没给过字（桥式 STT 根本没开会话），就把这一回的 WAV 交给它。
+     * 识别期间状态是「想」——用户看到的是「正在识别…」，说完不用再点任何东西。
+     */
+    const provider = currentSTT();
+    if (provider.transcribe !== undefined && text === "") {
+      if (wav === null) {
+        turnRef.current?.reset();
+        return;
+      }
+      moveVoice("thinking");
+      setVoiceNotice("正在识别…");
+      const result = await provider.transcribe(wav);
+      if ("error" in result) {
+        setVoiceNotice(result.error);
+        moveVoice("listening");
+        return;
+      }
+      text = result.text.trim();
+      if (text === "") {
+        setVoiceNotice("没听清，再说一遍？");
+        moveVoice("listening");
+        return;
+      }
+      setVoiceNotice(null);
+      heardRef.current = text;
+    }
     if (text === "") {
       // Noise, not words: keep listening, no turn is opened.
       turnRef.current?.reset();
@@ -1049,11 +1111,16 @@ export function App() {
      */
     setVoicePartial("");
     moveVoice("thinking");
-    const wav = capture.current?.takeWav() ?? null;
     const path = wav === null ? null : await saveRecording(wav, "voice");
     const mentions: Mention[] =
       path === null ? [] : [{ name: path.split("/").pop() ?? "voice.wav", path, label: "这段语音" }];
     submitRef.current(text, { mentions });
+    /**
+     * 回合交出去了，下一回从空白开始。流式路径由 listen() 复位；回合制（桥式 STT）没有
+     * 那个会话，必须在这里收尾，否则第二句话会和第一句拼在一起发出去。
+     */
+    heardRef.current = "";
+    partialRef.current = "";
   }, []);
   finishRef.current = () => void finishTurn();
 
@@ -1107,6 +1174,11 @@ export function App() {
     });
     setVoiceMode(true);
     moveVoice("listening");
+    // 回合制识别没有 listen() 的复位，这里显式开一个新回合。
+    heardRef.current = "";
+    partialRef.current = "";
+    setVoicePartial("");
+    turnRef.current.reset();
     listenRef.current();
   }, []);
 
@@ -2647,6 +2719,10 @@ export function App() {
         onDraftChange={setDraft}
         onSubmit={() => void submit()}
         running={running}
+        voiceMode={voiceMode}
+        voiceState={voiceState}
+        voiceLevel={() => level.current}
+        onCallToggle={() => (voiceMode ? hangUp() : void startCall())}
       />
     </>
   );
