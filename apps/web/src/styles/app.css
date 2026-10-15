@@ -2973,9 +2973,31 @@
   }
 }
 
-/* 预设已把端点填好时，这些字段收起来（点「自定义」或编辑已有供应商时才展开）。 */
-.sr-provider-form[data-hidden] {
-  display: none;
+/* F-8：预设供应商的「高级」折叠开关——默认折叠且内容不渲染（首帧 0），展开才挂载。 */
+.sr-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sr-advanced-toggle:hover {
+  color: var(--sr-label-primary);
+}
+
+.sr-advanced-caret {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+
+.sr-advanced-toggle[aria-expanded="true"] .sr-advanced-caret {
+  transform: rotate(90deg);
 }
 
 /* ── 供应商编辑页：页签、模型管理、模型档（照 Shadow 的三页签与模型列表） ── */

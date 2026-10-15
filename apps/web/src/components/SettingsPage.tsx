@@ -52,7 +52,7 @@ import {
   type ModelProfile,
   type ReasoningCapability,
 } from "../lib/providerModel";
-import { PRESET_CAPABILITY_KIND, PROVIDER_PRESETS, presetById, presetProtocol } from "../lib/providerPresets";
+import { PROVIDER_PRESETS, presetById, providerDefaultsFromPreset } from "../lib/providerPresets";
 import { deleteCredential, listCredentials, listProviderModels, saveCredential, testRole, type CredentialInfo } from "../lib/providerApi";
 import { createSystemTTS, type VoiceInfo } from "../lib/tts";
 
@@ -305,6 +305,22 @@ export function SettingsPage({
     [],
   );
 
+  /**
+   * F-8 基本层的「测试连接」：输入框里有草稿 Key 就先存（本地拼好带 credentialRef 的 provider，
+   * 不等 onChange 重渲染——否则这次测试拿的是旧 Key 状态），再测这家第一个对话模型。
+   */
+  const testProviderConnection = useCallback(
+    async (provider: ProviderProfile, draft: string, model: string) => {
+      let target = provider;
+      if (draft !== "") {
+        const name = await saveKey(provider, draft);
+        target = { ...provider, credentialRef: provider.credentialRef ?? name };
+      }
+      await runTest(target, "agent", model);
+    },
+    [saveKey, runTest],
+  );
+
   return (
     <section className="sr-settings">
       <header className="sr-settings-head">
@@ -445,6 +461,7 @@ export function SettingsPage({
                 onProfile={(model, profile) => onChange(setModelProfile(settings, editingProvider?.id ?? "", model, profile))}
                 onCapability={(kind, config) => onChange(setCapability(settings, editingProvider?.id ?? "", kind, config))}
                 onTest={(kind, model) => editingProvider !== null && void runTest(editingProvider, kind, model)}
+                onTestConnection={(provider, draft, model) => void testProviderConnection(provider, draft, model)}
                 providers={settings.providers}
               />
             ))}
@@ -672,6 +689,7 @@ function ProviderEditor({
   onProfile,
   onCapability,
   onTest,
+  onTestConnection,
 }: {
   provider: ProviderProfile;
   isNew: boolean;
@@ -688,10 +706,18 @@ function ProviderEditor({
   onProfile: (model: string, profile: ModelProfile | null) => void;
   onCapability: (kind: CapabilityKind, config: { protocol: EndpointFormat; baseUrl: string; models: string[] } | null) => void;
   onTest: (kind: CapabilityKind, model: string) => void;
+  /** F-8：基本层的「测试连接」——先存草稿 Key 再测（实现见 SettingsPage.testProviderConnection）。 */
+  onTestConnection: (provider: ProviderProfile, draft: string, model: string) => void;
 }) {
   const [keyDraft, setKeyDraft] = useState("");
   const [presetId, setPresetId] = useState("");
-  const [custom, setCustom] = useState(!isNew);
+  /**
+   * 自定义 = 全量表单直接展开（F-8 只把「预设」收进基本/高级）。编辑已有供应商时：
+   * 带 presetSource 的按预设处理（基本层起步），没带的就是手配的，照旧全展开。
+   */
+  const [custom, setCustom] = useState(() => !isNew && provider.presetSource === undefined);
+  /** 「高级」折叠层：默认折叠且**不渲染**（首帧 0，F-8 性能红线）。 */
+  const [advanced, setAdvanced] = useState(false);
   const [editingModel, setEditingModel] = useState<{ kind: CapabilityKind; model: string } | null>(null);
   const credential = credentials.find((entry) => entry.name === provider.credentialRef);
   const problems = providerProblems(provider);
@@ -706,30 +732,53 @@ function ProviderEditor({
     const preset = presetById(id);
     if (preset === undefined) return;
     setCustom(false);
-    /**
-     * 能力也一起预填：Shadow 的目录里 MiniMax / Xiaomi / Volcengine 这些家写了各自的 TTS、生图、
-     * 音乐端点与模型，选它们的时候不该让用户再填一遍。协议名从 Shadow 的说法翻成我们的线格式。
-     */
-    const capabilities: ProviderProfile["capabilities"] = {};
-    for (const [key, config] of Object.entries(preset.capabilities ?? {})) {
-      const kind = PRESET_CAPABILITY_KIND[key as keyof typeof PRESET_CAPABILITY_KIND];
-      if (kind === undefined) continue;
-      capabilities[kind] = {
-        protocol: presetProtocol(config.protocol),
-        baseUrl: config.baseUrl === "" ? preset.baseUrl : config.baseUrl,
-        models: config.models,
-      };
-    }
-    onChange({
-      ...provider,
-      name: preset.label,
-      baseUrl: preset.baseUrl,
-      presetSource: preset.id,
-      models: preset.models,
-      capabilities,
-      ...(preset.note === undefined ? {} : {}),
-    });
+    setAdvanced(false);
+    onChange({ ...provider, ...providerDefaultsFromPreset(preset) });
   };
+
+  /** 预设基本层测哪个模型：这家的第一个对话模型（MiniMax = MiniMax-M3）。 */
+  const basicTestModel = provider.models[0];
+  const basicTest = basicTestModel === undefined ? undefined : tests[`${provider.id}:agent:${basicTestModel}`];
+  /** 没粘草稿 Key 时按钮该不该亮：已配过 Key 能直接测；credentialRef=null（本地服务）不需要 Key。 */
+  const keyMissing = provider.credentialRef !== null && (credential === undefined || credential.source === "missing");
+
+  /** 「高级」层与自定义共用的连接字段：名称、Base URL、协议、Credential（Key 永远在基本层）。 */
+  const connectionFields = (
+    <>
+      <label className="sr-field">
+        <span className="sr-field-label sr-mono">名称</span>
+        <input className="sr-input" value={provider.name} onChange={(event) => onChange({ ...provider, name: event.target.value })} />
+      </label>
+      <label className="sr-field sr-field--wide">
+        <span className="sr-field-label sr-mono">Base URL</span>
+        <input className="sr-input" spellCheck={false} value={provider.baseUrl} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} />
+      </label>
+      <label className="sr-field">
+        <span className="sr-field-label sr-mono">协议</span>
+        <select
+          className="sr-input"
+          value={provider.endpointFormat}
+          onChange={(event) => onChange({ ...provider, endpointFormat: event.target.value as EndpointFormat })}
+        >
+          {ENDPOINT_FORMATS.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="sr-field">
+        <span className="sr-field-label sr-mono">Credential{credential === undefined ? "" : ` · ${credential.source === "missing" ? "未配置" : credential.masked}`}</span>
+        <input
+          className="sr-input"
+          spellCheck={false}
+          value={provider.credentialRef ?? ""}
+          placeholder={credentialNameFor(provider.name || "provider", credentials.map((entry) => entry.name))}
+          onChange={(event) => onChange({ ...provider, credentialRef: event.target.value === "" ? null : event.target.value })}
+        />
+      </label>
+    </>
+  );
 
   return (
     <div className="sr-provider-editor">
@@ -780,56 +829,72 @@ function ProviderEditor({
               </select>
             </label>
           )}
-          <div className="sr-provider-form" data-hidden={isNew && !custom || undefined}>
-            <label className="sr-field">
-              <span className="sr-field-label sr-mono">名称</span>
-              <input className="sr-input" value={provider.name} onChange={(event) => onChange({ ...provider, name: event.target.value })} />
-            </label>
-            <label className="sr-field sr-field--wide">
-              <span className="sr-field-label sr-mono">Base URL</span>
-              <input className="sr-input" spellCheck={false} value={provider.baseUrl} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} />
-            </label>
-            <label className="sr-field">
-              <span className="sr-field-label sr-mono">协议</span>
-              <select
-                className="sr-input"
-                value={provider.endpointFormat}
-                onChange={(event) => onChange({ ...provider, endpointFormat: event.target.value as EndpointFormat })}
-              >
-                {ENDPOINT_FORMATS.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="sr-field">
-              <span className="sr-field-label sr-mono">Credential{credential === undefined ? "" : ` · ${credential.source === "missing" ? "未配置" : credential.masked}`}</span>
-              <input
-                className="sr-input"
-                spellCheck={false}
-                value={provider.credentialRef ?? ""}
-                placeholder={credentialNameFor(provider.name || "provider", credentials.map((entry) => entry.name))}
-                onChange={(event) => onChange({ ...provider, credentialRef: event.target.value === "" ? null : event.target.value })}
-              />
-            </label>
-            <label className="sr-field sr-field--wide">
-              <span className="sr-field-label sr-mono">API Key（只写，不回显）</span>
-              <div className="sr-key-row">
-                <input className="sr-input" type="password" spellCheck={false} value={keyDraft} placeholder="sk-…" onChange={(event) => setKeyDraft(event.target.value)} />
-                <button
-                  type="button"
-                  className="sr-btn sr-btn--accent"
-                  disabled={keyDraft.trim() === ""}
-                  onClick={() => {
-                    void onSaveKey(provider, keyDraft.trim()).then(() => setKeyDraft(""));
-                  }}
-                >
-                  保存 Key
-                </button>
+          {(!isNew || custom) &&
+            (custom ? (
+              /* 自定义：全部字段直接展开——F-8 的折叠只针对带预设的，这家本来就是让人自己填的。 */
+              <div className="sr-provider-form">
+                {connectionFields}
+                <label className="sr-field sr-field--wide">
+                  <span className="sr-field-label sr-mono">API Key（只写，不回显）</span>
+                  <div className="sr-key-row">
+                    <input className="sr-input" type="password" spellCheck={false} value={keyDraft} placeholder="sk-…" onChange={(event) => setKeyDraft(event.target.value)} />
+                    <button
+                      type="button"
+                      className="sr-btn sr-btn--accent"
+                      disabled={keyDraft.trim() === ""}
+                      onClick={() => {
+                        void onSaveKey(provider, keyDraft.trim()).then(() => setKeyDraft(""));
+                      }}
+                    >
+                      保存 Key
+                    </button>
+                  </div>
+                </label>
               </div>
-            </label>
-          </div>
+            ) : (
+              <>
+                {/*
+                  F-8 基本层：预设已把端点/协议/推理档定好（收进「高级」，默认值单测钉住），
+                  这里只问 Key + 测试——配 MiniMax = 选预设 → 粘 Key → 点测试连接，两次点击。
+                */}
+                <div className="sr-provider-form">
+                  <label className="sr-field sr-field--wide">
+                    <span className="sr-field-label sr-mono">API Key（只写，不回显）</span>
+                    <div className="sr-key-row">
+                      <input className="sr-input" type="password" spellCheck={false} value={keyDraft} placeholder="sk-…" onChange={(event) => setKeyDraft(event.target.value)} />
+                      <button
+                        type="button"
+                        className="sr-btn sr-btn--accent"
+                        disabled={basicTestModel === undefined || basicTest === "running" || (keyDraft.trim() === "" && keyMissing)}
+                        title={basicTestModel === undefined ? "这家预设没内置模型——保存 Key 后到「模型」页签拉取" : undefined}
+                        onClick={() => {
+                          if (basicTestModel === undefined) return;
+                          const draft = keyDraft.trim();
+                          onTestConnection(provider, draft, basicTestModel);
+                          if (draft !== "") setKeyDraft("");
+                        }}
+                      >
+                        {basicTest === "running" ? "测试中…" : "测试连接"}
+                      </button>
+                    </div>
+                  </label>
+                </div>
+                {basicTest !== undefined && basicTest !== "running" && (
+                  <p className="sr-role-test sr-mono" data-ok={basicTest.ok || undefined}>
+                    {basicTest.ok ? "✓" : "✗"} {basicTest.detail}
+                    {basicTest.ms === undefined ? "" : ` · ${basicTest.ms} ms`}
+                  </p>
+                )}
+                <button type="button" className="sr-advanced-toggle" aria-expanded={advanced} onClick={() => setAdvanced((current) => !current)}>
+                  <span className="sr-advanced-caret" aria-hidden="true">
+                    ▸
+                  </span>
+                  高级（名称 · Base URL · 协议 · Credential）
+                </button>
+                {/* 折叠时不渲染（首帧 0）；展开才挂载。端点/协议默认值来自预设，按端点认家在 bridge 兜底。 */}
+                {advanced && <div className="sr-provider-form">{connectionFields}</div>}
+              </>
+            ))}
           {problems.length > 0 && <p className="sr-settings-problem">{problems.join(" · ")}</p>}
           {presetId !== "" && presetId !== "__custom" && presetById(presetId)?.note !== undefined && (
             <p className="sr-role-test sr-mono">{presetById(presetId)?.note}</p>
@@ -837,7 +902,9 @@ function ProviderEditor({
           {provider.credentialRef !== null && (
             <p className="sr-role-test sr-mono" data-ok={credential !== undefined && credential.source !== "missing" || undefined}>
               {credential === undefined || credential.source === "missing"
-                ? "Key 还未配置：粘贴后点「保存 Key」"
+                ? custom
+                  ? "Key 还未配置：粘贴后点「保存 Key」"
+                  : "Key 还未配置：粘贴后点「测试连接」（会先存 Key 再测）"
                 : credential.source === "env"
                   ? `Key 来自环境变量 ${credential.variable}`
                   : `Key 已配置（${credential.masked}）`}

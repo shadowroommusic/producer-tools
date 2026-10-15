@@ -10,6 +10,8 @@
  *    我们的 bridge 现在只会说 HTTP。
  */
 
+import type { ProviderProfile } from "./providers.ts";
+
 export type ProviderPresetCapability = {
   /** Shadow 里这一项能力用的协议名。 */
   protocol: string;
@@ -213,3 +215,28 @@ export const PRESET_CAPABILITY_KIND = {
   textToSpeech: "tts",
   music: "music",
 } as const;
+
+/**
+ * 选一家预设时填进供应商表单的默认值 —— SettingsPage 的 choosePreset 用它，
+ * 单测在这里把每家的默认值钉住（F-8：折叠层的默认值写错就是静默错配）。
+ * 端点/协议的进一步兜底（f57b571「按端点认家」）在 bridge 的 resolveMediaProtocol，这里不动。
+ */
+export function providerDefaultsFromPreset(
+  preset: ProviderPreset,
+): Pick<ProviderProfile, "name" | "baseUrl" | "presetSource" | "models" | "capabilities"> {
+  /**
+   * 能力也一起预填：Shadow 的目录里 MiniMax / Xiaomi / Volcengine 这些家写了各自的 TTS、生图、
+   * 音乐端点与模型，选它们的时候不该让用户再填一遍。协议名从 Shadow 的说法翻成我们的线格式。
+   */
+  const capabilities: ProviderProfile["capabilities"] = {};
+  for (const [key, config] of Object.entries(preset.capabilities ?? {})) {
+    const kind = PRESET_CAPABILITY_KIND[key as keyof typeof PRESET_CAPABILITY_KIND];
+    if (kind === undefined) continue;
+    capabilities[kind] = {
+      protocol: presetProtocol(config.protocol),
+      baseUrl: config.baseUrl === "" ? preset.baseUrl : config.baseUrl,
+      models: config.models,
+    };
+  }
+  return { name: preset.label, baseUrl: preset.baseUrl, presetSource: preset.id, models: preset.models, capabilities };
+}
