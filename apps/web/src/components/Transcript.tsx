@@ -8,6 +8,7 @@
 import { NoticeRow } from "./NoticeRow";
 import { ReasoningRow } from "./ReasoningRow";
 import { ToolCallRow, type ToolCall } from "./ToolCallRow";
+import { reasoningSeconds } from "../lib/reasoning-title";
 import type { ChatMessage } from "../lib/sessions";
 
 export function Transcript({
@@ -24,7 +25,7 @@ export function Transcript({
 }) {
   return (
     <>
-      {messages.map((message) => {
+      {messages.map((message, index) => {
         if (message.role === "user") {
           return (
             <div key={message.id} className="sr-msg-user">
@@ -52,14 +53,23 @@ export function Transcript({
         }
         if (message.role === "reasoning") {
           if (quiet) return null;
-          return <ReasoningRow key={message.id} text={message.text} running={message.streaming === true} />;
+          // 思考块只记开始（at），「想了多久」从下一条消息何时到推导，不另存状态。
+          const next = messages[index + 1];
+          const seconds =
+            message.streaming === true || next === undefined ? undefined : reasoningSeconds(message.at, next.at);
+          return (
+            <ReasoningRow
+              key={message.id}
+              text={message.text}
+              running={message.streaming === true}
+              seconds={seconds}
+            />
+          );
         }
         if (message.role === "usage") {
-          return (
-            <p key={message.id} className="sr-usage sr-mono">
-              {message.text}
-            </p>
-          );
+          // tokens 读数是开发者读数，不进对话页（Kimi F-5）：挂 title，hover 才见；
+          // 行本体收成一条细悬停带，页面默认态搜不到 "tokens" 字样。
+          return <p key={message.id} className="sr-usage sr-mono" title={message.text} />;
         }
         const call = calls.find((entry) => entry.id === message.callId);
         return call === undefined ? null : <ToolCallRow key={message.id} call={call} />;

@@ -471,7 +471,7 @@
 
 /* ---------- tool calls ---------- */
 
-/* Think row: 24px collapsed, one-line summary, sweep while it is still streaming. */
+/* Think row: 24px collapsed, title only（「想了 N 秒」）——英文原文只在展开层（F-5）。 */
 .sr-think {
   display: flex;
   flex-direction: column;
@@ -541,45 +541,6 @@
   color: var(--sr-label-primary);
 }
 
-.sr-think-sep {
-  flex: none;
-  width: 2px;
-  height: 2px;
-  margin: 0 8px;
-  border-radius: 1px;
-  background: var(--sr-label-caption);
-}
-
-.sr-think-summary {
-  display: block;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--sr-label-tertiary);
-  font-size: var(--sr-text-13);
-  white-space: nowrap;
-}
-
-.sr-think-summary[data-follow-end] {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.sr-think-summary-text {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sr-think-summary[data-follow-end] .sr-think-summary-text {
-  flex: 0 0 auto;
-  width: max-content;
-  min-width: 100%;
-  overflow: visible;
-  text-align: start;
-  text-overflow: clip;
-}
-
 .sr-think-body {
   padding: 4px 0 4px 22px;
   color: var(--sr-label-tertiary);
@@ -589,9 +550,10 @@
   word-break: break-word;
 }
 
-/* Turn accounting: one dim mono line at the end of a finished turn. */
+/* Turn accounting: tokens/耗时读数只活在 title 里（hover 才见，F-5），本体是一条细悬停带。 */
 .sr-usage {
-  margin: 0;
+  height: 8px;
+  margin: 2px 0 0;
   color: var(--sr-label-caption);
   font-size: 11px;
   letter-spacing: 0.02em;

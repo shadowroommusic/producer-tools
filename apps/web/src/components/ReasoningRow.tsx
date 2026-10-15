@@ -1,27 +1,25 @@
 /**
  * Assistant reasoning, folded into a 24px row — the shape DeepSeek Harness gives a Think block.
  *
- * Collapsed, the row shows a one-line summary: while the block is still streaming it follows the
- * latest line (with a sweep across the row), and once it settles it shows the first line. Expanding
- * shows the whole text.
+ * Collapsed, the row only says how long the model thought（「想了 N 秒」，进行中「在想…」）——
+ * the English text never shows here, it lives in the expand body only（Kimi UI 评审 F-5）.
+ * Streaming still sweeps across the row so "working" stays visible at a glance.
  */
 import { useState } from "react";
 import { IconChevronDown, IconChevronRight, IconThink } from "./icons";
+import { reasoningTitle } from "../lib/reasoning-title";
 
-function firstLine(text: string): string {
-  const newline = text.indexOf("\n");
-  return newline === -1 ? text : text.slice(0, newline);
-}
-
-function latestLine(text: string): string {
-  const visible = text.trimEnd();
-  const newline = visible.lastIndexOf("\n");
-  return newline === -1 ? visible : visible.slice(newline + 1);
-}
-
-export function ReasoningRow({ text, running }: { text: string; running: boolean }) {
+export function ReasoningRow({
+  text,
+  running,
+  seconds,
+}: {
+  text: string;
+  running: boolean;
+  /** 想了的秒数——Transcript 从「下一条消息的 at」推导，推不出（无可推导的结束点）就不传。 */
+  seconds?: number;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const summary = (running ? latestLine(text) : firstLine(text)).replaceAll("**", "");
   const Chevron = expanded ? IconChevronDown : IconChevronRight;
 
   return (
@@ -38,15 +36,7 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
         <span className="sr-think-glyph">
           <IconThink size={14} />
         </span>
-        <span className="sr-think-title">思考</span>
-        {!expanded && (
-          <>
-            <span className="sr-think-sep" aria-hidden="true" />
-            <span className="sr-think-summary" data-follow-end={running || undefined}>
-              <span className="sr-think-summary-text">{summary}</span>
-            </span>
-          </>
-        )}
+        <span className="sr-think-title">{reasoningTitle(running, seconds)}</span>
       </button>
       {expanded && <div className="sr-think-body">{text}</div>}
     </div>
