@@ -988,6 +988,11 @@ export function App() {
    * 字幕把「在听 → 在想 → 在说」三态写成一行字：说的话有回声、识别有回执、思考有等待感。
    */
   const [spokenSentence, setSpokenSentence] = useState<string | null>(null);
+  /**
+   * 通话刚起时的一行用法提示（「说就行 · 点球挂断」）。第一句话开始（有 partial 或回合提交）
+   * 就撤掉——提示是给第一次用的人看的，不该在整通话里占着字幕位。
+   */
+  const [callHintOn, setCallHintOn] = useState(false);
   const turnRef = useRef<TurnDetector | null>(null);
   const bargeRef = useRef<BargeInDetector | null>(null);
   /** Bumped on every interruption, so a canceled answer's `onend` cannot resume the call twice. */
@@ -1024,6 +1029,7 @@ export function App() {
     voiceSession.current = currentSTT().start({
       onPartial: (text) => {
         if (!current()) return;
+        if (text !== "") setCallHintOn(false);
         /**
          * Full duplex: the recogniser keeps running while the answer plays. Words heard then belong
          * to the *next* turn — they are buffered, not discarded, which is what makes "no, wait —"
@@ -1117,6 +1123,7 @@ export function App() {
      * detector decides they were meant for us.
      */
     setVoicePartial("");
+    setCallHintOn(false);
     moveVoice("thinking");
     const path = wav === null ? null : await saveRecording(wav, "voice");
     const mentions: Mention[] =
@@ -1181,6 +1188,7 @@ export function App() {
     });
     setVoiceMode(true);
     moveVoice("listening");
+    setCallHintOn(true);
     // 回合制识别没有 listen() 的复位，这里显式开一个新回合。
     heardRef.current = "";
     partialRef.current = "";
@@ -1199,6 +1207,7 @@ export function App() {
     turnRef.current = null;
     bargeRef.current = null;
     setVoicePartial("");
+    setCallHintOn(false);
     setVoiceMode(false);
   }, []);
 
@@ -2749,7 +2758,9 @@ export function App() {
                 ? (voiceNotice ?? "在想…")
                 : voicePartial !== ""
                   ? voicePartial
-                  : "在听…"
+                  : callHintOn
+                    ? "说就行 · 点球挂断"
+                    : "在听…"
             : (voiceNotice ?? undefined)
         }
       />
