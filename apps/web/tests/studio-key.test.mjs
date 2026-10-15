@@ -30,7 +30,7 @@ test("parseProjectKey: 中文与升降号（含 ♭/♯ 全角符号）", () => 
   assert.deepEqual(parseProjectKey("Db"), { pc: 1, mode: "major" });
   assert.deepEqual(parseProjectKey("B♭m"), { pc: 10, mode: "minor" });
   assert.deepEqual(parseProjectKey("G♯"), { pc: 8, mode: "major" });
-  assert.deepEqual(parseProjectKey("c#m"), { pc: 4, mode: "minor" });
+  assert.deepEqual(parseProjectKey("c#m"), { pc: 1, mode: "minor" }); // C# minor → pc 1（原稿笔误 4=E）
 });
 
 test("parseProjectKey: Camelot 轮（A 面小调 / B 面大调）", () => {
