@@ -174,7 +174,15 @@ export const forgetPreferences = (forgetHistory: boolean) =>
   tool<{ removed: { preference_model: boolean; history: boolean } }>("forget_preferences", { forget_history: forgetHistory });
 
 export const analyzeMissing = (limit = 25) =>
-  tool<{ candidates: number; analysed: number; failed: number; errors: string[]; ms: number }>("analyze_missing", { limit });
+  tool<{
+    candidates: number;
+    analysed: number;
+    failed: number;
+    missing_files: number;
+    key_skipped_low_confidence: number;
+    errors: string[];
+    ms: number;
+  }>("analyze_missing", { limit });
 
 export const setList = () => tool<{ sets: SetRow[] }>("set_list", {}).then((res) => res.sets);
 
