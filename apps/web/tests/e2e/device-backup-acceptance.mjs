@@ -85,12 +85,29 @@ try {
   check("① 「设备备份」tab 在", await backupTab.count() > 0, "ConverterPanel tab 栏");
   await backupTab.click();
 
-  const chip = page.getByRole("button", { name: "FAKEDEV" });
-  await chip.waitFor({ timeout: 15000 }).catch(() => {});
-  check("② 候选列出 fixture 假盘", await chip.count() > 0, "device_candidates 经桥转发");
-  if (await chip.count() > 0) await chip.click();
-
-  await page.getByRole("button", { name: "备份设备库" }).click();
+  // 候选列表默认扫 /Volumes，fixture 在临时目录 → 候选逻辑用 volumes_root 直连桥验，
+  // UI 侧走手填「设备根」路径（真实场景两者都可用）。
+  let candOk = false;
+  let candDetail = "";
+  try {
+    const resp = await fetch("http://127.0.0.1:8787/api/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        server: "converter", tool: "device_candidates",
+        arguments: { volumes_root: join(fixtureRoot, "..") },
+      }),
+    });
+    const body = await resp.json();
+    const text = String(body.result ?? "");
+    candOk = text.includes("FAKEDEV") || text.includes("fixture") || text.includes(fixtureRoot.split("/").pop());
+    candDetail = text.replace(/\s+/g, " ").slice(0, 90);
+  } catch (err) {
+    candDetail = String(err).slice(0, 90);
+  }
+  check("② 候选逻辑（volumes_root 直连桥）", candOk, candDetail);
+  await page.getByLabel("设备根（只读快照，绝不写设备）").fill(fixtureRoot);
+  await page.getByRole("button", { name: "备份设备库" }).click({ timeout: 10000 }).catch(() => {});
   await page.getByText("剪除旧档").waitFor({ timeout: 60000 }).catch(() => {});
   const statsText = (await page.locator(".sr-plugin-result").first().textContent().catch(() => "")) ?? "";
   check("② 摘要统计 歌单 1 / 曲目 1", statsText.includes("歌单") && statsText.includes("1"), statsText.replace(/\s+/g, " ").slice(0, 90));
@@ -106,5 +123,5 @@ try {
   await browser.close();
 }
 const failed = results.filter((r) => !r.ok).length;
-console.log(f"\n${results.length - failed}/${results.length} PASS${failed ? `，${failed} 条 FAIL` : ""}`);
+console.log(`\n${results.length - failed}/${results.length} PASS${failed ? `，${failed} 条 FAIL` : ""}`);
 process.exit(failed ? 1 : 0);
