@@ -115,12 +115,19 @@ try {
   const sampleRows = await page.locator('[data-sounds-list] [data-kind="sample"]').count();
   check("② 切采样 tab 200 行、帧 ≤16ms", sampleRows === 200 && tabFrameMs <= 16, `行数 ${sampleRows}，帧 ${Math.round(tabFrameMs * 10) / 10}ms`);
 
-  // ③ 音色试听打点（切回音色 tab 点 Violin）
+  // ③ 音色试听打点（切回音色 tab 点 Violin；冷/热各一记——AudioContext 冷启动已挪 pointerdown，
+  // 两次都应只剩调度。冷 >100 而热 ≪100 = 预热没接上；两个都大 = 调度本身有问题）
   await page.locator('[data-tab="instrument"]').click();
   await page.locator('[data-sound-key="gm:40"]').click();
   await page.waitForSelector('[data-sound-key="gm:40"][data-playing]', { timeout: 2000 });
-  const gmProbe = await page.evaluate(() => window.__soundsProbe?.lastAuditionMs ?? null);
-  check("③ 点音色 → 出声 ≤100ms", gmProbe !== null && gmProbe <= 100, `实测 ${gmProbe === null ? "探针没写到" : `${Math.round(gmProbe * 100) / 100}ms`}（合成器短琶音）`);
+  const gmCold = await page.evaluate(() => window.__soundsProbe?.lastAuditionMs ?? null);
+  await page.locator('[data-sound-key="gm:33"]').click();
+  await page.waitForSelector('[data-sound-key="gm:33"][data-playing]', { timeout: 2000 });
+  const gmWarm = await page.evaluate(() => window.__soundsProbe?.lastAuditionMs ?? null);
+  const fmt = (v) => (v === null ? "探针没写到" : `${Math.round(v * 100) / 100}ms`);
+  check("③ 点音色 → 出声 ≤100ms（冷/热）",
+    gmCold !== null && gmCold <= 100 && gmWarm !== null && gmWarm <= 100,
+    `冷 ${fmt(gmCold)}（含 pointerdown 预热后的 click 调度）/ 热 ${fmt(gmWarm)}`);
 
   // ④ 采样试听打点（第一行 = 真 WAV 路径）
   await page.locator('[data-tab="sample"]').click();

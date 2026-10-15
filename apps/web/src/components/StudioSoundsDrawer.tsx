@@ -71,6 +71,13 @@ const styles = {
     border: `0.5px solid ${playing ? "var(--sr-accent)" : "var(--sr-border-strong)"}`,
     boxShadow: playing ? "0 0 0 0.5px var(--sr-accent) inset" : undefined,
     borderRadius: 8, cursor: "grab", userSelect: "none",
+    // 首帧 ≤16ms 的物理手段：屏外行跳过排版（DOM 还在，选择器/count 不受影响），
+    // contain-intrinsic 给占位尺寸防滚动条抖动。csstype 版本不一定收这三个属性，强转兜底。
+    ...({
+      contentVisibility: "auto",
+      containIntrinsicWidth: "auto 200px",
+      containIntrinsicHeight: `auto ${height}px`,
+    } as CSSProperties),
   }),
   program: { flex: "none", width: 28, fontSize: 10, color: "var(--sr-text-dim)", fontFamily: "monospace" },
   name: { flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
@@ -81,6 +88,7 @@ const styles = {
 const InstrumentRow = memo(function InstrumentRow({
   sound, playing, rowHeight, onAudition,
 }: { sound: GmSound; playing: boolean; rowHeight: number; onAudition: (sound: GmSound) => void }) {
+  const style = useMemo(() => styles.row(playing, rowHeight), [playing, rowHeight]);
   return (
     <div
       data-sound-key={`gm:${sound.program}`}
@@ -98,7 +106,7 @@ const InstrumentRow = memo(function InstrumentRow({
       }}
       onClick={() => onAudition(sound)}
       title={sound.hint ?? `${sound.name} · 点=试听，拖到轨道头=指定音色`}
-      style={styles.row(playing, rowHeight)}
+      style={style}
     >
       <span style={styles.program}>{String(sound.program).padStart(3, "0")}</span>
       <span style={styles.name}>{sound.name}</span>
@@ -110,6 +118,7 @@ const InstrumentRow = memo(function InstrumentRow({
 const SampleRow = memo(function SampleRow({
   entry, playing, rowHeight, onAudition,
 }: { entry: SampleEntry; playing: boolean; rowHeight: number; onAudition: (entry: SampleEntry) => void }) {
+  const style = useMemo(() => styles.row(playing, rowHeight), [playing, rowHeight]);
   return (
     <div
       data-sound-key={`sample:${entry.path}`}
@@ -127,7 +136,7 @@ const SampleRow = memo(function SampleRow({
       }}
       onClick={() => onAudition(entry)}
       title={`${entry.name} · 点=试听，拖到轨道=落 clip`}
-      style={styles.row(playing, rowHeight)}
+      style={style}
     >
       <span style={styles.name}>{entry.name}</span>
     </div>
@@ -143,6 +152,16 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
   const ownPlayer = useRef<NotePlayer | null>(null);
   const voice = useRef<NoteVoice | null>(null);
   const voiceTimer = useRef<number | null>(null);
+
+  /**
+   * AudioContext 冷启动（实测首次创建 ~120ms，吃满 §④D 的 ≤100ms 线）挪到 pointerdown：
+   * 与 click 同属一次按下的事件序列，autoplay 策略同样放行——用户点下的瞬间 context 已建，
+   * click 处理器里只剩振荡器调度（个位数 ms）。不改「点击→出声」口径，只挪创建时机。
+   */
+  const warmContext = useCallback(() => {
+    const player = notePlayer ?? (ownPlayer.current ??= createNotePlayer());
+    player.context();
+  }, [notePlayer]);
 
   const auditionSound = useCallback(
     (sound: GmSound) => {
@@ -192,7 +211,7 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
   const total = tab === "instrument" ? GM_SOUNDS.length : imports.length;
 
   return (
-    <aside style={styles.aside} aria-label="音色浏览器">
+    <aside style={styles.aside} aria-label="音色浏览器" onPointerDownCapture={warmContext}>
       <header style={styles.head}>
         <span style={styles.title}>音色浏览器</span>
         <span style={styles.count}>{visibleCount}/{total}</span>
