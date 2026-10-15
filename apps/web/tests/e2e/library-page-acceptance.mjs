@@ -357,6 +357,25 @@ checkTrash(
   trashTitle.includes("删除以下文件？") && trashNote.includes("移入系统废纸篓") && focusIsCancel && permaLink === 1 && trashFileGone && trashRowGone,
   `标题「${trashTitle.trim()}」· 焦点取消=${focusIsCancel} · 小字链接=${permaLink} · 文件消失=${trashFileGone} 库行没了=${trashRowGone}`,
 );
+/**
+ * ⑫c 弹窗状态与结果一致（2026-10-16 全量扫补）：本机桥父进程的 TCC 没有废纸篓权限（见 ⑫b），
+ * 删除会失败——产品这时**留在弹窗里说出来**是对的，但下一步要点行就会先被 scrim 挡住（本文件
+ * ⑬ 曾在全量扫里超时 30s，就是踩了这条）。这里把两种出口都钉住：成功=弹窗关；失败=弹窗留着且
+ * 带失败文案（不许点了没反应），然后按 Esc 收起再继续。
+ */
+const stuckCount = await page.locator(".sr-lib-dialog").count();
+const stuckNotice = (await page.locator(".sr-lib-notice").count()) === 0
+  ? ""
+  : (await page.locator(".sr-lib-notice").first().innerText()).replace(/\s+/g, " ").slice(0, 140);
+check(
+  "⑫c 弹窗状态与结果一致（成功=关；失败=弹窗留着 + 页级 alert 说出来，不静默）",
+  stuckCount === 0 || /失败|错误|无法/.test(stuckNotice),
+  stuckCount === 0 ? "弹窗已关（本次删除成功）" : `弹窗仍在，页级提示：「${stuckNotice === "" ? "(无)" : stuckNotice}」`,
+);
+if (stuckCount > 0) {
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+}
 // ⑫b 废纸篓机制对照：跑着的 mcp 桥是 Codex 运行时拉起的——它父进程的 TCC 没有 Trash 权限，
 // 过桥 track_remove(remove_file=true) 时 send2trash 不报错但文件不进 ~/.Trash（静默消失，
 // 数据丢失级，已报总线）。机制本身用本机直调验证：文件确实进废纸篓、可找回。
