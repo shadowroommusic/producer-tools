@@ -126,11 +126,22 @@ const clockPaused = await page.locator(".sr-dj-clock").first().innerText();
 await page.waitForTimeout(900);
 const clockPausedAgain = await page.locator(".sr-dj-clock").first().innerText();
 const frozen = clockPaused === clockPausedAgain;
-// +4 拍 seek 必须立刻反映
+// +4 拍 seek 必须立刻反映——但先回到曲目中部：本 fixture 是 3 秒级短曲，
+// 播 2.2s 后已在尾端，向前 nudge 会被 durationMs 钳住（0:02→0:02，是正确行为不是死键）。
+// 用波形点击 seek 到 20% 处再 nudge，才是这条断言想验的东西。
+const wave = page.locator(".sr-dj-deck canvas.sr-dj-wave").first();
+if ((await wave.count()) > 0) {
+  const box = await wave.boundingBox();
+  if (box !== null) {
+    await page.mouse.click(box.x + box.width * 0.2, box.y + box.height / 2);
+    await page.waitForTimeout(250);
+  }
+}
+const clockSeekBase = await page.locator(".sr-dj-clock").first().innerText();
 await page.locator(".sr-dj-deck .sr-page-action", { hasText: "+4" }).first().click();
 await page.waitForTimeout(400);
 const clockSeeked = await page.locator(".sr-dj-clock").first().innerText();
-const seeked = toSeconds(clockSeeked) > toSeconds(clockPausedAgain);
+const seeked = toSeconds(clockSeeked) > toSeconds(clockSeekBase);
 check(
   "④ 走带：播放前进 + 暂停冻结 + seek 立刻反映",
   loaded && advanced && frozen && seeked,
