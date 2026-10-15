@@ -13,6 +13,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StudioScratchPad } from "./StudioScratchPad";
 import { SCRATCH_MIME, removeScratchClip } from "../lib/studio-scratch";
 import { outOfKeyNotes, parseProjectKey } from "../lib/studio-key";
+import {
+  GAIN_LFO_RATES,
+  applyClipModulation,
+  removeClipModulation,
+  type GainLfoRate,
+} from "../lib/studio";
 import type { CSSProperties, ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import type { NotePlayer, NoteVoice } from "../lib/synth";
@@ -318,6 +324,23 @@ export function StudioPage({
     },
     [],
   );
+
+  /**
+   * Agent updater path for #bitwig-adoption C-②（「给个侧链泵感」→ {rate: 1bar, depth: 0.7}）：
+   * App 侧的吸收器 dispatch `shadowroom:clip-modulate`（那边一行），页面这边拥有写入与 undo。
+   * 校验宽容但默认收敛：不认识的 rate 档按 1bar、depth 缺省 0.7。
+   */
+  useEffect(() => {
+    const onModulate = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { clipId?: string; rate?: string; depth?: number } | null;
+      if (detail?.clipId === undefined || detail.clipId === null) return;
+      const rate = (detail.rate !== undefined && detail.rate in GAIN_LFO_RATES ? detail.rate : "1bar") as GainLfoRate;
+      const depth = typeof detail.depth === "number" ? detail.depth : 0.7;
+      onChangeRef.current((current) => applyClipModulation(current, detail.clipId as string, rate, depth));
+    };
+    window.addEventListener("shadowroom:clip-modulate", onModulate);
+    return () => window.removeEventListener("shadowroom:clip-modulate", onModulate);
+  }, []);
 
   const moveTo = (bar: number) => {
     position.current = bar;
@@ -1389,6 +1412,8 @@ export function StudioPage({
                       ...(clip.fadeIn === undefined ? {} : { fade_in: clip.fadeIn }),
                       ...(clip.fadeOut === undefined ? {} : { fade_out: clip.fadeOut }),
                       ...(clip.ramp === undefined ? {} : { ramp: clip.ramp }),
+                      // 泵感只走导出（generator 在混音里卷积包络）——播放图零新增节点（§④C）。
+                      ...(clip.gainLfo === undefined ? {} : { gain_lfo: clip.gainLfo }),
                       ...(clip.notes === undefined ? {} : { notes: clip.notes }),
                     })),
                 })),
@@ -2204,6 +2229,30 @@ export function StudioPage({
                     {!isPlayable(clip.source) ? "只有音频片段能渐弱" : clip.ramp && clip.ramp.from > clip.ramp.to ? "当前整段 1→0 · 再点一次取消" : "整段线性落下，导出同样生效"}
                   </span>
                 </button>
+                {clip.gainLfo !== undefined && (
+                  <div className="sr-menu-item sr-menu-item--static" data-modulation="gain_lfo">
+                    <span className="sr-menu-label">
+                      泵感 {clip.gainLfo.rateHz.toFixed(2)} Hz × {clip.gainLfo.depth}
+                    </span>
+                    <span className="sr-menu-hint sr-mono">
+                      只在导出生效（播放不加载）·
+                      <button
+                        type="button"
+                        className="sr-menu-inline-action"
+                        aria-label="删除泵感"
+                        onClick={() => {
+                          changeClipByRef(clip.id, (current) => {
+                            const { gainLfo: _drop, ...rest } = current;
+                            return rest as StudioClip;
+                          });
+                          close();
+                        }}
+                      >
+                        删除
+                      </button>
+                    </span>
+                  </div>
+                )}
                 <button
                   type="button"
                   role="menuitem"

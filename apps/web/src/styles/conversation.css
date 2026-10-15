@@ -771,6 +771,20 @@
   font-size: var(--sr-text-13);
 }
 
+/* 泵感调制检视条目（Bitwig 刀2 §②C）：只读展示 + 行内删除，不是可点的 menuitem。 */
+.sr-menu-item--static {
+  cursor: default;
+}
+
+.sr-menu-inline-action {
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  color: var(--sr-danger);
+  cursor: pointer;
+  font: inherit;
+}
+
 .sr-menu-hint {
   overflow: hidden;
   color: var(--sr-label-caption);

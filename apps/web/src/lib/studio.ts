@@ -38,6 +38,14 @@ export type StudioClip = {
    */
   ramp?: { from: number; to: number };
   /**
+   * Render-time sidechain pump (Bitwig 刀2 §②C): how deep each cycle ducks, and how often.
+   * Kept as `rateHz` so the generator spec maps 1:1 (`gain_lfo`); the musical tiers (1/4, 1/2,
+   * 1 bar) are converted against the project BPM at the single write point (`applyClipModulation`).
+   * **Never read by playback** — zero new nodes in the play graph; it only leaves through the
+   * export spec, where the plugin bakes the envelope.
+   */
+  gainLfo?: { rateHz: number; depth: number };
+  /**
    * Set when the arrangement changed under this clip and its audio has not caught up yet.
    *
    * The structure tools never re-render anything by themselves: "加一个 breakdown" means the timeline
@@ -829,4 +837,60 @@ export function clipsFromCalls(calls: ToolCall[]): StudioClip[] {
   return calls
     .filter((call) => call.name === "submit_generation" || call.name === "run_job")
     .map((call, index) => newClip(call.summary ?? call.name, index * 4, 4));
+}
+
+// ---------- 泵感调制（Bitwig 刀2 §②C：只进渲染，不进播放图） ----------
+
+/** The musical rate tiers an agent may ask for; the multiplier is cycles per bar. */
+export const GAIN_LFO_RATES = { "1/4": 4, "1/2": 2, "1bar": 1 } as const;
+export type GainLfoRate = keyof typeof GAIN_LFO_RATES;
+
+/**
+ * Musical tier → cycles/second against the project BPM (4/4): one bar is `240 / bpm` seconds,
+ * so 1 bar @120 = 0.5 Hz, @240 = 1 Hz. The only place the conversion lives — the generator's
+ * spec carries `rate_hz` and nothing else (one answer per question).
+ */
+export function gainLfoRateHz(rate: GainLfoRate, bpm: number): number {
+  const cyclesPerBar = GAIN_LFO_RATES[rate];
+  const barSeconds = 240 / Math.max(1, bpm);
+  return cyclesPerBar / barSeconds;
+}
+
+/**
+ * The agent's write path for 「给个侧链泵感」: `{rate: "1bar", depth: 0.7}` lands on the clip as
+ * `gainLfo {rateHz, depth}`. Pure — the caller (StudioPage's event receiver, the App-side
+ * absorber) decides undo/transient. Deleting is `removeClipModulation`; the UI inspector never
+ * edits values, it only lists and deletes (裁决书 §②C).
+ */
+export function applyClipModulation(
+  project: StudioProject,
+  clipId: string,
+  rate: GainLfoRate,
+  depth: number,
+): StudioProject {
+  const clamped = Math.max(0, Math.min(1, depth));
+  return {
+    ...project,
+    tracks: project.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) =>
+        clip.id === clipId ? { ...clip, gainLfo: { rateHz: gainLfoRateHz(rate, project.bpm), depth: clamped } } : clip,
+      ),
+    })),
+  };
+}
+
+/** Remove the pump from one clip (the inspector's only mutation). Idempotent. */
+export function removeClipModulation(project: StudioProject, clipId: string): StudioProject {
+  return {
+    ...project,
+    tracks: project.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => {
+        if (clip.id !== clipId || clip.gainLfo === undefined) return clip;
+        const { gainLfo: _removed, ...rest } = clip;
+        return rest as StudioClip;
+      }),
+    })),
+  };
 }
