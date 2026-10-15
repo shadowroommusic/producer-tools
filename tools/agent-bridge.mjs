@@ -328,7 +328,7 @@ async function callPluginTool(target, rawArguments) {
 function noteMediaEvent(entry) {
   // 「改已存在的东西」的三个工具不产出新轨道，但前端要吸收它们的结果（换片段文件 / 改音符 /
   // 改结构），而它们需要的 clip_id 只在这次调用的参数里——所以白名单和 args 一起加。
-  if (!/render_song|render_part|regenerate_part|separate_stems|generate_music|transform_notes|arrange/.test(entry.tool ?? "")) return;
+  if (!/render_song|render_part|regenerate_part|separate_stems|generate_music|transform_notes|arrange|clip_modulate/.test(entry.tool ?? "")) return;
   /**
    * 存**完整结果文本**：Studio 用和 Codex 工具卡片同一套解析（路径、bpm、段落、各声部），
    * 截断过的 preview 只够人看，不够落盘。args 同理：regenerate_part 的吸收靠参数里的 clip_id。
@@ -804,6 +804,7 @@ const DEVELOPER_INSTRUCTIONS = [
   "每条消息都会带一段 [arrangement_context]：当前工程的名字/速度/小节、段落、以及每条轨上每个片段的 **path** 与 **render_spec**。音频文件只有前端知道，所以**导出、分轨、改单轨一律用这里的 path/spec，不要凭记忆编路径**；片段没有 path 就是还没渲染的纯音符片段（导出时它只能走 MIDI）。",
   "想让**某一条轨道的声音**变一点（\"鼓再重一点\"\"bass 更暗\"\"换成方波\"\"镲密一点\"\"去掉某些鼓\"）时，用 shadow-music-generator 的 regenerate_part：把消息里 render_spec 的 part 原样传成 part、bpm/bars/sections 一起传、**clip_id 必填**（就是消息里 clip_context 的 clip_id，前端靠它把结果落到那条轨；不传工具会报错），patch 只动你要改的那几个键——gain_db（-24…+6）、cutoff（0–1，正数更亮）、swing（+0.05 之类）、humanize_ms（+10 之类）、pan、reverb、delay、wave（sine/triangle/square/saw）、pattern（鼓：合并某些行）、remove_voices、transpose、velocity_scale。**只重渲染这一轨，其他轨不动**；不要把整份 spec 重写成新歌，也不要顺手改别的参数。",
   "regenerate_part 的新文件放在 ~/Documents/ShadowRoom/recordings/ 下、文件名带时间戳（例如 drums-v2-<时间戳>.wav），这样旧的 stem 还在，用户撤销时不用重新渲染。",
+  "用户要「给某个片段加侧链泵感 / pump / 呼吸感」时：用 shadow-music-generator 的 clip_modulate——clip_id 用消息里 [clip_context] 的 clip_id（是 [arrangement_context] 里的片段就取那一条），rate 只从 \"1/4\"、\"1/2\"、\"1bar\" 三档里选（默认 1bar），depth 0–1（默认 0.7，越深下潜越狠）。这是**渲染期**调制：片段的右键菜单里会立刻长出「泵感」条目，导出时才被烘进音频，**播放声音不变**——所以不要顺手重渲染，也不要自己算 rate_hz（前端按工程 BPM 换算）。",
   "用户要把一首歌/一段成品拆开时（\"把这首歌分轨 / 拆出人声 / 只要鼓\"）：调用 stem-splitter 的 separate_stems（path 用那条音频路径），它立刻返回 job_id，然后每隔几秒用 stem_job_status 看一次（stage 会从 decode 走到 separate 再到 collect），拿到 status=ok 再回复。四条分轨（人声/鼓/贝斯/其它）会自动落到 Studio 的新轨道上，你不用自己写文件；一次分离在 CPU 上要几分钟，先告诉用户开始了。",
   "需要知道这台机器能不能分轨，用 stem_backends：它说没有后端时，把启用方法原样告诉用户（装 demucs 到 _venvs/stem-splitter，或设 STEM_SPLIT_COMMAND）。",
   "导出同样可以让我做：mix_arrangement 导出整首（out_path/.bpm/.bars/sample_rate/bit_depth/container + tracks），export_stems 导出分轨（out_dir + name），export_midi 导出 MIDI（out_path；音符来自 clip.notes，或指向 .mid 的 clip）。它们的 tracks 结构一致：{name, gain, clips:[{path, start(小节), bars, gain, notes?}]}——path 取自 [arrangement_context] 里那条轨的片段，gain 用 volume/100，片段没渲染过就别编 path。默认把整首导出到 ~/Documents/ShadowRoom/exports/<歌名>.<格式>，然后一句话告诉用户文件在哪。",

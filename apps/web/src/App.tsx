@@ -1720,6 +1720,31 @@ export function App() {
     (call: ToolCall) => {
 
       if (call.status !== "ok" || openProjectId === undefined) return;
+      /**
+       * 泵感调制（Bitwig 刀2 §②C）：butler 走 generator 的 `clip_modulate{clip_id, rate, depth}`，
+       * 两条吸收通道（Codex 工具卡片 / media-events）在这里汇合。App 只把意图转成一次自定义
+       * 事件——写入、换算与 undo 归开着工程的 StudioPage（它持有 clip 的写口），字段只进导出
+       * spec，不进播放图。参数读不出来就静默跳过：转写卡还在，用户看得见发生了什么。
+       */
+      if (call.name === "clip_modulate") {
+        try {
+          const wrapper = JSON.parse(call.detail ?? "{}") as {
+            arguments?: { clip_id?: string; rate?: string; depth?: number };
+            args?: { clip_id?: string; rate?: string; depth?: number };
+          };
+          const args = wrapper.args ?? wrapper.arguments ?? {};
+          if (typeof args.clip_id === "string") {
+            window.dispatchEvent(
+              new CustomEvent("shadowroom:clip-modulate", {
+                detail: { clipId: args.clip_id, rate: args.rate, depth: args.depth },
+              }),
+            );
+          }
+        } catch {
+          /* 参数不是合法 JSON：留卡片，不落字段 */
+        }
+        return;
+      }
       if (call.name === "transform_notes") {
         applyNoteEdit(call);
         return;
