@@ -37,13 +37,17 @@ const HIT_RADIUS = 32;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
-/** 受保护控件（吸附点不得压上去）：新建会话/导入/导出/录音/缩放药丸/底部输入框/发送。 */
+/**
+ * 受保护控件（吸附点不得压上去）：新建会话/导入/导出/录音/缩放药丸/底部输入框/发送/左栏版本行。
+ * 版本行是 Kimi UI 评审 P-8 的实证：浅色主题下球驻左下会盖住「AGPL-3.0 · v0.0.0」。
+ */
 const PROTECTED_SELECTORS = [
   ".sr-new-session",
   ".sr-studio-import",
   ".sr-studio-export",
   ".sr-studio-record",
   ".sr-transport-zoom button",
+  ".sr-foot-version",
   "textarea",
   'button[title="发送"]',
 ];
@@ -249,7 +253,7 @@ export function ButlerOrb({
     if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) setDragging(true);
     if (drag.moved || Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       drag.moved = true;
-      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy, { width: window.innerWidth, height: window.innerHeight }));
+      setPosition(clampToViewport(drag.originX + dx, drag.originY + dy, { width: window.innerWidth, height: window.innerHeight }, size));
     }
   };
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -261,7 +265,7 @@ export function ButlerOrb({
     const wasDrag = drag?.moved === true;
     const wasClick = drag?.moved === false && hitBall(event);
     setDragging(false);
-    if (wasDrag) setPosition(snapToViewport(position, { width: window.innerWidth, height: window.innerHeight }, protectedRects()));
+    if (wasDrag) setPosition(snapToViewport(position, { width: window.innerWidth, height: window.innerHeight }, protectedRects(), size));
     if (wasClick && !expanded) toggleCall();
     else if (wasClick) setExpanded(false);
   };
@@ -270,6 +274,7 @@ export function ButlerOrb({
     if (dragging) return;
     savePosition(window.localStorage, position);
   }, [position, dragging]);
+
 
   // 单 rAF：把 RMS 平滑进 level ref，交给 r3f 的 useFrame（玻璃珠渲染在 Canvas 内部循环）。
   const levelRef = useRef(0);
@@ -291,6 +296,16 @@ export function ButlerOrb({
   }, [effectiveMode, voiceLevel, micLevel, externalCall]);
 
   const size = active ? ACTIVE_SIZE : ORB_SIZE;
+  /**
+   * 尺寸切换时重新夹取：球从 64 长到 80（或退回）时，旧坐标是按另一个尺寸算的，
+   * 会让多出来的 16px 悬在视口外（P-8 实证）。只在真的越界时 setState，避免抖动。
+   */
+  useEffect(() => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const snapped = snapToViewport(position, viewport, protectedRects(), size);
+    if (snapped.x !== position.x || snapped.y !== position.y) setPosition(snapped);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
 
   // 视口变了要重新量字幕（换窗口大小/全屏）。
   useEffect(() => {

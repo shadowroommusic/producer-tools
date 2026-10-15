@@ -18,11 +18,16 @@ export type Position = { x: number; y: number };
 const MARGIN = 12;
 const SNAP_DISTANCE = 48;
 
-/** 视口边界夹取：窗口内留 12px 边距，不许只露半个球。 */
-export function clampToViewport(x: number, y: number, viewport: Viewport): Position {
+/**
+ * 视口边界夹取：窗口内留 12px 边距，不许只露半个球。
+ *
+ * `size` 必须传**当前**球径（64 空闲 / 80 通话）：2026-10-16 实测——按 64 夹到右缘后
+ * 通话态长到 80，会多出 16px 悬在视口外（用户报「球被裁掉小半」）。夹取与吸附都按它算。
+ */
+export function clampToViewport(x: number, y: number, viewport: Viewport, size: number = ORB_SIZE): Position {
   return {
-    x: Math.max(MARGIN, Math.min(viewport.width - ORB_SIZE - MARGIN, x)),
-    y: Math.max(MARGIN, Math.min(viewport.height - ORB_SIZE - MARGIN, y)),
+    x: Math.max(MARGIN, Math.min(viewport.width - size - MARGIN, x)),
+    y: Math.max(MARGIN, Math.min(viewport.height - size - MARGIN, y)),
   };
 }
 
@@ -30,11 +35,11 @@ export function clampToViewport(x: number, y: number, viewport: Viewport): Posit
  * 保护性退避：位置若与任一受保护控件（新建会话/导入/导出/录音/缩放药丸/底部输入框/发送）
  * 相交，垂直退、退不动整行扫描，直到无相交——球永不停在控件上。
  */
-export function avoidProtected(next: Position, protectedRects: Rect[], viewport: Viewport): Position {
+export function avoidProtected(next: Position, protectedRects: Rect[], viewport: Viewport, size: number = ORB_SIZE): Position {
   const hits = (point: Position) =>
     protectedRects.some(
       (rect) =>
-        !(point.x > rect.x + rect.w || point.x + ORB_SIZE < rect.x || point.y > rect.y + rect.h || point.y + ORB_SIZE < rect.y),
+        !(point.x > rect.x + rect.w || point.x + size < rect.x || point.y > rect.y + rect.h || point.y + size < rect.y),
     );
   if (!hits(next)) return next;
   let nearest = protectedRects[0];
@@ -53,14 +58,14 @@ export function avoidProtected(next: Position, protectedRects: Rect[], viewport:
   let candidate = { ...next };
   // 垂直优先退让，顶住后整行水平扫描。
   for (let step = 0; step < 24; step += 1) {
-    const moved = clampToViewport(candidate.x, candidate.y + awayY * 24, viewport);
+    const moved = clampToViewport(candidate.x, candidate.y + awayY * 24, viewport, size);
     if (moved.y === candidate.y) break;
     candidate = moved;
     if (!hits(candidate)) return candidate;
   }
-  const scanStart = awayX > 0 ? next.x : viewport.width - ORB_SIZE - MARGIN;
+  const scanStart = awayX > 0 ? next.x : viewport.width - size - MARGIN;
   for (let step = 0; step < 24; step += 1) {
-    const moved = clampToViewport(scanStart + (awayX > 0 ? step : -step) * 32, candidate.y, viewport);
+    const moved = clampToViewport(scanStart + (awayX > 0 ? step : -step) * 32, candidate.y, viewport, size);
     if (moved.x === candidate.x) continue;
     candidate = moved;
     if (!hits(candidate)) return candidate;
@@ -69,23 +74,24 @@ export function avoidProtected(next: Position, protectedRects: Rect[], viewport:
 }
 
 /** 松手吸附：离任一边缘不足 48px 时贴到该边缘的 12px 边距处；再对受保护控件做保护性退避。 */
-export function snapToViewport(pos: Position, viewport: Viewport, protectedRects: Rect[] = []): Position {
-  const maxX = viewport.width - ORB_SIZE - MARGIN;
-  const maxY = viewport.height - ORB_SIZE - MARGIN;
-  const next = clampToViewport(pos.x, pos.y, viewport);
+export function snapToViewport(pos: Position, viewport: Viewport, protectedRects: Rect[] = [], size: number = ORB_SIZE): Position {
+  const maxX = viewport.width - size - MARGIN;
+  const maxY = viewport.height - size - MARGIN;
+  const next = clampToViewport(pos.x, pos.y, viewport, size);
   if (next.x - MARGIN < SNAP_DISTANCE) next.x = MARGIN;
   if (maxX - next.x < SNAP_DISTANCE) next.x = maxX;
   if (next.y - MARGIN < SNAP_DISTANCE) next.y = MARGIN;
   if (maxY - next.y < SNAP_DISTANCE) next.y = maxY;
-  return avoidProtected(next, protectedRects, viewport);
+  return avoidProtected(next, protectedRects, viewport, size);
 }
 
 /** 默认位置：右下角距右/底 24px（不压 DJ 推荐卡末行与 Studio 时间线中央，D2 巡检），再退避控件。 */
-export function defaultPosition(viewport: Viewport, protectedRects: Rect[] = []): Position {
+export function defaultPosition(viewport: Viewport, protectedRects: Rect[] = [], size: number = ORB_SIZE): Position {
   return avoidProtected(
-    { x: viewport.width - ORB_SIZE - 24, y: viewport.height - ORB_SIZE - 24 },
+    { x: viewport.width - size - 24, y: viewport.height - size - 24 },
     protectedRects,
     viewport,
+    size,
   );
 }
 

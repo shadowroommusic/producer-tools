@@ -75,3 +75,33 @@ test("defaultPosition：右下角 24px，不压受保护控件", () => {
   );
   assert.equal(intersects, false, `默认位 ${JSON.stringify(avoided)} 压到了右下角控件`);
 });
+
+test("F-7：通话态 80px 也完整落在视口内（四角吸附 + 越界夹取）", () => {
+  const ACTIVE = 80;
+  // 按 64 夹到右/下缘的存档坐标，按 80 重夹后不许出界
+  const right = clampToViewport(VIEWPORT.width - ORB_SIZE - 12, VIEWPORT.height - ORB_SIZE - 12, VIEWPORT, ACTIVE);
+  assert.equal(right.x, VIEWPORT.width - ACTIVE - 12);
+  assert.equal(right.y, VIEWPORT.height - ACTIVE - 12);
+  for (const corner of [
+    { x: -100, y: -100 },
+    { x: 9999, y: -100 },
+    { x: -100, y: 9999 },
+    { x: 9999, y: 9999 },
+  ]) {
+    const snapped = snapToViewport(corner, VIEWPORT, [], ACTIVE);
+    assert.ok(snapped.x >= 12 && snapped.x + ACTIVE <= VIEWPORT.width - 12 + 0.001, JSON.stringify(snapped));
+    assert.ok(snapped.y >= 12 && snapped.y + ACTIVE <= VIEWPORT.height - 12 + 0.001, JSON.stringify(snapped));
+  }
+});
+
+test("F-7：版本行（受保护矩形）不被球压住", () => {
+  const versionRow = { x: 0, y: VIEWPORT.height - 30, w: 180, h: 30 };
+  const snapped = snapToViewport({ x: 12, y: VIEWPORT.height - 80 - 12 }, VIEWPORT, [versionRow], 80);
+  const overlaps = !(
+    snapped.x > versionRow.x + versionRow.w ||
+    snapped.x + 80 < versionRow.x ||
+    snapped.y > versionRow.y + versionRow.h ||
+    snapped.y + 80 < versionRow.y
+  );
+  assert.equal(overlaps, false, JSON.stringify(snapped));
+});
