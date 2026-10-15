@@ -3266,6 +3266,40 @@
   background: var(--sr-accent, #d9ff3d);
 }
 
+/* F-1 两新态的状态点：没听清=琥珀慢闪（比「在想」更慢，一眼分得开）；断线=灰且不闪。 */
+.sr-orb-caption-dot[data-state="unclear"] {
+  background: var(--sr-warn, #ffbf4d);
+  animation: sr-voice-pulse 2s ease-in-out infinite alternate;
+}
+
+.sr-orb-caption-dot[data-state="offline"] {
+  background: var(--sr-label-caption, #8b947e);
+  animation: none;
+}
+
+/*
+ * F-1（deepseek O-3 / Kimi F-1 动作条）：字幕里的出路按钮。
+ * 字幕本体 pointer-events:none（它漂在页面上，绝不能挡球或底下内容的点击），
+ * 所以这颗按钮要把事件单独收回来；命中面积 24px 高（手指也点得到）。
+ */
+.sr-orb-caption-action {
+  flex: none;
+  min-height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--sr-radius-sm, 8px);
+  background: var(--sr-hover, rgb(242 245 236 / 6%));
+  color: var(--sr-label-primary, #f2f5ec);
+  font-size: var(--sr-text-12, 12px);
+  line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sr-orb-caption-action:hover {
+  background: var(--sr-hover-solid, var(--sr-ink-600, #1f221b));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sr-orb-caption-dot {
     animation: none;

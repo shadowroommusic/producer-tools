@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentModel, Mention } from "../lib/agent";
+import type { CallState } from "../lib/call-states";
 import { IconArrowUp, IconChevronDown, IconMic, IconPlugin, IconPlus, IconStop } from "./icons";
 
 const MODES = ["标准", "极简"] as const;
@@ -70,7 +71,8 @@ export function Composer({
   onToggleVoice?: () => void;
   /** Call mode: the card becomes a waveform instead of a text box. */
   voiceMode?: boolean;
-  voiceState?: "listening" | "thinking" | "speaking";
+  /** 通话五态（类型住 lib/call-states，词表与渲染都只在球字幕一侧——F-2 的收敛）。 */
+  voiceState?: CallState;
   voiceLevel?: () => number;
   /** Live interim words, shown while listening so the user can see what was heard. */
   voicePartial?: string;

@@ -2,6 +2,7 @@
  * 悬浮球 v5 的五态参数表与色相插值（从 OrbGlass.tsx 拆出来：.tsx 进不了 node 单测）。
  * 通道分工见表头；任意两态至少在两个通道上不同（tests/orb.test.mjs 钉住）。
  */
+import type { CallState } from "./call-states.ts";
 
 /**
  * 球的外观状态七态：原来的五态 + Kimi UI 评审 F-1 新增的两种「通话异常」态——
@@ -9,6 +10,30 @@
  * 口径来自 docs/ui-review-kimi.md §③ F-1 / docs/ui-review-deepseek.md ②。
  */
 export type OrbVisualMode = "idle" | "listening" | "speaking" | "thinking" | "working" | "unclear" | "offline";
+
+/**
+ * 通话五态 → 球的外观态（F-1 接线，唯一映射点）。
+ *
+ * 为什么单独一个函数：通话状态机在 App.tsx（红线文件），球在 ButlerOrb.tsx——两边各自
+ * 「猜」映射就会出现 F-2 那种同屏两个词的老病。写在这里 = 纯函数、可单测、改一处。
+ *   listening→listening / thinking→thinking / speaking→speaking
+ *   unclear→unclear（琥珀晃，五态里唯一横向晃）
+ *   offline→offline（灰、全静止、光晕熄灭——不是 idle：idle 仍有 0.02 漂移与呼吸）
+ */
+export function callOrbMode(state: CallState): OrbVisualMode {
+  switch (state) {
+    case "listening":
+      return "listening";
+    case "thinking":
+      return "thinking";
+    case "speaking":
+      return "speaking";
+    case "unclear":
+      return "unclear";
+    case "offline":
+      return "offline";
+  }
+}
 
 /** 五态参数表：drift 单位 turns/s；rimWidth 相对球半径；ripple/swirl/breathe 是强度开关。
  *  终验口径（orb-v5-acceptance ⑧）：五态同尺寸截图两两 mean-abs-diff ≥ 8/255——所以色相族

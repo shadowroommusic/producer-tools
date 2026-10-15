@@ -207,8 +207,10 @@ await page.evaluate(() => document.documentElement.removeAttribute("data-theme")
 await page.waitForTimeout(300);
 
 // ⑤ 挂断：球回 idle，字幕不留通话状态的残影（这台的浏览器识别连不上 Google，会留一条错误提示——
-//    那是「为什么没反应」的解释文案，允许；「在听…」这种通话状态词不允许留下）
-await page.locator(".sr-orb-ball").click();
+//    那是「为什么没反应」的解释文案，允许；「在听…」这种通话状态词不允许留下）。
+//    挂断走 Esc 而不是点球：点球自 F-1 起是「按当前态」的动作（断了=重连、没听清=重说），
+//    这台环境里浏览器识别必报 network → 通话停在 offline，点球会重连而不是挂断；Esc 永远挂断。
+await page.keyboard.press("Escape");
 await page.waitForTimeout(600);
 const after = await readCaption();
 const orbMode = await page.locator(".sr-orb").getAttribute("data-mode");

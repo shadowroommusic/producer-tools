@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ORB_STATES, lerpHue } from "../src/lib/orb-states.ts";
+import { ORB_STATES, callOrbMode, lerpHue } from "../src/lib/orb-states.ts";
 
 const MODES = ["idle", "listening", "speaking", "thinking", "working", "unclear", "offline"];
 const CHANNELS = ["hueA", "hueB", "drift", "rimAlpha", "rimWidth", "glow", "breathe", "ripple", "swirl"];
@@ -37,6 +37,13 @@ test("F-1 新两态：没听清=琥珀晃、断线=灰且全静止", () => {
   assert.ok(ORB_STATES.offline.drift === 0 && ORB_STATES.offline.breathe === 0 && ORB_STATES.offline.wobble === 0, "断线全静止");
   assert.ok(ORB_STATES.offline.glow < ORB_STATES.idle.glow * 0.5, "断线要暗到一眼看出");
   assert.ok(ORB_STATES.offline.swirl === 0 && ORB_STATES.offline.ripple === 0, "断线不追边不起波");
+});
+
+test("F-1 接线：通话五态各自映射到不同的球态，没有落回 listening 的兜底", () => {
+  const call = ["listening", "thinking", "speaking", "unclear", "offline"];
+  const mapped = call.map((state) => callOrbMode(state));
+  assert.deepEqual(mapped, ["listening", "thinking", "speaking", "unclear", "offline"]);
+  assert.equal(new Set(mapped).size, 5, "五态必须映射到五个不同的球态（否则又是两态撞脸）");
 });
 
 test("亮度梯度：听 > 思考 > 闲（暗处一眼分）", () => {

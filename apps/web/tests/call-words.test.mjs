@@ -7,12 +7,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { CALL_START_HINT, callWord } from "../src/lib/call-words.ts";
+import { CALL_START_HINT, UNCLEAR_HOLD_MS, callWord } from "../src/lib/call-words.ts";
 
-test("三个状态各一个词，且是用户看到的那三个", () => {
+test("五个状态各一个词，且是用户看到的那五个（F-1 补 unclear/offline）", () => {
   assert.equal(callWord("listening"), "在听…");
   assert.equal(callWord("thinking"), "在想…");
   assert.equal(callWord("speaking"), "在说…");
+  assert.equal(callWord("unclear"), "没听清…");
+  assert.equal(callWord("offline"), "断了…");
+});
+
+test("没听清的回退是 2.5s（F-1：够读完一句话 + 有余量重说，又不至于干等）", () => {
+  assert.equal(UNCLEAR_HOLD_MS, 2500);
 });
 
 test("起手提示说清两件事：怎么说话、怎么挂断", () => {

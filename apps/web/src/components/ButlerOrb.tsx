@@ -19,10 +19,13 @@ import {
   snapToViewport,
   type Rect,
 } from "../lib/orb-position.ts";
+import { callOrbMode, type OrbVisualMode } from "../lib/orb-states.ts";
+import type { CallState } from "../lib/call-words.ts";
 import { createVoiceMeter, SpeechLatch, type VoiceMeter } from "../lib/vad";
 import { GlassSphere } from "./OrbGlass";
 
-export type OrbMode = "idle" | "listening" | "speaking" | "thinking" | "working";
+/** 球的外观态：单一来源在 lib/orb-states.ts（七态），这里只做别名，别再抄一份字面量。 */
+export type OrbMode = OrbVisualMode;
 
 /**
  * 尺寸：用户巡检 2026-09-25（D2）指出 120px 空闲球压在推荐卡末行与 Studio 时间线中央、还吃掉
@@ -74,7 +77,9 @@ export function ButlerOrb({
   voiceState = "listening",
   voiceLevel,
   onCallToggle,
+  onCallEnd,
   caption,
+  captionAction,
 }: {
   mode?: OrbMode;
   progress?: number;
@@ -84,14 +89,24 @@ export function ButlerOrb({
   running?: boolean;
   /** 真通话（App.tsx 的通话状态机）开着没有——球的姿态随它走，不再自己骗自己。 */
   voiceMode?: boolean;
-  /** 通话阶段：听（麦克风波）/ 想（识别+模型）/ 说（TTS 播放）。 */
-  voiceState?: "listening" | "thinking" | "speaking";
+  /** 通话五态（call-words.ts 是唯一词源）：听/想/说 + 没听清/断线。 */
+  voiceState?: CallState;
   /** App 侧实时电平（0–1）：说话时球的呼吸跟着真麦克风，不另开一路采集。 */
   voiceLevel?: () => number;
   /** 有了它，点球 = 开始/挂断真通话；没有则退回本地电平演示（旧行为）。 */
   onCallToggle?: () => void;
+  /**
+   * Esc 的挂断出口（F-1 之后点球本身是「按当前态」的动作：没听清=重说、断了=重连）。
+   * 键盘的约定不能跟着状态漂——Esc 永远挂断，与工具提示、AGENTS.md 的说法一致。
+   */
+  onCallEnd?: () => void;
   /** 球旁的一行字幕：在听（识别中的话）/ 在想（等待）/ 在说（正在念的那句）。 */
   caption?: string;
+  /**
+   * 字幕里的出路（F-1 / deepseek O-3）：unclear 态给第二条路「改成打字」——
+   * 非语音 fallback 是 W3C 硬要求，不是加分项。只在有 caption 时出现，最多一颗。
+   */
+  captionAction?: { label: string; onAction: () => void };
 }) {
   const [position, setPosition] = useState(
     () =>
@@ -137,13 +152,8 @@ export function ButlerOrb({
    */
   const externalCall = onCallToggle !== undefined;
   const callOn = externalCall ? voiceMode === true : localCallOn;
-  const callPhase: OrbMode = externalCall
-    ? voiceState === "speaking"
-      ? "speaking"
-      : voiceState === "thinking"
-        ? "thinking"
-        : "listening"
-    : "listening";
+  /** 通话五态 → 球外观态：映射在 lib/orb-states.ts（callOrbMode），这里不再就地猜。 */
+  const callPhase: OrbMode = externalCall ? callOrbMode(voiceState) : "listening";
   const effectiveMode: OrbMode =
     mode ?? forced ?? (running ? "working" : callOn ? callPhase : "idle");
   // 验收钩子（生产不触发）：qa-orb-progress 只在强制模式下顶替 progress，让「干活」弧可确定性截图。
@@ -222,14 +232,15 @@ export function ButlerOrb({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (externalCall) {
-        if (voiceMode) onCallToggle?.();
+        if (!voiceMode) return;
+        (onCallEnd ?? onCallToggle)?.();
       } else {
         setLocalCallOn(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [callOn, externalCall, onCallToggle, voiceMode]);
+  }, [callOn, externalCall, onCallEnd, onCallToggle, voiceMode]);
 
   // 拖动 + 点球即通话。
   // 指针事件只挂在球面上，但**只有距球心 32px 内（64px 命中圆）的轻点才是点球**：球面外圈
@@ -343,8 +354,24 @@ export function ButlerOrb({
         className="sr-orb-ball"
         role="button"
         tabIndex={0}
-        aria-label={callOn ? "结束通话" : "开始通话"}
-        title={callOn ? "通话中：再点一下或按 Esc 挂断" : "点一下开始说话（共享麦克风）· 拖动移动"}
+        aria-label={
+          !callOn
+            ? "开始通话"
+            : externalCall && voiceState === "unclear"
+              ? "重说"
+              : externalCall && voiceState === "offline"
+                ? "重连"
+                : "结束通话"
+        }
+        title={
+          !callOn
+            ? "点一下开始说话（共享麦克风）· 拖动移动"
+            : externalCall && voiceState === "unclear"
+              ? "没听清：点一下重说 · 或按 Esc 挂断"
+              : externalCall && voiceState === "offline"
+                ? "连接断了：点一下重连 · 或按 Esc 挂断"
+                : "通话中：再点一下或按 Esc 挂断"
+        }
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -373,6 +400,18 @@ export function ButlerOrb({
           {/* 状态点：与对话栏通话条同一个语义色（听=红点闪/想=琥珀/说=酸绿），扫一眼就分得清。 */}
           {callOn && <span className="sr-orb-caption-dot" data-state={voiceState} aria-hidden="true" />}
           <span className="sr-orb-caption-text">{caption}</span>
+          {/* F-1：unclear 的「改成打字」出口。字幕本身 pointer-events:none（不许挡球），
+              只有这颗按钮单独把事件收回来——它是这一态里除点球之外唯一的出路。 */}
+          {captionAction !== undefined && (
+            <button
+              type="button"
+              className="sr-orb-caption-action"
+              data-caption-action
+              onClick={captionAction.onAction}
+            >
+              {captionAction.label}
+            </button>
+          )}
         </div>
       )}
 

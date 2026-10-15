@@ -117,7 +117,14 @@ import {
 import { createBridgeTTS, createSystemTTS, splitSentences, type TTSProvider } from "./lib/tts";
 import { createBridgeSTT, createBrowserSTT, type STTProvider, type STTSession } from "./lib/stt";
 import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
-import { CALL_START_HINT, callWord } from "./lib/call-words";
+import { CALL_START_HINT, UNCLEAR_HOLD_MS, callWord, type CallState } from "./lib/call-words";
+
+declare global {
+  interface Window {
+    /** e2e 探针（F-1）：通话态与 unclear 回退闹钟是否还挂着——挂断后的泄漏在 DOM 上看不出来。 */
+    __callProbe?: { state: () => CallState; unclearArmed: () => boolean };
+  }
+}
 import {
   createSession,
   loadSessions,
@@ -234,7 +241,7 @@ export function App() {
     render?: Record<string, unknown>;
   } | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
-  const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking">("listening");
+  const [voiceState, setVoiceState] = useState<CallState>("listening");
   const voiceSession = useRef<STTSession | null>(null);
   /** One recogniser and one speaker for the whole call — implemented behind the interfaces in
       `lib/stt.ts` / `lib/tts.ts`, so the desktop build swaps them without touching this logic. */
@@ -328,7 +335,7 @@ export function App() {
   const beginCallRef = useRef<(call: ToolCall) => void>(() => undefined);
   const endCallRef = useRef<(id: string, patch: Partial<ToolCall>) => void>(() => undefined);
   const voiceModeRef = useRef(false);
-  const voiceStateRef = useRef<"listening" | "thinking" | "speaking">("listening");
+  const voiceStateRef = useRef<CallState>("listening");
   /** The turn's own `running` flag, read from callbacks that were created before it changed. */
   const runningRef = useRef(false);
   /** When the last sentence finished playing — used to ignore the answer's own tail. */
@@ -345,10 +352,58 @@ export function App() {
    * ref stale for a moment, and stopping the recognizer fires `onend` *in that moment* — which read
    * "still listening" and started the user's turn over (measured: one phrase, two messages).
    */
-  const moveVoice = useCallback((next: "listening" | "thinking" | "speaking") => {
-    voiceStateRef.current = next;
-    setVoiceState(next);
+  /**
+   * 「没听清」的回退闹钟（F-1）。
+   *
+   * AGENTS.md:109 的规矩来自用户实测过的 timer 泄漏，所以这里把四条退出路径一次列全——
+   * ① 挂断（hangUp）；② 组件卸载（挂载处的 cleanup 调 hangUp）；③ 切进 offline / 任何别的态
+   * （moveVoice 里统一清）；④ 异常（transcribe 抛错走 offline，同一条清）。任何一条漏掉，
+   * 都会留下一个 2.5s 后偷偷把状态改回 listening 的闹钟——挂断之后它还会动，正是要防的事。
+   */
+  const unclearTimer = useRef<number | null>(null);
+  const clearUnclear = useCallback(() => {
+    if (unclearTimer.current === null) return;
+    window.clearTimeout(unclearTimer.current);
+    unclearTimer.current = null;
   }, []);
+  const moveVoice = useCallback(
+    (next: CallState) => {
+      /** ③：只要离开 unclear（回聆听、去想、去说、去 offline），闹钟就不许再响。 */
+      if (next !== "unclear") clearUnclear();
+      voiceStateRef.current = next;
+      setVoiceState(next);
+    },
+    [clearUnclear],
+  );
+  /**
+   * 「说了话但没接住」→ unclear（F-1 规格 / Kimi F-1 / deepseek O-3）。
+   *
+   * 只有**明确知道用户说了话**才进这个态：桥式 STT 是端点检测收回合之后才请求识别的，
+   * 空结果 = 听见了、没听清。浏览器识别那条流式路径不从这里走（Chrome 的空 final 很常见，
+   * 拿它报「没听清」会变成狼来了）。
+   */
+  const moveVoiceUnclear = useCallback(() => {
+    clearUnclear();
+    moveVoice("unclear");
+    unclearTimer.current = window.setTimeout(() => {
+      unclearTimer.current = null;
+      /** 到了就自己回聆听：用户什么都不做也有下一步（点球=重说，字幕上的按钮=改成打字）。 */
+      moveVoice("listening");
+    }, UNCLEAR_HOLD_MS);
+  }, [clearUnclear, moveVoice]);
+  /**
+   * STT 断了（network / not-allowed / 桥返回错误）→ offline（F-1）。
+   *
+   * 与 unclear 的区别是「等谁」：unclear 等 2.5s 自动回聆听；offline 停在这里等用户——
+   * 点球 = 重连（不是开新通话），字幕附「或先打字」。琥珀不是红：断了可恢复，红留给真致命。
+   */
+  const moveVoiceOffline = useCallback(
+    (detail: string) => {
+      setVoiceNotice(detail);
+      moveVoice("offline");
+    },
+    [moveVoice],
+  );
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   /**
@@ -1080,16 +1135,22 @@ export function App() {
       },
       onError: (message) => {
         if (!current() || message === "no-speech" || message === "aborted") return;
-        setVoiceNotice(
+        /**
+         * F-1：识别器报错 → offline（琥珀、等用户点球重连），不再只是行一闪而过的 notice。
+         * 顺带治好一个真洞：not-allowed 之后 onend 会立刻重启识别 → 又报错 → 无限对空喊；
+         * 进了 offline 之后 onend 里那条「还在聆听才重启」的判断自然不成立，循环断了。
+         */
+        moveVoiceOffline(
           message === "not-allowed" || message === "audio-capture"
-            ? "拿不到麦克风：在系统设置里允许浏览器使用麦克风。"
+            ? "拿不到麦克风：在系统设置里允许浏览器使用麦克风，再点球重试。"
             : message === "network"
               ? "这台环境连不上语音识别服务：Chrome 的识别要联网，桌面包会改用本地识别。现在可以打字继续。"
               : `语音识别出错：${message}`,
         );
       },
     });
-  }, []);
+    /** 依赖都是稳定引用（moveVoice/moveVoiceOffline 是 useCallback），加进来只为不留陈旧闭包口实。 */
+  }, [moveVoiceOffline]);
   listenRef.current = listen;
 
   /** The user stopped talking: hand the turn over, with the WAV of that phrase attached. */
@@ -1115,18 +1176,25 @@ export function App() {
       let result: Awaited<ReturnType<NonNullable<typeof provider.transcribe>>>;
       try {
         result = await provider.transcribe(wav);
+      } catch (cause) {
+        /** ④ 异常路径：转写本身抛了（理论上不该发生，实现在内部兜了）也按断线收，绝不留悬空闹钟。 */
+        recognizingRef.current = false;
+        moveVoiceOffline(`识别失败：${cause instanceof Error ? cause.message : String(cause)}`);
+        return;
       } finally {
         recognizingRef.current = false;
       }
       if ("error" in result) {
-        setVoiceNotice(result.error);
-        moveVoice("listening");
+        moveVoiceOffline(result.error);
         return;
       }
       text = result.text.trim();
       if (text === "") {
-        setVoiceNotice("没听清，再说一遍？");
-        moveVoice("listening");
+        /**
+         * 空洞（F-1）：说了话、识别回来了、但是空的——不是错误，是「没听清」。
+         * 2.5s 后自己回聆听；这期间点球=重说、字幕上的「改成打字」=非语音出口。
+         */
+        moveVoiceUnclear();
         return;
       }
       setVoiceNotice(null);
@@ -1155,7 +1223,11 @@ export function App() {
      */
     heardRef.current = "";
     partialRef.current = "";
-  }, []);
+    /**
+     * 依赖刻意写全：moveVoiceUnclear 挂着 ④ 异常路径（转写抛错按断线收），少于它的话
+     * 闭包里会抓到旧引用——那正是「定时器清理四条路径」最容易漏的一条。
+     */
+  }, [moveVoiceOffline, moveVoiceUnclear]);
   finishRef.current = () => void finishTurn();
 
   const startCall = useCallback(async () => {
@@ -1259,7 +1331,11 @@ export function App() {
   }, []);
 
   const hangUp = useCallback(() => {
+    /** 通话真的起来过才清「通话中的临时提示」——起手失败（麦克风被拒）那条必须留在屏幕上。 */
+    const wasUp = voiceModeRef.current;
     stopListening();
+    /** ① 挂断路径：unclear 的回退闹钟在这里停掉（卸载复用同一条，AGENTS.md:109）。 */
+    clearUnclear();
     answerToken.current += 1;
     speakingToken.current += 1;
     currentTTS().cancel();
@@ -1270,6 +1346,65 @@ export function App() {
     setVoicePartial("");
     setCallHintOn(false);
     setVoiceMode(false);
+    if (wasUp) setVoiceNotice(null);
+  }, [clearUnclear]);
+
+  /**
+   * 点球 = 通话的唯一开关，但「按当前是什么态」动作不同（F-1）：
+   *   听着 / 想着 / 说着 → 挂断（与 Esc、通话条的「结束通话」同一条 hangUp）
+   *   没听清（unclear）  → 重说：立刻回聆听，不等那 2.5s
+   *   断了（offline）    → 重连：清掉错误行、重新起聆听（不是开一条新通话）
+   */
+  const onOrbCallToggle = useCallback(() => {
+    if (!voiceMode) {
+      void startCall();
+      return;
+    }
+    const state = voiceStateRef.current;
+    if (state === "unclear" || state === "offline") {
+      moveVoice("listening");
+      setVoiceNotice(null);
+      heardRef.current = "";
+      partialRef.current = "";
+      setVoicePartial("");
+      turnRef.current?.reset();
+      /** 浏览器识别要重开一个会话；桥式没有常驻会话，这一步是空操作——两条路共用同一句。 */
+      listenRef.current();
+      return;
+    }
+    hangUp();
+  }, [hangUp, moveVoice, startCall, voiceMode]);
+
+  /**
+   * unclear 的第二条出路（deepseek O-3）：改成打字。
+   * 已经认到的片段带走（别让用户重敲），挂断、填进对话栏、聚焦——然后就是普通打字。
+   */
+  const typeInstead = useCallback(() => {
+    const fragment = [heardRef.current, partialRef.current]
+      .map((part) => part.trim())
+      .filter((part) => part !== "")
+      .join(" ");
+    hangUp();
+    if (fragment !== "") setDraft(fragment);
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>(".sr-composer-input")?.focus();
+    });
+  }, [hangUp]);
+
+  /**
+   * 验收钩子（生产不触发，形状照抄 StudioSoundsDrawer 的 __soundsProbe）：
+   * 「挂断之后那一刻，unclear 的回退闹钟还挂着没有」在 DOM 上看不出来（挂断后球回 idle，
+   * 悬空定时器照样会在 2.5s 后把状态改成 listening），而它正是 AGENTS.md:109 要防的泄漏。
+   * 所以把它开一个只读读数给 e2e。
+   */
+  useEffect(() => {
+    window.__callProbe = {
+      state: () => voiceStateRef.current,
+      unclearArmed: () => unclearTimer.current !== null,
+    };
+    return () => {
+      delete window.__callProbe;
+    };
   }, []);
 
   // While the call is up the microphone feeds exactly one thing at a time: the endpointer while the
@@ -2817,23 +2952,35 @@ export function App() {
         voiceMode={voiceMode}
         voiceState={voiceState}
         voiceLevel={() => level.current}
-        onCallToggle={() => (voiceMode ? hangUp() : void startCall())}
+        onCallToggle={onOrbCallToggle}
+        onCallEnd={hangUp}
         caption={
           /*
            * 通话没起来（麦克风被拒等）时也要把话说出来——否则用户点球什么都不发生，
            * 字幕是唯一能解释「为什么没反应」的地方。
+           *
+           * F-1 五态各一行（状态词全部来自 call-words.ts，一处改、处处改）：
+           * 没听清 = 一句话 + 「改成打字」按钮（≤12 字，留给用户做的决定）；
+           * 断了 = 「点球重连」（琥珀，不是红——可恢复）。
            */
           voiceMode
             ? voiceState === "speaking"
               ? (spokenSentence ?? undefined)
               : voiceState === "thinking"
                 ? (voiceNotice ?? callWord("thinking"))
-                : voicePartial !== ""
-                  ? voicePartial
-                  : callHintOn
-                    ? CALL_START_HINT
-                    : callWord("listening")
+                : voiceState === "unclear"
+                  ? "没听清，再说一遍？"
+                  : voiceState === "offline"
+                    ? "断了 · 点球重连"
+                    : voicePartial !== ""
+                      ? voicePartial
+                      : callHintOn
+                        ? CALL_START_HINT
+                        : callWord("listening")
             : (voiceNotice ?? undefined)
+        }
+        captionAction={
+          voiceMode && voiceState === "unclear" ? { label: "改成打字", onAction: typeInstead } : undefined
         }
       />
     </>
