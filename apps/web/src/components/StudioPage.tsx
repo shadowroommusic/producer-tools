@@ -10,6 +10,8 @@
  * the playhead crosses its edges, volume following the track's fader and mute/solo.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StudioScratchPad } from "./StudioScratchPad";
+import { SCRATCH_MIME, removeScratchClip } from "../lib/studio-scratch";
 import type { CSSProperties, ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import type { NotePlayer, NoteVoice } from "../lib/synth";
@@ -1501,6 +1503,16 @@ export function StudioPage({
       )}
 
       <div className="sr-studio-body">
+        <StudioScratchPad
+          scratch={project.scratch ?? []}
+          bpm={project.bpm}
+          playing={playing}
+          getPlayheadBars={() => position.current}
+          onRemove={(clipId) => {
+            onBeginEdit?.();
+            onChange((current) => removeScratchClip(current, clipId));
+          }}
+        />
         <div className="sr-studio-headers">
           <div className="sr-studio-headers-top" />
           <div className="sr-studio-headers-scroll sr-scroll">
@@ -1736,6 +1748,31 @@ export function StudioPage({
                 onDoubleClick={(event) => {
                   const box = event.currentTarget.getBoundingClientRect();
                   addClip(track.id, (event.clientX - box.left) / barPx);
+                }}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(SCRATCH_MIME)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(event) => {
+                  // 试凑格落轨：从试凑区移到这条轨的这个吸附小节（时间轴的 Files 通道不碰这里）
+                  const clipId = event.dataTransfer.getData(SCRATCH_MIME);
+                  if (clipId === "") return;
+                  event.preventDefault();
+                  const box = event.currentTarget.getBoundingClientRect();
+                  const bar = Math.max(0, Math.round((event.clientX - box.left) / barPx));
+                  onBeginEdit?.();
+                  onChange((current) => {
+                    // 幂等：StrictMode 双跑 updater，第二次找不到候选就原样返回
+                    const moved = (current.scratch ?? []).find((entry) => entry.id === clipId);
+                    if (moved === undefined) return current;
+                    return {
+                      ...removeScratchClip(current, clipId),
+                      tracks: current.tracks.map((entry) =>
+                        entry.id === track.id ? { ...entry, clips: [...entry.clips, { ...moved, start: bar }] } : entry,
+                      ),
+                    };
+                  });
                 }}
               >
                 {track.clips.map((clip) => {

@@ -538,6 +538,11 @@ export type StudioProject = {
   tracks: StudioTrack[];
   /** Set when the last arrangement render said what the song's shape is. */
   sections?: StudioSection[];
+  /**
+   * 试凑区（#bitwig-adoption A 项）：AI 候选 clip 先落这里，不直接进歌——
+   * 点格循环试听、拖进轨道才算。上限与剪除规则见 lib/studio-scratch.ts。
+   */
+  scratch?: StudioClip[];
 };
 
 const STORAGE_KEY = "shadowroom.studio.projects.v1";

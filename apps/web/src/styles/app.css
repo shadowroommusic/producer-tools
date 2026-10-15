@@ -4061,3 +4061,84 @@
   font-size: 11px;
 }
 
+/* ---------------------------------------------------------------- 试凑区（#bitwig-adoption A） */
+.sr-scratch-rail {
+  align-self: flex-start;
+  margin: 8px;
+  padding: 4px 10px;
+  border: 0.5px dashed var(--sr-border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sr-text-dim);
+  cursor: pointer;
+}
+.sr-scratch {
+  flex: none;
+  width: 208px;
+  margin: 8px 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: 10px;
+  background: var(--sr-panel);
+  overflow: hidden;
+}
+.sr-scratch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: 0.5px solid var(--sr-border-strong);
+}
+.sr-scratch-title { font-size: 12px; font-weight: 600; }
+.sr-scratch-hint {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--sr-text-dim);
+  border-bottom: 0.5px solid var(--sr-border-strong);
+}
+.sr-scratch-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  overflow-y: auto;
+}
+.sr-scratch-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 22px 6px 8px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;
+}
+.sr-scratch-cell[data-playing] {
+  border-color: var(--sr-accent);
+  box-shadow: 0 0 0 0.5px var(--sr-accent) inset;
+}
+.sr-scratch-cell-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-scratch-cell-meta { font-size: 10px; color: var(--sr-text-dim); }
+.sr-scratch-cell-remove {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--sr-text-dim);
+  cursor: pointer;
+}
+.sr-scratch-empty {
+  margin: 4px 0;
+  font-size: 11px;
+  color: var(--sr-text-dim);
+}
+
