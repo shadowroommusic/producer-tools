@@ -40,9 +40,11 @@ const settings = {
       presetSource: "minimax",
       models: ["MiniMax-M3"],
       modelProfiles: {},
+      // 刻意用**设置页能配出来的形状**（下拉只有 4 种通用格式）：桥按端点主机名认家
+      // （resolveMediaProtocol，f57b571）。这一条就是「用户从 UI 配置」的真实通路。
       capabilities: {
-        stt: { protocol: "minimax-asr", baseUrl: "https://api.minimaxi.com", models: ["asr-1.0"] },
-        tts: { protocol: "minimax-t2a", baseUrl: "https://api.minimaxi.com", models: ["speech-2.8-hd"] },
+        stt: { protocol: "custom_endpoint", baseUrl: "https://api.minimaxi.com", models: ["asr-1.0"] },
+        tts: { protocol: "custom_endpoint", baseUrl: "https://api.minimaxi.com", models: ["speech-2.8-hd"] },
       },
     },
   ],
