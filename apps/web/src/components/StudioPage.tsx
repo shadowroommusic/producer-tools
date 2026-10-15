@@ -12,6 +12,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StudioScratchPad } from "./StudioScratchPad";
 import { SCRATCH_MIME, removeScratchClip } from "../lib/studio-scratch";
+import { StudioSoundsDrawer } from "./StudioSoundsDrawer";
+import { SOUND_MIME, decodeSoundDrag } from "../lib/studio-sounds";
 import { outOfKeyNotes, parseProjectKey } from "../lib/studio-key";
 import {
   GAIN_LFO_RATES,
@@ -1546,6 +1548,7 @@ export function StudioPage({
             onChange((current) => removeScratchClip(current, clipId));
           }}
         />
+        <StudioSoundsDrawer notePlayer={notePlayer.current} />
         <div className="sr-studio-headers">
           <div className="sr-studio-headers-top" />
           <div className="sr-studio-headers-scroll sr-scroll">
@@ -1564,6 +1567,31 @@ export function StudioPage({
                     // S2：右键轨道头出菜单，不再只把名字选成蓝底。
                     event.preventDefault();
                     setHeadMenu({ trackId: track.id, x: event.clientX, y: event.clientY });
+                  }}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes(SOUND_MIME)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDrop={(event) => {
+                    // 音色浏览器落轨道头（#bitwig-adoption D）：音色 = 指定该轨 GM 音色；
+                    // 采样 = 落到这条轨的第 0 小节（要选小节就落 lane）。
+                    const payload = decodeSoundDrag(event.dataTransfer.getData(SOUND_MIME));
+                    if (payload === null) return;
+                    event.preventDefault();
+                    onBeginEdit?.();
+                    if (payload.kind === "instrument") {
+                      updateTrack(track.id, (current) => ({ ...current, instrument: { program: payload.program, name: payload.name } }));
+                    } else {
+                      onChange((current) => ({
+                        ...current,
+                        tracks: current.tracks.map((entry) =>
+                          entry.id === track.id
+                            ? { ...entry, clips: [...entry.clips, newClip(payload.name, 0, 1, payload.path)] }
+                            : entry,
+                        ),
+                      }));
+                    }
                   }}
                 >
                   <span className="sr-track-colour" aria-hidden="true" />
@@ -1633,6 +1661,15 @@ export function StudioPage({
                     }}
                     onChange={(event) => updateTrack(track.id, (current) => ({ ...current, name: event.target.value }))}
                   />
+                  {track.instrument !== undefined && (
+                    <span
+                      className="sr-track-instrument sr-mono"
+                      data-instrument={track.instrument.program}
+                      title={`GM 音色 #${track.instrument.program} · 从音色浏览器拖一个来换`}
+                    >
+                      {track.instrument.name}
+                    </span>
+                  )}
                   <div className="sr-track-controls">
                     <button
                       type="button"
@@ -1783,29 +1820,54 @@ export function StudioPage({
                   addClip(track.id, (event.clientX - box.left) / barPx);
                 }}
                 onDragOver={(event) => {
-                  if (!event.dataTransfer.types.includes(SCRATCH_MIME)) return;
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
+                  if (event.dataTransfer.types.includes(SCRATCH_MIME)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  } else if (event.dataTransfer.types.includes(SOUND_MIME)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }
                 }}
                 onDrop={(event) => {
                   // 试凑格落轨：从试凑区移到这条轨的这个吸附小节（时间轴的 Files 通道不碰这里）
                   const clipId = event.dataTransfer.getData(SCRATCH_MIME);
-                  if (clipId === "") return;
+                  if (clipId !== "") {
+                    event.preventDefault();
+                    const box = event.currentTarget.getBoundingClientRect();
+                    const bar = Math.max(0, Math.round((event.clientX - box.left) / barPx));
+                    onBeginEdit?.();
+                    onChange((current) => {
+                      // 幂等：StrictMode 双跑 updater，第二次找不到候选就原样返回
+                      const moved = (current.scratch ?? []).find((entry) => entry.id === clipId);
+                      if (moved === undefined) return current;
+                      return {
+                        ...removeScratchClip(current, clipId),
+                        tracks: current.tracks.map((entry) =>
+                          entry.id === track.id ? { ...entry, clips: [...entry.clips, { ...moved, start: bar }] } : entry,
+                        ),
+                      };
+                    });
+                    return;
+                  }
+                  // 音色/采样落轨（#bitwig-adoption D）：采样 = 吸附小节落 clip；音色 = 指定该轨音色
+                  const payload = decodeSoundDrag(event.dataTransfer.getData(SOUND_MIME));
+                  if (payload === null) return;
                   event.preventDefault();
                   const box = event.currentTarget.getBoundingClientRect();
                   const bar = Math.max(0, Math.round((event.clientX - box.left) / barPx));
                   onBeginEdit?.();
-                  onChange((current) => {
-                    // 幂等：StrictMode 双跑 updater，第二次找不到候选就原样返回
-                    const moved = (current.scratch ?? []).find((entry) => entry.id === clipId);
-                    if (moved === undefined) return current;
-                    return {
-                      ...removeScratchClip(current, clipId),
+                  if (payload.kind === "sample") {
+                    onChange((current) => ({
+                      ...current,
                       tracks: current.tracks.map((entry) =>
-                        entry.id === track.id ? { ...entry, clips: [...entry.clips, { ...moved, start: bar }] } : entry,
+                        entry.id === track.id
+                          ? { ...entry, clips: [...entry.clips, newClip(payload.name, bar, 1, payload.path)] }
+                          : entry,
                       ),
-                    };
-                  });
+                    }));
+                  } else {
+                    updateTrack(track.id, (current) => ({ ...current, instrument: { program: payload.program, name: payload.name } }));
+                  }
                 }}
               >
                 {track.clips.map((clip) => {

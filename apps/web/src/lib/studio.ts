@@ -424,6 +424,11 @@ export type StudioTrack = {
   type?: StudioTrackType;
   /** Index into `TRACK_COLORS`, assigned in creation order so neighbours differ. */
   color?: number;
+  /**
+   * 指定给这条轨的 GM 音色（#bitwig-adoption D）：音色浏览器拖到轨道头/轨道落上即设。
+   * 只进模型与轨道头徽章；渲染消费（render spec / 导出音色映射）留后续刀。
+   */
+  instrument?: { program: number; name: string };
 };
 
 /**

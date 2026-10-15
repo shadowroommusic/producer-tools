@@ -30,8 +30,11 @@ declare global {
 }
 
 type Props = {
-  /** imports/ 采样清单（本阶段调用方注入；挂载阶段再定 fetch 通道——桥暂无列目录端点）。 */
-  imports: SampleEntry[];
+  /**
+   * imports/ 采样清单。给了就用给的（测试/隔离渲染）；不给 = 生产路径：每次展开自拉
+   * GET /api/agent/dir?dir=imports（agent-bridge 030c4d8；本文件是该端点在 web 侧唯一调用点）。
+   */
+  imports?: SampleEntry[];
   /** 复用走带的合成器；不给 = 首次点音色时自建（本组件独立自验的场景）。 */
   notePlayer?: NotePlayer;
   /** 行高 px（首帧口径：128+200 项在容器内只参与一次排版）。 */
@@ -83,6 +86,7 @@ const styles = {
   name: { flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   hint: { maxWidth: 90, fontSize: 10, color: "var(--sr-text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   empty: { margin: "4px 0", fontSize: 11, color: "var(--sr-text-dim)" },
+  collapse: { border: 0, background: "transparent", color: "var(--sr-text-dim)", cursor: "pointer", fontSize: 12, padding: "0 2px" },
 } satisfies Record<string, CSSProperties | ((...args: never[]) => CSSProperties)>;
 
 const InstrumentRow = memo(function InstrumentRow({
@@ -144,6 +148,8 @@ const SampleRow = memo(function SampleRow({
 });
 
 function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }: Props) {
+  /** 默认收起成 rail（与试凑区同款）：首帧成本 ≈ 0，采样清单等展开了再拉。 */
+  const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"instrument" | "sample">("instrument");
   const [queries, setQueries] = useState({ instrument: "", sample: "" });
   const [playingKey, setPlayingKey] = useState<string | null>(null);
@@ -205,16 +211,49 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
     [],
   );
 
+  /** imports 没给 = 生产：每次展开自拉一次目录（收起→展开即刷新，省一个刷新按钮）。 */
+  const [fetched, setFetched] = useState<SampleEntry[] | null>(null);
+  useEffect(() => {
+    if (!open || imports !== undefined) return;
+    let cancelled = false;
+    fetch("/api/agent/dir?dir=imports")
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`dir ${response.status}`))))
+      .then((body: { entries?: unknown }) => {
+        if (cancelled) return;
+        const entries = Array.isArray(body.entries) ? (body.entries as { name: string; path: string }[]) : [];
+        setFetched(entries.map((entry) => ({ name: String(entry.name), path: String(entry.path) })));
+      })
+      .catch(() => {
+        if (!cancelled) setFetched([]); // 桥不在/拉失败 = 空态文案，不红屏
+      });
+    return () => { cancelled = true; };
+  }, [open, imports]);
+  const samples = imports ?? fetched ?? [];
+  const samplesLoading = imports === undefined && fetched === null;
+
   const visibleSounds = useMemo(() => filterSounds(GM_SOUNDS, queries.instrument), [queries.instrument]);
-  const visibleSamples = useMemo(() => filterSounds(imports, queries.sample), [imports, queries.sample]);
+  const visibleSamples = useMemo(() => filterSounds(samples, queries.sample), [samples, queries.sample]);
   const visibleCount = tab === "instrument" ? visibleSounds.length : visibleSamples.length;
-  const total = tab === "instrument" ? GM_SOUNDS.length : imports.length;
+  const total = tab === "instrument" ? GM_SOUNDS.length : samples.length;
+
+  if (!open) {
+    return (
+      <button type="button" className="sr-sounds-rail sr-mono" onPointerDownCapture={warmContext} onClick={() => setOpen(true)}>
+        音色浏览器
+      </button>
+    );
+  }
 
   return (
     <aside style={styles.aside} aria-label="音色浏览器" onPointerDownCapture={warmContext}>
       <header style={styles.head}>
         <span style={styles.title}>音色浏览器</span>
-        <span style={styles.count}>{visibleCount}/{total}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={styles.count}>{visibleCount}/{total}</span>
+          <button type="button" style={styles.collapse} aria-label="收起音色浏览器" title="收起音色浏览器" onClick={() => setOpen(false)}>
+            ×
+          </button>
+        </span>
       </header>
       <div style={styles.tabs} role="tablist">
         <button
@@ -227,7 +266,7 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
           type="button" role="tab" data-tab="sample" aria-selected={tab === "sample"}
           style={styles.tab(tab === "sample")} onClick={() => setTab("sample")}
         >
-          采样 · {imports.length}
+          采样 · {samples.length}
         </button>
       </div>
       <input
@@ -264,7 +303,11 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
             ))}
         {visibleCount === 0 && (
           <p style={styles.empty}>
-            {total === 0 && tab === "sample" ? "imports/ 还是空的——导入的音频会出现在这里。" : "没有匹配。"}
+            {tab === "sample" && samplesLoading
+              ? "拉 imports/ 中…"
+              : total === 0 && tab === "sample"
+                ? "imports/ 还是空的（或桥不在）——导入的音频会出现在这里。"
+                : "没有匹配。"}
           </p>
         )}
       </div>

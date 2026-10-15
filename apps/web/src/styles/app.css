@@ -4142,6 +4142,26 @@
   color: var(--sr-text-dim);
 }
 
+/* 音色浏览器 rail（#bitwig-adoption D；面板本体样式内联在 StudioSoundsDrawer.tsx） */
+.sr-sounds-rail {
+  align-self: flex-start;
+  margin: 8px 8px 8px 0;
+  padding: 4px 10px;
+  border: 0.5px dashed var(--sr-border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sr-text-dim);
+  cursor: pointer;
+}
+.sr-track-instrument {
+  font-size: 10px;
+  color: var(--sr-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 90px;
+}
+
 /* 调外音（#bitwig-adoption B）：PianoRoll 音符与 clip 徽标共用一档警示色 */
 .sr-roll-note[data-offkey] {
   outline: 1.5px solid var(--sr-warn, #e0a030);
