@@ -361,9 +361,12 @@ checkTrash(
 /**
  * ⑫c 删除失败的弹窗行内错误（P2-B，2026-10-16 从「两出口钉住」升级成会红的断言）：
  * 失败时 弹窗必须留着 + 弹窗内必须有行内失败文案（.sr-lib-dialog-error）+ 页级 alert 双通道保留。
- * 确定性触发：route 拦截 /api/call 里 tool=track_remove 的请求，回纯文本「RuntimeError…」
- * ——这就是插件在桥父进程无废纸篓 TCC 权限时的真实错误形状（前端 JSON.parse 炸出
- * 「Unexpected token 'R'」；插件侧统一 JSON 形状是 P2-A，派给 ZCode）。与宿主 TCC 权限无关，
+ * 确定性触发：route 拦截 /api/call 里 tool=track_remove 的请求，按**实测形状**回失败
+ * （p2a-json-error-shape 真桥实测 2026-10-16：HTTP 层永远是 JSON——桥的 send() 单出口；
+ * 「纯文本 RuntimeError」指的是 result 字段=MCP text content，实测 envelope =
+ * 200 {"result":"FileNotFoundError: no track #99999","isError":true,"ms":0}，content-type
+ * application/json）。mock 文本取 core.py track_remove 的真实报错模板（sweep 当天前端炸出
+ * 「Unexpected token 'R'」证明 result 以 RuntimeError 开头）。与宿主 TCC 权限无关，
  * 任何机器都走失败分支，不依赖真桥失败。⑫ 的真桥点击在本机已失败过一次、弹窗按设计留着，
  * 先 Esc 收起（它就是全量扫里卡住 ⑬ 的那张 scrim）再做拦截断言。
  * 拦截目标用 libaccept-04：mock 失败什么都不删，后面 ③ 抽屉还要用它。
@@ -381,7 +384,15 @@ await page.route("**/api/call", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ result: "RuntimeError: simulated trash failure (bridge parent lacks Trash TCC)", isError: false }),
+      // 实测形状：isError:true（插件 mcp_server.py 对异常永远 isError:true）+ ms 字段；
+      // result = core.py:929 的真实报错模板（纯文本，非 JSON 字符串）。
+      body: JSON.stringify({
+        result:
+          "RuntimeError: 移到废纸篓失败（库行未动；源文件仍在原位）：RuntimeError: send2trash 报成功但废纸篓里没有出现这个文件" +
+          "（静默失败，通常是调用方进程没有废纸篓权限）：在 ~/.Trash 里找不到 libaccept-04.wav",
+        isError: true,
+        ms: 5,
+      }),
     });
   } else {
     await route.continue();

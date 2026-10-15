@@ -48,5 +48,10 @@ export async function callTool<T = unknown>(server: string, tool: string, args: 
     }
     throw cause;
   }
+  // isError 必须在这里落地（p2a-json-error-shape 实测）：桥把插件异常原样塞进 result
+  // （HTTP 层永远是 JSON，「纯文本 RuntimeError」指的是 result 字段——实测 200 {"result":
+  // "FileNotFoundError: …","isError":true}）。不拦的话下游 JSON.parse(纯文本) 炸出
+  // 「Unexpected token 'R'」，用户看到的是解析错而不是插件的原话。
+  if (data.isError === true) throw new Error(String(data.result));
   return data.result;
 }
