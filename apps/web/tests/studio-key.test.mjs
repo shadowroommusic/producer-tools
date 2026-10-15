@@ -33,6 +33,15 @@ test("parseProjectKey: 中文与升降号（含 ♭/♯ 全角符号）", () => 
   assert.deepEqual(parseProjectKey("c#m"), { pc: 1, mode: "minor" }); // C# minor → pc 1（原稿笔误 4=E）
 });
 
+test("parseProjectKey: 补齐 6 个未直接断言的音名（MiniMax 交叉验证建议）", () => {
+  assert.deepEqual(parseProjectKey("D"), { pc: 2, mode: "major" });
+  assert.deepEqual(parseProjectKey("D#"), { pc: 3, mode: "major" });
+  assert.deepEqual(parseProjectKey("Eb"), { pc: 3, mode: "major" });
+  assert.deepEqual(parseProjectKey("Gb"), { pc: 6, mode: "major" });
+  assert.deepEqual(parseProjectKey("Ab"), { pc: 8, mode: "major" });
+  assert.deepEqual(parseProjectKey("A#"), { pc: 10, mode: "major" });
+});
+
 test("parseProjectKey: Camelot 轮（A 面小调 / B 面大调）", () => {
   assert.deepEqual(parseProjectKey("8A"), { pc: 9, mode: "minor" }); // 8A = A minor
   assert.deepEqual(parseProjectKey("8B"), { pc: 0, mode: "major" }); // 8B = C major

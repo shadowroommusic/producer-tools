@@ -163,7 +163,7 @@ try {
 
   // ⑥ B 项：调外徽标 → 钢琴卷帘量化到调
   const badge = (await page.locator('.sr-clip[aria-label="旋律"] .sr-clip-badge--offkey').textContent().catch(() => "")) ?? "";
-  check("⑥a 旋律 clip 调外徽标", badge.includes("调外 1"), badge.replace(/\s+/g, " ").trim() || "(无徽标)");
+  check("⑥a 旋律 clip 调外徽标", /调外\s*1(?!\d)/.test(badge), badge.replace(/\s+/g, " ").trim() || "(无徽标)");
   await page.locator('.sr-clip[aria-label="旋律"]').dblclick();
   await page.locator(".sr-roll").waitFor({ timeout: 5000 });
   const offBefore = await page.locator(".sr-roll-note[data-offkey]").count();
