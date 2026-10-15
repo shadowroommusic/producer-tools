@@ -21,12 +21,15 @@ function frames(ms, level) {
 /**
  * Feed a trace to a detector and collect the callbacks.
  * @param segments - `[ms, level]` pairs, in order.
+ * @param heardText - words the recognizer "recognised", set once up front (the silence decision
+ *   only reads them after speech, so arriving early is equivalent to arriving during it).
  * @returns the events with the timestamp they fired at.
  */
-function drive(segments, make) {
+function drive(segments, make, heardText) {
   const events = [];
   const clock = { now: 0 };
   const detector = make((name) => () => events.push([name, Math.round(clock.now)]));
+  if (heardText !== undefined) detector.heard(heardText);
   for (const [ms, level] of segments) {
     for (const value of frames(ms, level)) {
       detector.feed(value, clock.now);
@@ -44,6 +47,8 @@ test("a phrase ends the turn about 900 ms after the user stops", () => {
       [1400, 0.02],
     ],
     (emit) => createTurnDetector({ onSpeechStart: emit("speech"), onTurnEnd: emit("end") }),
+    // 有字（浏览器流式路径的形状）：1.6s 的长 burst 也不掺和，等待仍由调用方默认值决定。
+    "我觉得这个",
   );
   assert.deepEqual(
     events.map(([name]) => name),
@@ -127,6 +132,70 @@ test("the endpointer waits less after a finished sentence and more after a dangl
   assert.ok(turnSilenceMs("好，就这样。") < turnSilenceMs("我觉得这个"));
   assert.ok(turnSilenceMs("但是") > turnSilenceMs("我觉得这个"));
   assert.ok(turnSilenceMs("好，就这样。") >= 300, "but never instant: a pause is still a pause");
+  // 有字时 burst 不参与：浏览器流式路径的句子标点行为一帧都不动
+  assert.equal(turnSilenceMs("好，就这样。", 5000), turnSilenceMs("好，就这样。"));
+  assert.equal(turnSilenceMs("但是", 0), turnSilenceMs("但是"));
+  assert.equal(turnSilenceMs("我觉得这个", 1200), turnSilenceMs("我觉得这个"));
+});
+
+test("没有文字时（桥式回合制），等待按本次说话时长自适应", () => {
+  assert.equal(turnSilenceMs(""), 700, "单参调用 = 没有包络信号 → 基准原样（App 现有接线的语义不变）");
+  assert.equal(turnSilenceMs("", undefined, 900), 900, "基准跟着调用方走，缺省 burst 不加不减");
+  assert.equal(turnSilenceMs("", 0), 500, "边界 0ms：极短 burst 少等");
+  assert.equal(turnSilenceMs("", 399), 500, "极短（<400ms）一档");
+  assert.equal(turnSilenceMs("", 400), 700, "中段维持基准");
+  assert.equal(turnSilenceMs("", 1199), 700);
+  assert.equal(turnSilenceMs("", 1200), 950, "边界 1.2s：长句多等 250ms");
+  assert.equal(turnSilenceMs("", 8000), 950, "封顶：停顿的等待不随说话时长无限涨");
+  assert.equal(turnSilenceMs("", 1200, 900), 1150, "自适应是加在调用方基准上的增量");
+});
+
+test("桥式通话（无文字）：端点在 detector 里按 burst 调整等待", () => {
+  // App 的真实接线形状：silenceMs 读 heardRef/partialRef，桥式回合制下恒空 → turnSilenceMs("")
+  const bridgeEndAt = (segments) => {
+    const { events } = drive(segments, (emit) =>
+      createTurnDetector({ onTurnEnd: emit("end"), silenceMs: () => turnSilenceMs("") }));
+    assert.equal(events.length, 1, "the turn ends exactly once");
+    return events[0][1];
+  };
+  // 长句 1.6s：等 950（不再是固定 700）
+  assert.ok(Math.abs(bridgeEndAt([[1000, 0.02], [1600, 0.3], [1800, 0.02]]) - 3550) < 120);
+  // 中段 0.8s：维持 700
+  assert.ok(Math.abs(bridgeEndAt([[1000, 0.02], [800, 0.3], [1200, 0.02]]) - 2500) < 120);
+  // 快指令 0.25s：等 500
+  assert.ok(Math.abs(bridgeEndAt([[1000, 0.02], [250, 0.3], [900, 0.02]]) - 1750) < 120);
+});
+
+test("桥式长句带自然停顿：跨度从首起音算，不被换气拆碎", () => {
+  // 0.9s 说话 + 0.3s 换气（短于等待，回合不关）+ 0.7s 说话 → 跨度 1.9s → 按 ≥1.2s 档等 950
+  const { events } = drive(
+    [
+      [1000, 0.02],
+      [900, 0.3],
+      [300, 0.02],
+      [700, 0.3],
+      [1600, 0.02],
+    ],
+    (emit) => createTurnDetector({ onTurnEnd: emit("end"), silenceMs: () => turnSilenceMs("") }),
+  );
+  assert.equal(events.length, 1);
+  // 话音落在 1000–2900，末帧 2900 + 950 = 3850（若被拆成 0.7s 的尾段则是 2900+700=3600）
+  assert.ok(Math.abs(events[0][1] - 3850) < 120);
+});
+
+test("有字（浏览器流式）时 burst 不参与：与旧版逐帧一致", () => {
+  // 与 App 接线同形：silenceMs 收到字。1.6s 长句 + 有字 → 还是基准 700，不是 950
+  const { events } = drive(
+    [
+      [1000, 0.02],
+      [1600, 0.3],
+      [1800, 0.02],
+    ],
+    (emit) => createTurnDetector({ onTurnEnd: emit("end"), silenceMs: (heard) => turnSilenceMs(heard) }),
+    "我觉得这个",
+  );
+  assert.equal(events.length, 1);
+  assert.ok(Math.abs(events[0][1] - 3300) < 120);
 });
 
 test("an answer is spoken sentence by sentence, not in one breath", () => {

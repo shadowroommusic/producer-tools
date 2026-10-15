@@ -146,12 +146,36 @@ export function createBargeInDetector(events: BargeInEvents = {}, overrides: Par
  * A sentence that ended with punctuation is finished — waiting the full silence afterwards makes the
  * call feel slow for exactly the people who speak in complete sentences, which is most of them. A
  * trailing "但是" or "然后" means the thought is still coming, so those wait *longer*.
+ *
+ * Without words there is still a signal: how long the user has been talking. Bridge turn-taking
+ * (desktop / configured STT) never opens a streaming recognition session, so `heard` stays empty for
+ * the whole turn and the text rules above can never fire — the envelope is all the endpointer has.
+ * The turn detector feeds this burst length as `burstMs`; an omitted `burstMs` means "no envelope
+ * either" and returns the base unchanged, which is what callers that only know words (the streaming
+ * path) have always gotten.
  */
-export function turnSilenceMs(heard: string, base = 700): number {
+export function turnSilenceMs(heard: string, burstMs?: number, base = 700): number {
   const text = heard.trim();
-  if (text === "") return base;
+  if (text === "") return burstMs === undefined ? base : burstSilenceMs(burstMs, base);
   if (/[。！？!?]$/.test(text)) return Math.max(300, base - 400);
   if (/(,|，|、|；|;)$/.test(text)) return base;
   if (/(但是|然后|因为|所以|如果|而且|以及|and|but|so|because)$/i.test(text)) return base + 300;
   return base;
+}
+
+/**
+ * The no-words wait, from how long this turn's speech lasted.
+ *
+ * Steps rather than a ramp: the two inflection points (a blip vs a clause) are what the ear
+ * notices, and in-between values buy nothing at a 60fps envelope. A burst under 400ms is a whole
+ * command ("对", "停") and gets less ceremony, but never less than 450ms — a pause is still a
+ * pause, and a thinking "嗯…" deserves the benefit of the doubt. From 1.2s on, the user is
+ * assembling a longer thought: +250ms survives the breath before a trailing clause without making
+ * turn-taking feel slow; past that it caps, because the wait after they *stop* does not need to
+ * grow with how long they *talked*.
+ */
+function burstSilenceMs(burstMs: number, base: number): number {
+  if (burstMs >= 1200) return base + 250;
+  if (burstMs >= 400) return base;
+  return Math.max(450, base - 200);
 }

@@ -11,6 +11,7 @@
  * instead of bundling, and resolves nothing implicitly). Vite is happy either way.
  */
 import { acquireMicrophone, releaseMicrophone } from "./mic.ts";
+import { turnSilenceMs } from "./bargein.ts";
 
 type RecognitionResult = {
   isFinal: boolean;
@@ -101,16 +102,34 @@ export type TurnDetector = {
 export function createTurnDetector(options: TurnDetectorOptions = {}): TurnDetector {
   const speechLevel = options.speechLevel ?? 0.1;
   const holdMs = options.holdMs ?? 70;
-  const silenceFor = (heard: string) =>
-    typeof options.silenceMs === "function" ? options.silenceMs(heard) : (options.silenceMs ?? 900);
   /** Noise floor: falls immediately, creeps back up, so speech itself never becomes the baseline. */
   let floor = speechLevel;
   let loudSince: number | null = null;
   let lastVoiceAt = 0;
   let speaking = false;
   let turnOpen = false;
+  /**
+   * 本次回合第一段起音（与 feed 同一个钟）。桥式回合制 STT 整回合没有文字可读，端点能用的
+   * 只剩包络：「这一句说了多久」= 首起音到最后一帧有声的跨度，是句子大小的代理。记首起音
+   * 而不是最后一段连续响——带自然停顿的长句仍是同一个没说完的想法，不能被逗号处的换气拆碎。
+   */
+  let turnVoiceStart: number | null = null;
   /** The words recognised during this turn, for the adaptive silence. */
   let heard = "";
+
+  /**
+   * How long quiet must last to close the turn. Words decide when there are words — the streaming
+   * path is unchanged, punctuation and all. Without words (bridge turn-taking) the caller's
+   * `silenceMs` sees an empty string, so its answer is used as the base and the burst length adjusts
+   * it: this is the one place both signals exist, and the app's own wiring cannot see the burst.
+   */
+  const waitMs = () => {
+    const fromCaller =
+      typeof options.silenceMs === "function" ? options.silenceMs(heard) : (options.silenceMs ?? 900);
+    if (heard.trim() !== "") return fromCaller;
+    const burstMs = turnVoiceStart === null ? 0 : Math.max(0, lastVoiceAt - turnVoiceStart);
+    return turnSilenceMs("", burstMs, fromCaller);
+  };
 
   return {
     feed: (level, now) => {
@@ -121,6 +140,7 @@ export function createTurnDetector(options: TurnDetectorOptions = {}): TurnDetec
         lastVoiceAt = now;
         if (!speaking && now - loudSince >= holdMs) {
           speaking = true;
+          turnVoiceStart = loudSince;
           if (!turnOpen) {
             turnOpen = true;
             options.onSpeechStart?.();
@@ -129,9 +149,10 @@ export function createTurnDetector(options: TurnDetectorOptions = {}): TurnDetec
         return;
       }
       loudSince = null;
-      if (speaking && now - lastVoiceAt >= silenceFor(heard)) {
+      if (speaking && now - lastVoiceAt >= waitMs()) {
         speaking = false;
         turnOpen = false;
+        turnVoiceStart = null;
         options.onTurnEnd?.();
       }
     },
@@ -139,6 +160,7 @@ export function createTurnDetector(options: TurnDetectorOptions = {}): TurnDetec
       loudSince = null;
       speaking = false;
       turnOpen = false;
+      turnVoiceStart = null;
       heard = "";
     },
     heard: (text) => {
