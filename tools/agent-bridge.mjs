@@ -364,6 +364,28 @@ function mediaAdapter(protocol) {
   return MEDIA_PROTOCOLS[String(protocol ?? "")] ?? null;
 }
 
+/**
+ * 协议名 → 适配器名，允许「按端点认家」。
+ *
+ * 为什么需要：设置页的协议下拉只有四种通用格式（chat_completions / responses / messages /
+ * custom_endpoint），预设里那些供应商协议名（minimax-t2a、mimo-tts…）在存进设置时被抹平。
+ * 用户在 UI 里配 MiniMax 得到的就是 protocol="custom_endpoint" + baseUrl=api.minimaxi.com——
+ * 桥这边如果只认协议名，就会拿 OpenAI 的形状去撞 MiniMax 的 API（实测 404/400，TTS 没声音）。
+ * 已知的供应商协议名优先；否则按端点主机名兜底；再认不出就保持原样走通用形状。
+ */
+function resolveMediaProtocol(protocol, baseUrl, kind) {
+  const table = kind === "stt" ? STT_PROTOCOLS : MEDIA_PROTOCOLS;
+  const name = String(protocol ?? "");
+  if (table[name] !== undefined) return name;
+  const host = String(baseUrl ?? "").toLowerCase();
+  if (host.includes("minimaxi") || host.includes("minimax.chat")) {
+    if (kind === "stt") return "minimax-asr";
+    if (kind === "tts") return "minimax-t2a";
+    if (kind === "music") return "minimax-music";
+  }
+  return name;
+}
+
 /** 调用一家供应商的媒体接口，返回音频字节与内容类型。 */
 async function callMedia(provider, protocol, input) {
   const adapter = mediaAdapter(protocol);
@@ -1580,7 +1602,11 @@ const http = createServer(async (request, response) => {
         reference: body.credentialRef ?? null,
         protocol: body.protocol ?? "openai",
       };
-      const protocolName = typeof body.protocolName === "string" && body.protocolName !== "" ? body.protocolName : String(provider.protocol);
+      const protocolName = resolveMediaProtocol(
+        typeof body.protocolName === "string" && body.protocolName !== "" ? body.protocolName : provider.protocol,
+        provider.baseUrl,
+        "stt",
+      );
       const adapter = STT_PROTOCOLS[protocolName];
       if (adapter === undefined) {
         json(response, 400, { error: `未知识别协议：${protocolName}（可用：${Object.keys(STT_PROTOCOLS).join(", ")}）` });
@@ -1639,7 +1665,11 @@ const http = createServer(async (request, response) => {
       try {
         const { audio, contentType } = await callMedia(
           { baseUrl: provider.baseUrl, reference: provider.reference },
-          typeof body.protocolName === "string" ? body.protocolName : provider.protocol,
+          resolveMediaProtocol(
+            typeof body.protocolName === "string" ? body.protocolName : provider.protocol,
+            provider.baseUrl,
+            "tts",
+          ),
           { model, text, voice: typeof body.voice === "string" ? body.voice : "", format: typeof body.format === "string" ? body.format : "mp3" },
         );
         console.log(`[agent] tts ${model} → ${audio.length} bytes`);
@@ -1710,7 +1740,11 @@ const http = createServer(async (request, response) => {
       }
       const started = Date.now();
       try {
-        const { audio, contentType } = await callMedia(provider, typeof body.protocolName === "string" ? body.protocolName : "custom", {
+        const { audio, contentType } = await callMedia(provider, resolveMediaProtocol(
+          typeof body.protocolName === "string" ? body.protocolName : "custom",
+          provider.baseUrl,
+          "music",
+        ), {
           model,
           prompt,
           lyrics: typeof body.lyrics === "string" ? body.lyrics : "",
