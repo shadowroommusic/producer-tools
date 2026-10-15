@@ -375,6 +375,11 @@
   border: 0.5px dashed var(--sr-border-strong);
 }
 
+.sr-lib-row-cover--none {
+  border: 0.5px solid var(--sr-border-strong);
+  opacity: 0.35;
+}
+
 .sr-lib-dupbadge {
   flex: none;
   padding: 1px 6px;

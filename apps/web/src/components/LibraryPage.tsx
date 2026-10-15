@@ -765,7 +765,10 @@ export function LibraryPage() {
                   setMenuMode("root");
                 }}
               >
-                {track.cover_path !== null ? (
+                {track.cover_path === "" ? (
+                  // 联网确认没有封面（#94 B2 的显式标记）：与「还没抓过」的占位区分开
+                  <span className="sr-lib-row-cover sr-lib-row-cover--none" title="联网确认无封面" aria-label="联网确认无封面" />
+                ) : track.cover_path !== null ? (
                   <img className="sr-lib-row-cover" src={coverUrl(track.cover_path)} alt="" loading="lazy" />
                 ) : (
                   <span className="sr-lib-row-cover sr-lib-row-cover--ph" aria-hidden="true" />
