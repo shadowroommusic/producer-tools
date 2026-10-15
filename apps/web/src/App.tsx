@@ -117,6 +117,7 @@ import {
 import { createBridgeTTS, createSystemTTS, splitSentences, type TTSProvider } from "./lib/tts";
 import { createBridgeSTT, createBrowserSTT, type STTProvider, type STTSession } from "./lib/stt";
 import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
+import { CALL_START_HINT, callWord } from "./lib/call-words";
 import {
   createSession,
   loadSessions,
@@ -2755,12 +2756,12 @@ export function App() {
             ? voiceState === "speaking"
               ? (spokenSentence ?? undefined)
               : voiceState === "thinking"
-                ? (voiceNotice ?? "在想…")
+                ? (voiceNotice ?? callWord("thinking"))
                 : voicePartial !== ""
                   ? voicePartial
                   : callHintOn
-                    ? "说就行 · 点球挂断"
-                    : "在听…"
+                    ? CALL_START_HINT
+                    : callWord("listening")
             : (voiceNotice ?? undefined)
         }
       />

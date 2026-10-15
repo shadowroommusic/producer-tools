@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentModel, Mention } from "../lib/agent";
+import { callWord } from "../lib/call-words";
 import { IconArrowUp, IconChevronDown, IconMic, IconPlugin, IconPlus, IconStop } from "./icons";
 
 const MODES = ["标准", "极简"] as const;
@@ -133,7 +134,7 @@ export function Composer({
                 ? voicePartial
                 : "说吧，停下我就接"
               : voiceState === "thinking"
-                ? "在想……"
+                ? callWord("thinking")
                 : "（说话可以打断我）"}
           </p>
           {voiceNotice !== null && voiceNotice !== undefined && (
@@ -142,7 +143,7 @@ export function Composer({
           <div className="sr-voicebar-foot">
             <span className="sr-voicebar-status">
               <span className="sr-voicebar-dot" data-state={voiceState} />
-              {voiceState === "listening" ? "正在听" : voiceState === "thinking" ? "正在想" : "正在说"}
+              {callWord(voiceState)}
             </span>
             <button type="button" className="sr-btn sr-voicebar-end" onClick={onEndVoice}>
               结束通话

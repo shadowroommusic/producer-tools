@@ -1,0 +1,217 @@
+/**
+ * 悬浮球通话字幕的清晰度验收（Codex 2026-10-16，用户：「球看着还行但非常不清晰」）。
+ *
+ * 修之前实测的两条硬伤（本脚本就是钉这两个数）：
+ *   ① 球吸附右边缘时字幕越界 21px（文字被视口切掉）；
+ *   ② 球吸附上边缘时字幕整条在视口外（top:-21px，等于没有字幕）。
+ * 交付标准（逐条断言）：
+ *   ① 通话中字幕存在，且四个吸附角都**完全在视口内**；
+ *   ② 字号 ≥13px、与球不重叠、不接指针事件（点得穿）；
+ *   ③ 状态点与对话栏通话条同色同步（听=红），一次通话里两处状态不许分叉；
+ *   ④ 浅色主题下字幕底色跟着主题变浅（不再恒定深色药丸）；
+ *   ⑤ 挂断后字幕消失。
+ *
+ * 前置：vite :5173（本脚本用假麦克风 + 自造静音 WAV，**不触发 STT、不打真实 API**）。
+ * 用法：node apps/web/tests/e2e/orb-caption-acceptance.mjs
+ */
+import { chromium } from "/Users/lazora/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const BASE = process.env.CAPTION_E2E_BASE ?? "http://localhost:5173";
+const SHOTS = process.env.CAPTION_E2E_SHOTS ?? "/Users/lazora/Documents/ShadowRoom/exports/orb-caption";
+const VIEWPORT = { width: 1440, height: 900 };
+const EDGE = 8; // 字幕离视口边缘的最小留白（与 ButlerOrb 同口径）
+
+/** 静音 WAV：假麦克风「一直在响但没人说话」，通话起得来、又不会真的进回合。 */
+function silenceWav(path) {
+  const rate = 16000;
+  const seconds = 5;
+  const data = Buffer.alloc(rate * seconds * 2);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(data.length, 40);
+  writeFileSync(path, Buffer.concat([header, data]));
+  return path;
+}
+
+const results = [];
+const check = (name, ok, detail) => {
+  results.push(ok);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name} — ${detail}`);
+};
+
+mkdirSync(SHOTS, { recursive: true });
+const wav = silenceWav(join(tmpdir(), "shadowroom-caption-silence.wav"));
+
+const browser = await chromium.launch({
+  channel: "chrome",
+  headless: true,
+  args: [
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
+    `--use-file-for-fake-audio-capture=${wav}`,
+    "--autoplay-policy=no-user-gesture-required",
+  ],
+});
+const page = await (await browser.newContext({ viewport: VIEWPORT, permissions: ["microphone"], deviceScaleFactor: 2 })).newPage();
+const errors = [];
+page.on("pageerror", (e) => errors.push(String(e)));
+page.on("console", (m) => { if (m.type() === "error") errors.push(m.text().slice(0, 200)); });
+
+/** 字幕的几何 + 可读性读数（一个字面量对象，避免断言时再猜）。 */
+const readCaption = () =>
+  page.evaluate(() => {
+    const el = document.querySelector("[data-call-caption]");
+    if (el === null) return null;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    const dot = el.querySelector(".sr-orb-caption-dot");
+    const voiceDot = document.querySelector(".sr-voicebar-dot");
+    const orb = document.querySelector(".sr-orb");
+    const orbRect = orb === null ? null : orb.getBoundingClientRect();
+    const bg = style.backgroundColor;
+    // Chrome 对 color-mix 的结果报 `color(srgb 0.10 0.11 0.09 / 0.92)`：0–1 的浮点，不是 0–255。
+    // 两套写法都要认，否则「浅色主题变浅了没有」会恒读成 0（第一版就踩了）。
+    const nums = (bg.match(/[\d.]+/g) ?? []).map(Number);
+    const scale = bg.startsWith("color(") ? 1 : 255;
+    const lum = nums.length >= 3 ? (0.2126 * nums[0] + 0.7152 * nums[1] + 0.0722 * nums[2]) / scale : null;
+    const mid = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    const under = document.elementFromPoint(mid.x, mid.y);
+    return {
+      text: el.textContent ?? "",
+      rect: { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom, w: rect.width, h: rect.height },
+      fontSize: parseFloat(style.fontSize),
+      pointerEvents: style.pointerEvents,
+      background: bg,
+      backgroundLuma: lum,
+      placement: el.getAttribute("data-placement"),
+      dotState: dot === null ? null : dot.getAttribute("data-state"),
+      dotColor: dot === null ? null : getComputedStyle(dot).backgroundColor,
+      voiceDotState: voiceDot === null ? null : voiceDot.getAttribute("data-state"),
+      voiceDotColor: voiceDot === null ? null : getComputedStyle(voiceDot).backgroundColor,
+      voiceStatusText: (document.querySelector(".sr-voicebar-status")?.textContent ?? "").trim(),
+      orb: orbRect === null ? null : { x: orbRect.x, y: orbRect.y, right: orbRect.right, bottom: orbRect.bottom },
+      behindCaption: under === null ? null : under.closest("[data-call-caption]") !== null,
+    };
+  });
+
+const dragTo = async (x, y) => {
+  const box = await page.locator(".sr-orb-ball").boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, y, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+};
+
+await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+await page.waitForSelector(".sr-orb-ball", { timeout: 20000 });
+await page.waitForTimeout(1000);
+
+// ① 起通话（假麦克风静音）：字幕必须出现，并带起手提示
+await page.locator(".sr-orb-ball").click();
+await page.waitForTimeout(1500);
+const first = await readCaption();
+check("① 通话中字幕出现", first !== null && first.text.trim() !== "", `text=${JSON.stringify(first?.text)}`);
+check(
+  "① 起手提示说清怎么挂断",
+  first !== null && first.text.includes("挂断"),
+  `text=${JSON.stringify(first?.text)}`,
+);
+
+// ② 四个吸附角：字幕都得完整在视口内（修前右边缘越界 21px、上边缘整条出界）
+const corners = [
+  ["右下", 1439, 899],
+  ["右上", 1439, 1],
+  ["左上", 1, 1],
+  ["左下", 1, 899],
+];
+for (const [name, x, y] of corners) {
+  await dragTo(x, y);
+  const shot = await readCaption();
+  await page.screenshot({ path: `${SHOTS}/corner-${name}.png` });
+  if (shot === null) {
+    check(`② ${name}：字幕在`, false, "字幕不存在");
+    continue;
+  }
+  const inside =
+    shot.rect.x >= EDGE - 0.5 &&
+    shot.rect.y >= EDGE - 0.5 &&
+    shot.rect.right <= VIEWPORT.width - EDGE + 0.5 &&
+    shot.rect.bottom <= VIEWPORT.height - EDGE + 0.5;
+  check(
+    `② ${name}：字幕完整在视口内`,
+    inside,
+    `rect=${JSON.stringify(shot.rect)} placement=${shot.placement}`,
+  );
+  const gap = shot.orb === null ? null : Math.min(Math.abs(shot.rect.bottom - shot.orb.y), Math.abs(shot.orb.bottom - shot.rect.y));
+  check(`② ${name}：与球不重叠且留缝 ≥4px`, gap !== null && gap >= 4, `gap=${gap?.toFixed(1)}px`);
+}
+
+// ③ 可读性：字号 ≥13px、点得穿（pointer-events:none）、状态点与通话条同色同步
+const readable = await readCaption();
+check("③ 字号 ≥13px", readable !== null && readable.fontSize >= 13, `font-size=${readable?.fontSize}px`);
+check(
+  "③ 字幕不接指针事件（不挡点击）",
+  readable !== null && readable.pointerEvents === "none" && readable.behindCaption === false,
+  `pointer-events=${readable?.pointerEvents} 命中字幕=${readable?.behindCaption}`,
+);
+check(
+  "③ 状态点与通话条同状态同色",
+  readable !== null &&
+    readable.dotState !== null &&
+    readable.dotState === readable.voiceDotState &&
+    readable.dotColor === readable.voiceDotColor,
+  `球点=${readable?.dotState}/${readable?.dotColor} 通话条点=${readable?.voiceDotState}/${readable?.voiceDotColor}`,
+);
+check(
+  "③ 两处状态词同源（通话条用词表里的「在听…」）",
+  readable !== null && readable.voiceStatusText === "在听…",
+  `通话条状态=${JSON.stringify(readable?.voiceStatusText)}`,
+);
+
+// ④ 浅色主题：字幕底色跟着主题（修前恒为深色药丸，因为写了一个不存在的 token）
+const darkLuma = readable?.backgroundLuma ?? null;
+await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+await page.waitForTimeout(400);
+const light = await readCaption();
+await page.screenshot({ path: `${SHOTS}/theme-light.png` });
+check(
+  "④ 浅色主题下字幕底色变浅",
+  light !== null && light.backgroundLuma !== null && darkLuma !== null && light.backgroundLuma > darkLuma + 0.3 && light.backgroundLuma > 0.5,
+  `深色 ${darkLuma?.toFixed(3)} → 浅色 ${light?.backgroundLuma?.toFixed(3)}`,
+);
+await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
+await page.waitForTimeout(300);
+
+// ⑤ 挂断：球回 idle，字幕不留通话状态的残影（这台的浏览器识别连不上 Google，会留一条错误提示——
+//    那是「为什么没反应」的解释文案，允许；「在听…」这种通话状态词不允许留下）
+await page.locator(".sr-orb-ball").click();
+await page.waitForTimeout(600);
+const after = await readCaption();
+const orbMode = await page.locator(".sr-orb").getAttribute("data-mode");
+const statusWords = ["在听…", "在想…", "在说…"];
+check(
+  "⑤ 挂断后球回 idle 且字幕不留通话状态",
+  orbMode === "idle" && (after === null || !statusWords.includes(after.text.trim())),
+  `data-mode=${orbMode} caption=${after === null ? "null" : JSON.stringify(after.text.slice(0, 40))}`,
+);
+check("⑤ 无 console error", errors.length === 0, errors.length ? errors.join(" || ") : "none");
+
+const passed = results.filter(Boolean).length;
+console.log(`\n${passed}/${results.length} PASS`);
+await browser.close();
+process.exit(passed === results.length ? 0 : 1);

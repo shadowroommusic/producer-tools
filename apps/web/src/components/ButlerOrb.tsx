@@ -8,7 +8,7 @@
  * 架构（用户强调）：干活的不是球——球只是管家/调度：它把话交给**当前工作区**的 agent 会话，
  * 工具执行、落轨、导出都是那条会话在做；球负责「知道全局 + 派活 + 汇报」。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import {
   ORB_SIZE,
@@ -105,6 +105,15 @@ export function ButlerOrb({
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
   const rafRef = useRef<number | null>(null);
   const reducedMotion = useRef(false);
+  /**
+   * 字幕的贴边处理（2026-10-16 实测：球吸附右边缘时字幕越界 21px、吸附上边缘时整条字幕跑到视口外
+   * 21px——用户说的「非常不清晰」有一半是字幕根本没在屏幕里）。贴着球量一次，越界就横移、上下没地方就
+   * 翻到球下面；**只有算出的值真变了才 setState**——字幕跟着识别结果高频更新，别每次渲染都写状态。
+   */
+  const captionRef = useRef<HTMLDivElement | null>(null);
+  const captionGeomRef = useRef({ shift: 0, placement: "above" as "above" | "below" });
+  const [captionGeom, setCaptionGeom] = useState(captionGeomRef.current);
+  const [viewportTick, setViewportTick] = useState(0);
   /** 点球即通话：面板/拖动之外，单击球的语义。 */
   /** 本地模式下球自己的麦克风电平（外部通话时改用 App 的 voiceLevel getter）。 */
   const [micLevel, setMicLevel] = useState(0);
@@ -283,6 +292,31 @@ export function ButlerOrb({
 
   const size = active ? ACTIVE_SIZE : ORB_SIZE;
 
+  // 视口变了要重新量字幕（换窗口大小/全屏）。
+  useEffect(() => {
+    const onResize = () => setViewportTick((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = captionRef.current;
+    if (el === null) return;
+    const EDGE = 8; // 字幕离视口边缘的最小留白
+    const GAP = 6; // 字幕与球的缝（与 CSS 的 calc(100% + 6px) 同一口径）
+    const rect = el.getBoundingClientRect();
+    const orbCenterX = position.x + size / 2;
+    const minCenter = EDGE + rect.width / 2;
+    const maxCenter = Math.max(minCenter, window.innerWidth - EDGE - rect.width / 2);
+    const center = Math.min(Math.max(orbCenterX, minCenter), maxCenter);
+    const shift = Math.round(center - orbCenterX);
+    const placement = position.y - GAP - rect.height < EDGE ? "below" : "above";
+    const previous = captionGeomRef.current;
+    if (previous.shift === shift && previous.placement === placement) return;
+    captionGeomRef.current = { shift, placement };
+    setCaptionGeom({ shift, placement });
+  }, [caption, position.x, position.y, size, viewportTick]);
+
   return (
     <div
       className={`sr-orb${expanded ? " sr-orb--expanded" : ""}${dragging ? " sr-orb--dragging" : ""}${active ? " sr-orb--active" : ""}`}
@@ -313,8 +347,17 @@ export function ButlerOrb({
         pointer-events:none——字幕绝不能挡球或页面的点击。
       */}
       {caption !== undefined && caption !== "" && (
-        <div className="sr-orb-caption" aria-live="polite" data-call-caption>
-          {caption}
+        <div
+          className="sr-orb-caption"
+          aria-live="polite"
+          data-call-caption
+          data-placement={captionGeom.placement}
+          ref={captionRef}
+          style={{ ["--sr-caption-shift" as string]: `${captionGeom.shift}px` }}
+        >
+          {/* 状态点：与对话栏通话条同一个语义色（听=红点闪/想=琥珀/说=酸绿），扫一眼就分得清。 */}
+          {callOn && <span className="sr-orb-caption-dot" data-state={voiceState} aria-hidden="true" />}
+          <span className="sr-orb-caption-text">{caption}</span>
         </div>
       )}
 
