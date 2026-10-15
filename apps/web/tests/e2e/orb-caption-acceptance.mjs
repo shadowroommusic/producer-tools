@@ -5,7 +5,8 @@
  *   ① 球吸附右边缘时字幕越界 21px（文字被视口切掉）；
  *   ② 球吸附上边缘时字幕整条在视口外（top:-21px，等于没有字幕）。
  * 交付标准（逐条断言）：
- *   ① 通话中字幕存在，且四个吸附角都**完全在视口内**；
+ *   ① 起手提示在字幕**一出现**就能读到（含「挂断」），~1.2s 后二读仍是合法通话文案（词表
+ *      src/lib/call-words.ts：起手提示或五态之一），不空、不残影；四个吸附角都**完全在视口内**；
  *   ② 字号 ≥13px、与球不重叠、不接指针事件（点得穿）；
  *   ③ 状态只有一处（F-2 收敛）：球字幕带状态点，dock 通话条不再渲染状态点/状态位/状态词，
  *      字幕 [data-call-caption] 全屏唯一；
@@ -130,15 +131,37 @@ await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".sr-orb-ball", { timeout: 20000 });
 await page.waitForTimeout(1000);
 
-// ① 起通话（假麦克风静音）：字幕必须出现，并带起手提示
+// ① 起通话（假麦克风静音）：字幕一出现就抢读——起手提示必须说清怎么挂断。
+// 为什么抢读、不固定等 1500ms：这台 Chrome 的识别会随机 ~1s 内报 network，F-1 会把字幕
+// 合法迁到 offline 文案（不含「挂断」二字）；单点晚读等于跟这个时序抽奖（2026-10-16 全量扫
+// 就这样红过一次，复跑 3/3 绿证明是竞争不是回归）。
 await page.locator(".sr-orb-ball").click();
-await page.waitForTimeout(1500);
-const first = await readCaption();
+let first = null;
+for (let waited = 0; waited <= 1000 && first === null; waited += 50) {
+  const shot = await readCaption();
+  if (shot !== null && shot.text.trim() !== "") first = shot;
+  else await page.waitForTimeout(50);
+}
 check("① 通话中字幕出现", first !== null && first.text.trim() !== "", `text=${JSON.stringify(first?.text)}`);
 check(
   "① 起手提示说清怎么挂断",
   first !== null && first.text.includes("挂断"),
   `text=${JSON.stringify(first?.text)}`,
+);
+
+// ①b 再等 ~1.2s 读第二次：不管识别这时已报错迁到哪个态，字幕都必须还是**合法通话文案**
+// （词表 src/lib/call-words.ts 一处：CALL_START_HINT 含「挂断」、三态词 在听/在想/在说、
+// unclear/offline 字幕含「没听清」/「断了」）。.mjs 不能直接 import 那份 .ts，按派单口径用
+// 子串对齐；空文案或残影（字幕元素多于一条）都不许。
+await page.waitForTimeout(1200);
+const second = await readCaption();
+const legalCaptionWords = ["挂断", "在听", "在想", "在说", "没听清", "断了"];
+check(
+  "① 1.2s 后字幕仍是合法通话文案（不空、不残影）",
+  second !== null &&
+    legalCaptionWords.some((w) => second.text.includes(w)) &&
+    second.captionCount === 1,
+  `text=${JSON.stringify(second?.text)} 字幕数=${second?.captionCount}（应为 1）`,
 );
 
 // ② 四个吸附角：字幕都得完整在视口内（修前右边缘越界 21px、上边缘整条出界）
