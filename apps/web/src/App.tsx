@@ -123,6 +123,7 @@ import {
   saveSessions,
   timeAgo,
   titleFrom,
+  capSession,
   type ChatMessage,
   type Session,
   type SessionStore,
@@ -494,7 +495,8 @@ export function App() {
   const patchSession = useCallback((store_: SessionStore, id: string, patch: (session: Session) => Session) => {
     return {
       ...store_,
-      sessions: store_.sessions.map((entry) => (entry.id === id ? patch(entry) : entry)),
+      // 环形缓冲的唯一切口：任何一次会话更新都把结果裁回上限内（长通话不涨内存）。
+      sessions: store_.sessions.map((entry) => (entry.id === id ? capSession(patch(entry)) : entry)),
     };
   }, []);
 

@@ -68,6 +68,51 @@ export function titleFrom(text: string): string {
   return clean.length > 24 ? `${clean.slice(0, 24)}…` : clean;
 }
 
+// ---------------------------------------------------------------------------
+// Ring buffer（S4 巡检遗留："连续通话 5 分钟内存 <30MB / 忘掉刚才"）：
+//
+// 通话一轮 = 1 条用户消息 + 1 条助手消息 + 1 个 tool 消息 + 1 个 ToolCall（detail 是
+// 工具结果的完整 JSON，实测单条可达数 KB 到数十 KB）。没有上限时，长通话把整个会话
+// 写进 localStorage（约 5MB 配额，超了 setItem 静默失败）并让内存随通话时长线性涨。
+// 这里在唯一入口（patchSession → capSession）做环形缓冲：只留最近 N 条，老条目连同
+// 它们的工具 detail 截断（旧调用完成后连渲染都退回纯文本，截断不损失可用信息）。
+// ---------------------------------------------------------------------------
+
+/** 会话里保留的最近消息条数（通话一轮约 3 条 → ≈40 轮）。 */
+export const MAX_MESSAGES = 120;
+/** 保留的最近工具调用个数。 */
+export const MAX_CALLS = 60;
+/** 旧条目的 detail 上限（字符）：超出只留开头并戳明截断。 */
+export const MAX_DETAIL_CHARS = 8192;
+
+const TRUNCATED_SUFFIX = "\n…（旧条目已截断——环形缓冲只保留最近内容）";
+
+/**
+ * 环形缓冲：把会话裁到上限内。返回原对象（无变化）或新对象（有裁剪）。
+ * 运行中的调用不截断 detail——完成吸收（absorbToolResult）读的是事件对象，但运行时
+ * 截断会让「轨迹」面板显示半截运行态，没必要。
+ */
+export function capSession(session: Session): Session {
+  let messages = session.messages;
+  if (messages.length > MAX_MESSAGES) messages = messages.slice(-MAX_MESSAGES);
+
+  const needsCountTrim = session.calls.length > MAX_CALLS;
+  const needsDetailTrim = session.calls.some(
+    (call) => call.status !== "running" && (call.detail?.length ?? 0) > MAX_DETAIL_CHARS,
+  );
+  let calls = session.calls;
+  if (needsCountTrim || needsDetailTrim) {
+    calls = (needsCountTrim ? calls.slice(-MAX_CALLS) : calls).map((call) =>
+      call.status !== "running" && (call.detail?.length ?? 0) > MAX_DETAIL_CHARS
+        ? { ...call, detail: `${call.detail?.slice(0, MAX_DETAIL_CHARS)}${TRUNCATED_SUFFIX}` }
+        : call,
+    );
+  }
+
+  if (messages === session.messages && calls === session.calls) return session;
+  return { ...session, messages, calls };
+}
+
 /** Relative time for the sidebar rows. */
 export function timeAgo(at: number, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000));
