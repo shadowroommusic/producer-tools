@@ -7,7 +7,8 @@
  * 交付标准（逐条断言）：
  *   ① 通话中字幕存在，且四个吸附角都**完全在视口内**；
  *   ② 字号 ≥13px、与球不重叠、不接指针事件（点得穿）；
- *   ③ 状态点与对话栏通话条同色同步（听=红），一次通话里两处状态不许分叉；
+ *   ③ 状态只有一处（F-2 收敛）：球字幕带状态点，dock 通话条不再渲染状态点/状态位/状态词，
+ *      字幕 [data-call-caption] 全屏唯一；
  *   ④ 浅色主题下字幕底色跟着主题变浅（不再恒定深色药丸）；
  *   ⑤ 挂断后字幕消失。
  *
@@ -79,7 +80,13 @@ const readCaption = () =>
     const rect = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     const dot = el.querySelector(".sr-orb-caption-dot");
-    const voiceDot = document.querySelector(".sr-voicebar-dot");
+    const voicebar = document.querySelector(".sr-voicebar");
+    const statusWords = ["在听…", "在想…", "在说…"];
+    const voicebarText = voicebar?.textContent ?? "";
+    const voicebarStatusWords = statusWords.reduce(
+      (n, w) => n + voicebarText.split(w).length - 1,
+      0,
+    );
     const orb = document.querySelector(".sr-orb");
     const orbRect = orb === null ? null : orb.getBoundingClientRect();
     const bg = style.backgroundColor;
@@ -100,9 +107,11 @@ const readCaption = () =>
       placement: el.getAttribute("data-placement"),
       dotState: dot === null ? null : dot.getAttribute("data-state"),
       dotColor: dot === null ? null : getComputedStyle(dot).backgroundColor,
-      voiceDotState: voiceDot === null ? null : voiceDot.getAttribute("data-state"),
-      voiceDotColor: voiceDot === null ? null : getComputedStyle(voiceDot).backgroundColor,
-      voiceStatusText: (document.querySelector(".sr-voicebar-status")?.textContent ?? "").trim(),
+      // F-2：dock 通话条里的状态渲染必须整体消失（0 个），字幕全屏只有一条。
+      voiceDotCount: document.querySelectorAll(".sr-voicebar-dot").length,
+      voiceStatusCount: document.querySelectorAll(".sr-voicebar-status").length,
+      voicebarStatusWords,
+      captionCount: document.querySelectorAll("[data-call-caption]").length,
       orb: orbRect === null ? null : { x: orbRect.x, y: orbRect.y, right: orbRect.right, bottom: orbRect.bottom },
       behindCaption: under === null ? null : under.closest("[data-call-caption]") !== null,
     };
@@ -170,17 +179,17 @@ check(
   `pointer-events=${readable?.pointerEvents} 命中字幕=${readable?.behindCaption}`,
 );
 check(
-  "③ 状态点与通话条同状态同色",
+  "③ 状态收敛一处：通话条不再渲染状态点/状态位",
   readable !== null &&
     readable.dotState !== null &&
-    readable.dotState === readable.voiceDotState &&
-    readable.dotColor === readable.voiceDotColor,
-  `球点=${readable?.dotState}/${readable?.dotColor} 通话条点=${readable?.voiceDotState}/${readable?.voiceDotColor}`,
+    readable.voiceDotCount === 0 &&
+    readable.voiceStatusCount === 0,
+  `球字幕点=${readable?.dotState} 通话条状态点/状态位=${readable?.voiceDotCount}/${readable?.voiceStatusCount}（F-2 应为 0/0）`,
 );
 check(
-  "③ 两处状态词同源（通话条用词表里的「在听…」）",
-  readable !== null && readable.voiceStatusText === "在听…",
-  `通话条状态=${JSON.stringify(readable?.voiceStatusText)}`,
+  "③ 通话条零状态词，球字幕全屏唯一（F-2）",
+  readable !== null && readable.captionCount === 1 && readable.voicebarStatusWords === 0,
+  `字幕数=${readable?.captionCount} 通话条状态词出现 ${readable?.voicebarStatusWords} 次（都应为 1/0）`,
 );
 
 // ④ 浅色主题：字幕底色跟着主题（修前恒为深色药丸，因为写了一个不存在的 token）

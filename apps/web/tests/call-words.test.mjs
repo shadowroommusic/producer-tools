@@ -20,14 +20,18 @@ test("起手提示说清两件事：怎么说话、怎么挂断", () => {
   assert.match(CALL_START_HINT, /挂断/);
 });
 
-test("两个通话界面都从词表取词，没有各自的写法", () => {
-  const files = ["../src/App.tsx", "../src/components/Composer.tsx"];
-  for (const file of files) {
-    const source = readFileSync(new URL(file, import.meta.url), "utf8");
-    assert.match(source, /from "\.\.?\/(lib\/)?call-words"/, `${file} 应当从 lib/call-words 取词`);
-    // 旧写法：同一状态两个词。出现过就说明又有人手写了一套。
-    for (const stale of ["正在听", "正在想", "正在说", "在想……"]) {
-      assert.equal(source.includes(stale), false, `${file} 里还有旧写法「${stale}」`);
-    }
+test("状态词只渲染在球字幕一处（F-2）：App 取词表，通话条零状态词", () => {
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /from "\.\.?\/(lib\/)?call-words"/, "App.tsx（球字幕）应当从 lib/call-words 取词");
+  const composer = readFileSync(new URL("../src/components/Composer.tsx", import.meta.url), "utf8");
+  // F-2（ui-review-kimi §③）：通话条没有状态位——词表引用一并消失，谁再引就是状态词回流 dock。
+  assert.doesNotMatch(composer, /call-words|callWord/, "Composer.tsx 不应再引用词表（状态只渲染在球旁字幕）");
+  // 旧写法：同一状态两个词。出现过就说明又有人手写了一套。
+  for (const stale of ["正在听", "正在想", "正在说", "在想……"]) {
+    assert.equal(app.includes(stale), false, `App.tsx 里还有旧写法「${stale}」`);
+  }
+  // 词表那三个词在通话条里连字面量都不许出现（App.tsx 经 callWord 渲染、注释也会合法提到，只查这里）。
+  for (const word of ["在听…", "在想…", "在说…"]) {
+    assert.equal(composer.includes(word), false, `Composer.tsx 里出现了状态词「${word}」——状态只渲染在球旁字幕`);
   }
 });

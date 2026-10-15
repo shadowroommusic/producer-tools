@@ -8,7 +8,6 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentModel, Mention } from "../lib/agent";
-import { callWord } from "../lib/call-words";
 import { IconArrowUp, IconChevronDown, IconMic, IconPlugin, IconPlus, IconStop } from "./icons";
 
 const MODES = ["标准", "极简"] as const;
@@ -128,23 +127,21 @@ export function Composer({
               />
             ))}
           </div>
+          {/* F-2（ui-review-kimi §③）：状态词只渲染在球旁字幕一处，这里只放「听到了什么」和
+              两条静态提示。在想时状态在球字幕上，这一行没有可报的听写内容，就留白（data-empty 置灰）。 */}
           <p className="sr-voicebar-heard" data-empty={(voicePartial ?? "") === "" || undefined}>
             {voiceState === "listening"
               ? voicePartial !== undefined && voicePartial !== ""
                 ? voicePartial
                 : "说吧，停下我就接"
-              : voiceState === "thinking"
-                ? callWord("thinking")
-                : "（说话可以打断我）"}
+              : voiceState === "speaking"
+                ? "（说话可以打断我）"
+                : ""}
           </p>
           {voiceNotice !== null && voiceNotice !== undefined && (
             <p className="sr-voicebar-notice">{voiceNotice}</p>
           )}
           <div className="sr-voicebar-foot">
-            <span className="sr-voicebar-status">
-              <span className="sr-voicebar-dot" data-state={voiceState} />
-              {callWord(voiceState)}
-            </span>
             <button type="button" className="sr-btn sr-voicebar-end" onClick={onEndVoice}>
               结束通话
             </button>

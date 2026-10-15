@@ -3307,7 +3307,7 @@
   overflow: hidden;
 }
 
-/* 状态点：语义色与对话栏通话条（.sr-voicebar-dot）一致 —— 听=红点闪 / 想=琥珀闪 / 说=酸绿。 */
+/* 状态点：球旁字幕是唯一状态位（F-2 收敛，通话条不再渲染状态）—— 听=红点闪 / 想=琥珀闪 / 说=酸绿。 */
 .sr-orb-caption-dot {
   flex: none;
   width: 6px;
@@ -3334,6 +3334,15 @@
   .sr-orb-caption-dot {
     animation: none;
   }
+}
+
+/*
+ * F-2（ui-review-kimi §③）：通话条 foot 删掉「状态点 + 状态词」后只剩「结束通话」一个按钮，
+ * conversation.css 的 space-between 会把它甩到左边——按钮保持在原来的右侧位置。
+ * 这里特异性高一级，覆盖与导入顺序无关。
+ */
+.sr-voicebar .sr-voicebar-foot {
+  justify-content: flex-end;
 }
 
 /* v5 起球体全由 OrbGlass 的 canvas 绘制（暗核光圈）；这里的 DOM 壳样式
