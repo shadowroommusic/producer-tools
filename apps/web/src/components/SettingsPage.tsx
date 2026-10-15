@@ -710,7 +710,12 @@ function ProviderEditor({
   onTestConnection: (provider: ProviderProfile, draft: string, model: string) => void;
 }) {
   const [keyDraft, setKeyDraft] = useState("");
-  const [presetId, setPresetId] = useState("");
+  /**
+   * 当前认的是哪家预设。编辑已有供应商时要**从 provider.presetSource 恢复**（MiniMax f8-post-audit #406 ⑤ 抓的）：
+   * 写死 "" 的话，重开一个预设建的供应商时预设 note 不显示、以后要在编辑态加预设选择器也会是空选。
+   * 自定义供应商（presetSource === undefined）保持 ""——它本来就不属于任何预设。
+   */
+  const [presetId, setPresetId] = useState(() => (isNew ? "" : (provider.presetSource ?? "")));
   /**
    * 自定义 = 全量表单直接展开（F-8 只把「预设」收进基本/高级）。编辑已有供应商时：
    * 带 presetSource 的按预设处理（基本层起步），没带的就是手配的，照旧全展开。

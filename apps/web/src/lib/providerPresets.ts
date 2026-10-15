@@ -119,7 +119,12 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
     models: [],
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
     needsVerification: true,
-    note: "国内 key（sk-cp-…）走 api.minimaxi.com：实测 OpenAI 兼容端点是 https://api.minimaxi.com/v1（857ms 回复），同一把 key 在 api.minimax.io 会报 invalid api key；shadow 预设里的 /anthropic 是 Anthropic 协议，我们的适配器不会说，所以这里改成了 /v1。国际版把 Base URL 与各能力端点换成 api.minimax.io。另外 MiniMax 的 music API 已对新用户关闭（HTTP 410 / 2153），音乐请用本地合成器。",
+    /**
+     * 这条 note 原来错挂在 ZenMux 上——内容是 MiniMax 的域名/协议实测（Codex 05:1x 复盘 #406 时发现：
+     * minimax 预设自己没有 note，界面永远不显示那段说明；ZenMux 反而在讲别人的 key）。
+     * 现在归位：MiniMax 的实测说明搬到 minimax 预设；ZenMux 留一句真话（端点尚未实测）。
+     */
+    note: "端点待核实：目录里给的是 zenmux.ai/api/v1，我们没实测过这家；配好 Key 后点「测试连接」验证。",
   },
   {
     id: "moonshot-cn",
@@ -161,6 +166,8 @@ export const PROVIDER_PRESETS: ReadonlyArray<ProviderPreset> = [
       music: { protocol: "minimax-music", baseUrl: "https://api.minimaxi.com", models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"] },
     },
     source: "shadow · model-provider-preset-catalog-core.ts / -extended.ts",
+    /** 实测口径（原来错挂在 zenmux 上）：国内 key 认 api.minimaxi.com，国际版换 api.minimax.io；音乐 API 已对新用户关闭。 */
+    note: "国内 key（sk-cp-…）走 api.minimaxi.com：实测 OpenAI 兼容端点是 https://api.minimaxi.com/v1（857ms 回复），同一把 key 在 api.minimax.io 会报 invalid api key；shadow 预设里的 /anthropic 是 Anthropic 协议，我们的适配器不会说，所以这里改成了 /v1。国际版把 Base URL 与各能力端点换成 api.minimax.io。另外 MiniMax 的 music API 已对新用户关闭（HTTP 410 / 2153），音乐请用本地合成器。",
   },
   {
     id: "aliyun",

@@ -109,9 +109,11 @@ try {
   const resultOk = (await resultLine.getAttribute("data-ok")) === "true";
   const wire = seen.testRequests[0] ?? {};
   check(
-    "② 粘 Key → 点测试连接 = 2 次点击，结果就地出现",
+    // 口径更正（MiniMax #406 ④）：「2 次点击」是**交互数**不是点击数——选预设走 selectOption（不算点击），
+    // 后面只有「点测试连接」这一次真点击；这条断言数的是效果（存 Key 一次 + 测试一次 + 结果就地出现）。
+    "② 粘 Key → 点测试连接：存 Key 一次 + 测试一次 + 结果就地出现",
     resultOk && seen.savedCredentials.length === 1 && seen.savedCredentials[0].name === "minimax" && seen.testRequests.length === 1,
-    `存 Key ${seen.savedCredentials.length} 次（name=${seen.savedCredentials[0]?.name}），测试 ${seen.testRequests.length} 次，结果 ✓`,
+    `存 Key ${seen.savedCredentials.length} 次（name=${seen.savedCredentials[0]?.name}），测试 ${seen.testRequests.length} 次，结果 ✓（交互=选预设 selectOption 1 + 填 Key 1 + 点测试 1）`,
   );
   check(
     "②b 测试请求形状 = 预设默认值（端点/协议/首个模型）",
@@ -148,6 +150,47 @@ try {
     "④ 自定义供应商默认全展开（无高级开关）",
     customToggle === 0 && customBaseUrl === 1 && customInputs === 4 && customSelects === 2,
     `可见 input=${customInputs}（名称/BaseURL/Credential/Key） select=${customSelects}（服务商/协议） 高级开关=${customToggle}`,
+  );
+
+  /**
+   * ⑤ 已存在的预设供应商：重开时仍认得出自己是哪家预设（presetId 从 presetSource 恢复）。
+   * MiniMax f8-post-audit #406 ⑤ 抓到这里 presetId 初值写死 "" → 预设 note 不显示；修完这条会红。
+   */
+  await page.evaluate(() => {
+    const key = "shadowroom.models.v1";
+    const current = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+    current.version = current.version ?? 3;
+    current.providers = [
+      ...(current.providers ?? []),
+      {
+        id: "minimax-legacy",
+        name: "MiniMax 旧",
+        baseUrl: "https://api.minimaxi.com/v1",
+        credentialRef: "minimax-legacy",
+        endpointFormat: "chat_completions",
+        enabled: true,
+        presetSource: "minimax",
+        models: ["MiniMax-M3"],
+        modelProfiles: {},
+        capabilities: {},
+      },
+    ];
+    window.localStorage.setItem(key, JSON.stringify(current));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1200);
+  await page.locator('nav[aria-label="工作区"] .sr-panel-row', { hasText: "设置" }).click();
+  await page.locator(".sr-settings-nav-item", { hasText: "供应商" }).click();
+  await page.waitForTimeout(400);
+  await page.locator(".sr-provider-card", { hasText: "MiniMax 旧" }).locator("button", { hasText: "编辑" }).click();
+  await page.locator(".sr-provider-editor button", { hasText: "连接" }).first().click();
+  await page.waitForTimeout(400);
+  const legacyNote = await page.locator(".sr-provider-editor p.sr-role-test.sr-mono", { hasText: "api.minimaxi.com" }).count();
+  const legacyKeyField = await page.locator('.sr-provider-editor input[type="password"]').count();
+  check(
+    "⑤ 已存在的预设供应商：重开时认得出预设（note 显示 + 基本层布局）",
+    legacyNote >= 1 && legacyKeyField === 1,
+    `预设 note=${legacyNote} 条，Key 密码框=${legacyKeyField} 个`,
   );
 } finally {
   await browser.close();
