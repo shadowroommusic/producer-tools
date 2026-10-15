@@ -3813,9 +3813,48 @@
   gap: 4px;
 }
 
+/* F-3（Kimi 评审 P-3）：音量滑杆此前 flex:1 撑满控制条、满格黄色，被当成播放进度条——
+   固定 96px + 前置喇叭图标；百分比气泡读 JSX 的 data-vol，悬停/拖动(:focus-within)时显示。 */
+.sr-dj-vol-group {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 28px; /* 与 .sr-icon-btn 播放键同高 */
+  color: var(--sr-label-secondary);
+}
+
+.sr-dj-vol-group:hover,
+.sr-dj-vol-group:focus-within {
+  color: var(--sr-label-primary);
+}
+
+.sr-dj-vol-group::after {
+  content: attr(data-vol);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-hover-solid);
+  color: var(--sr-label-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-dj-vol-group:hover::after,
+.sr-dj-vol-group:focus-within::after {
+  opacity: 1;
+}
+
 .sr-dj-vol {
-  flex: 1 1 80px;
-  min-width: 70px;
+  width: 96px;
   accent-color: var(--sr-accent);
 }
 

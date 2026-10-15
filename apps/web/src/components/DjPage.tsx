@@ -1042,16 +1042,42 @@ export function DjPage() {
             <button type="button" className="sr-page-action" disabled={!canTransport} onClick={() => nudge(1)}>+1拍</button>
             <button type="button" className="sr-page-action" disabled={!canTransport} onClick={() => nudge(4)}>+4拍</button>
           </div>
-          <input
-            className="sr-dj-vol"
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={deck.volume}
-            aria-label="音量"
-            onChange={(event) => player.deck.setVolume(Number(event.target.value))}
-          />
+          {/* F-3（Kimi 评审 P-3）：裸 range 被 flex 撑满整行、满格黄色，第一眼读成进度条——
+              收窄 96px、前置喇叭图标；百分比放 data-vol 交给 CSS 气泡（deck.volume 派生，不进状态） */}
+          <div className="sr-dj-vol-group" data-vol={`${Math.round(deck.volume * 100)}%`}>
+            <svg
+              width={16}
+              height={16}
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 6.2h2.4L9 3.6v8.8L5.4 9.8H3z" />
+              <path d="M11.2 5.9a3.1 3.1 0 0 1 0 4.2" />
+            </svg>
+            <input
+              className="sr-dj-vol"
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={deck.volume}
+              aria-label="音量"
+              aria-valuetext={`${Math.round(deck.volume * 100)}%`}
+              onChange={(event) => {
+                const v = Number(event.target.value);
+                player.deck.setVolume(v);
+                // Deck.setVolume 只推 gain、不 emit 快照，React 拿不到新音量会把滑块弹回旧值
+                // （实测：拖动听觉生效、滑块秒回 100%，评审证据里永远满格即是此因）。
+                // 红线不动 player，这里代发；哪天能改 player，应把 emit 挪进 Deck.setVolume。
+                player.emit(player.deck.snapshot());
+              }}
+            />
+          </div>
         </div>
         {deck.state === "loading" ? <p className="sr-dj-loading">解码中…</p> : null}
       </section>
