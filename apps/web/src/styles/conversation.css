@@ -1,5 +1,5 @@
 /*
- * Conversation column: header + view tabs, the transcript scroll, the hero phase and the composer
+ * Conversation column: the transcript scroll, the hero phase and the composer
  * seat. One shared width axis (--sr-content-width) keeps the transcript, the hero and the input card
  * on the same centre line — the relation DeepSeek Harness's ConversationRoot establishes.
  */
@@ -15,116 +15,6 @@
   height: 100%;
   min-width: 0;
   background: var(--sr-bg-base);
-}
-
-/* ---------- header ---------- */
-
-.sr-conversation-header {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  /* 76px, so this rule and the dock's header rule meet at the same height (the DSH alignment). */
-  height: 76px;
-  min-height: 76px;
-  padding: 10px 20px 0;
-  border-bottom: var(--sr-shell-border);
-}
-
-.sr-conversation-titlerow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 32px;
-}
-
-.sr-crumbs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.sr-crumb {
-  max-width: 220px;
-  padding: 4px 8px;
-  border-radius: var(--sr-radius-md);
-  color: var(--sr-label-tertiary);
-  font-size: var(--sr-text-14);
-  line-height: var(--sr-line-13);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sr-crumb--current {
-  color: var(--sr-label-primary);
-  font-weight: 500;
-}
-
-.sr-crumb-sep {
-  color: var(--sr-label-caption);
-  font-size: var(--sr-text-14);
-}
-
-.sr-conversation-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-/* View tabs: 13/16 medium, 2px bar sitting over the header rule. */
-.sr-tabs {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  gap: 32px;
-  margin-top: 8px;
-  padding-left: 8px;
-}
-
-.sr-tab {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 0 9px;
-  border: none;
-  background: transparent;
-  color: var(--sr-label-tertiary);
-  font-size: var(--sr-text-13);
-  line-height: 16px;
-  font-weight: 500;
-}
-
-.sr-tab:hover {
-  color: var(--sr-label-secondary);
-}
-
-.sr-tab::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  left: 0;
-  height: 2px;
-  border-radius: 2px;
-  background: transparent;
-}
-
-.sr-tab[data-active] {
-  color: var(--sr-accent);
-}
-
-.sr-tab[data-active]::after {
-  background: var(--sr-accent);
-}
-
-.sr-tab-count {
-  color: var(--sr-label-caption);
-  font-size: 10px;
 }
 
 /* ---------- body + scroll ---------- */
@@ -1068,35 +958,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.sr-voicebar-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--sr-label-secondary);
-  font-size: var(--sr-text-13);
-}
-
-.sr-voicebar-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--sr-radius-pill);
-  background: var(--sr-live);
-}
-
-.sr-voicebar-dot[data-state="listening"] {
-  background: var(--sr-danger);
-  animation: sr-voice-pulse 1.1s ease-in-out infinite alternate;
-}
-
-.sr-voicebar-dot[data-state="thinking"] {
-  background: var(--sr-warn);
-  animation: sr-voice-pulse 1.4s ease-in-out infinite alternate;
-}
-
-.sr-voicebar-dot[data-state="speaking"] {
-  background: var(--sr-accent);
 }
 
 .sr-voicebar-end {
