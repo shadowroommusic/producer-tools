@@ -21,6 +21,7 @@ import {
   type StudioNote,
 } from "../lib/studio";
 import { IconPlus, IconStop } from "./icons";
+import { outOfKeyNotes, parseProjectKey, snapNotesToKey } from "../lib/studio-key";
 
 /** Pixels per beat at zoom 1 — one bar is four of these. */
 const BEAT_PX = 48;
@@ -39,6 +40,11 @@ type Props = {
    * editor enough for both.
    */
   drumKit?: boolean;
+  /**
+   * 工程调性（自由文本，#bitwig-adoption B 项）：解析得出音阶时，调外音标红，
+   * 工具栏多一个「量化到调」。不给/解析不出 = 老行为，什么都不标。
+   */
+  projectKey?: string;
   /** The clip's own length in milliseconds — notes never leave it. */
   lengthMs: number;
   notes: StudioNote[];
@@ -54,6 +60,7 @@ type Props = {
 export function PianoRoll({
   clipName,
   bpm,
+  projectKey,
   drumKit = false,
   lengthMs,
   notes,
@@ -79,6 +86,12 @@ export function PianoRoll({
   const stepMs = beatMs / step;
   const pixelsPerMs = (BEAT_PX * zoom) / beatMs;
   const { from, to } = useMemo(() => clipNoteRange(notes), [notes]);
+  /** 调外音集合（按 note id）：工程调性解析不出时为空——标红是提示不是限制。 */
+  const keyParsed = useMemo(() => parseProjectKey(projectKey), [projectKey]);
+  const offKeyIds = useMemo(
+    () => new Set(outOfKeyNotes(keyParsed, notes).map((note) => note.id ?? "")),
+    [keyParsed, notes],
+  );
   /**
    * Which pitches get a row.
    *
@@ -235,6 +248,7 @@ export function PianoRoll({
         <span className="sr-roll-title">{clipName}</span>
         <span className="sr-roll-meta sr-mono">
           {notes.length} 个音符 · {bars} 小节 · 网格 1/{step * 4}
+          {keyParsed !== null && offKeyIds.size > 0 ? ` · 调外 ${offKeyIds.size}` : ""}
         </span>
         {drumKit && <span className="sr-roll-tag sr-mono">Drums · 按鼓件编辑</span>}
         <div className="sr-roll-actions">
@@ -249,6 +263,27 @@ export function PianoRoll({
             }}
           >
             量化
+          </button>
+          <button
+            type="button"
+            className="sr-btn"
+            disabled={keyParsed === null || (selection.length === 0 && notes.length === 0)}
+            title={
+              keyParsed === null
+                ? "工程调性没写或没看懂（支持 Am / A minor / 8A / C大调），先在上面填一个"
+                : `把${selection.length > 0 ? "选中" : "全部"}音符吸附到工程调内（并列向上）`
+            }
+            onClick={() => {
+              onBeginEdit();
+              const targets = selection.length > 0 ? selection : notes.map((note) => note.id ?? "");
+              apply(
+                snapNotesToKey(keyParsed, notes).map((note, index) =>
+                  targets.includes(notes[index].id ?? "") ? note : notes[index],
+                ),
+              );
+            }}
+          >
+            量化到调
           </button>
           <button
             type="button"
@@ -340,6 +375,7 @@ export function PianoRoll({
                 key={id}
                 className="sr-roll-note"
                 data-selected={selection.includes(id) || undefined}
+                data-offkey={offKeyIds.has(id) || undefined}
                 style={{
                   left: note.start_ms * pixelsPerMs,
                   width: Math.max(6, (note.end_ms - note.start_ms) * pixelsPerMs),

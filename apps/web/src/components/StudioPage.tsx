@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StudioScratchPad } from "./StudioScratchPad";
 import { SCRATCH_MIME, removeScratchClip } from "../lib/studio-scratch";
+import { outOfKeyNotes, parseProjectKey } from "../lib/studio-key";
 import type { CSSProperties, ReactNode } from "react";
 import { IconPause, IconPlay, IconPlus, IconRedo, IconStop, IconUndo } from "./icons";
 import type { NotePlayer, NoteVoice } from "../lib/synth";
@@ -411,6 +412,9 @@ export function StudioPage({
       .reduce((far, clip) => Math.max(far, clip.start + clip.length), 0);
     return end > 0 ? end : project.bars;
   }, [project.tracks, project.bars]);
+
+  /** 工程调性解析一次（自由文本 → 音阶表）：PianoRoll 高亮与 clip 调外徽标共用。 */
+  const projectKeyParsed = useMemo(() => parseProjectKey(project.key), [project.key]);
 
   // The transport: one rAF loop that advances the playhead and drags the players with it.
   useEffect(() => {
@@ -1789,10 +1793,12 @@ export function StudioPage({
                    * "make me a beat by hand" works on a track that has no notes yet.
                    */
                   const editable = hasNotes || isDrums;
+                  const offKeyCount = hasNotes ? outOfKeyNotes(projectKeyParsed, clip.notes ?? []).length : 0;
                   return (
                   <Clip
                     key={clip.id}
                     clip={clip}
+                    offKeyCount={offKeyCount}
                     barPx={barPx}
                     bpm={project.bpm}
                     peaks={waves[clip.id]}
@@ -1872,6 +1878,7 @@ export function StudioPage({
             <PianoRoll
               clipName={clip.name}
               bpm={project.bpm}
+              projectKey={project.key}
               drumKit={drums}
               lengthMs={(clip.length * 60_000) / project.bpm}
               notes={clip.notes ?? []}
@@ -2409,8 +2416,11 @@ function Clip({
   onDuplicate,
   splitting,
   rendering,
+  offKeyCount = 0,
 }: {
   clip: StudioClip;
+  /** 调外音数量（#bitwig-adoption B 项）：>0 时 clip 上出一枚警示徽标。 */
+  offKeyCount?: number;
   barPx: number;
   /** Project tempo, so fade markers can be drawn at their real width in pixels. */
   bpm: number;
@@ -2578,6 +2588,11 @@ function Clip({
         {tempoNotice && <span className="sr-clip-badge sr-clip-badge--stale" title={tempoNotice}> · ⚠ {tempoNotice}</span>}
         {splitting && <span className="sr-clip-badge"> · 分轨中…</span>}
         {rendering && <span className="sr-clip-badge"> · 重渲染中…</span>}
+        {offKeyCount > 0 && (
+          <span className="sr-clip-badge sr-clip-badge--offkey" title="有音符不在工程调性里（钢琴卷帘里标红，可一键量化到调）">
+            {" "}· ⚠ 调外 {offKeyCount}
+          </span>
+        )}
         {clip.renderStale !== undefined && (
           <span className="sr-clip-badge sr-clip-badge--stale" title={clip.renderStale}>
             {" "}

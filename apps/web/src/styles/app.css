@@ -4142,3 +4142,10 @@
   color: var(--sr-text-dim);
 }
 
+/* 调外音（#bitwig-adoption B）：PianoRoll 音符与 clip 徽标共用一档警示色 */
+.sr-roll-note[data-offkey] {
+  outline: 1.5px solid var(--sr-warn, #e0a030);
+  outline-offset: -0.5px;
+}
+.sr-clip-badge--offkey { color: var(--sr-warn, #e0a030); }
+
