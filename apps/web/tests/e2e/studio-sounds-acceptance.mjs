@@ -121,6 +121,9 @@ try {
   check("② 切采样 tab 200 行、帧 ≤16ms", sampleRows === 200 && tabFrameMs <= 16, `行数 ${sampleRows}，帧 ${Math.round(tabFrameMs * 10) / 10}ms`);
 
   // ②b 名字优先：248px 宽（<260）时 hint 列隐藏，「Honky-tonk Piano」完整显示不截断（F-6）
+  // 先切回音色 tab——② 结束时停在采样 tab，gm 行不在 DOM（断言口径修正，Codex 2026-10-16 实测）
+  await page.locator('[data-tab="instrument"]').click();
+  await page.waitForSelector('[data-sound-key="gm:3"]', { timeout: 2000 });
   const nameCheck = await page.evaluate(() => {
     const row = document.querySelector('[data-sound-key="gm:3"]');
     if (!row) return { text: null, clipped: true, spanCount: -1 };
