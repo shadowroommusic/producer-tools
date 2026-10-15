@@ -39,16 +39,21 @@ type Props = {
   notePlayer?: NotePlayer;
   /** 行高 px（首帧口径：128+200 项在容器内只参与一次排版）。 */
   rowHeight?: number;
-  /** 列表可视高度 px。 */
-  height?: number;
+  /** 抽屉宽 px（默认 248）；<260 时隐藏 hint 列——名字优先（F-6 规格）。 */
+  width?: number;
 };
 
 const styles = {
+  /* F-6 覆盖式：浮在轨道头列之上，不占布局宽度（展开前后 lane 可视宽度差 = 0 的物理保证）。
+     sr-studio-body 有 position:relative，这里 absolute 相对它定位；背景必须用 tokens 里
+     真实定义的浮层填充——var(--sr-panel) 没有定义，透明底会把下层时间线透出来。 */
   aside: {
-    flex: "none", width: 248, margin: "8px 0 8px 8px",
+    position: "absolute", left: 0, top: 8, bottom: 8, zIndex: 5,
     display: "flex", flexDirection: "column",
     border: "0.5px solid var(--sr-border-strong)", borderRadius: 10,
-    background: "var(--sr-panel)", overflow: "hidden",
+    background: "var(--sr-floating-fill, var(--sr-surface-elevated, #1a1d16))",
+    boxShadow: "0 12px 32px rgba(0, 0, 0, 0.45)",
+    overflow: "hidden",
   },
   head: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -68,7 +73,7 @@ const styles = {
     background: "transparent", color: "inherit",
     border: "0.5px solid var(--sr-border-strong)", borderRadius: 6,
   },
-  list: { display: "flex", flexDirection: "column", gap: 4, padding: "0 8px 8px", overflowY: "auto" },
+  list: { flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 4, padding: "0 8px 8px", overflowY: "auto" },
   row: (playing: boolean, height: number): CSSProperties => ({
     flex: "none", height, display: "flex", alignItems: "center", gap: 6, padding: "0 8px",
     border: `0.5px solid ${playing ? "var(--sr-accent)" : "var(--sr-border-strong)"}`,
@@ -90,8 +95,8 @@ const styles = {
 } satisfies Record<string, CSSProperties | ((...args: never[]) => CSSProperties)>;
 
 const InstrumentRow = memo(function InstrumentRow({
-  sound, playing, rowHeight, onAudition,
-}: { sound: GmSound; playing: boolean; rowHeight: number; onAudition: (sound: GmSound) => void }) {
+  sound, playing, rowHeight, showHints, onAudition,
+}: { sound: GmSound; playing: boolean; rowHeight: number; showHints: boolean; onAudition: (sound: GmSound) => void }) {
   const style = useMemo(() => styles.row(playing, rowHeight), [playing, rowHeight]);
   return (
     <div
@@ -114,7 +119,7 @@ const InstrumentRow = memo(function InstrumentRow({
     >
       <span style={styles.program}>{String(sound.program).padStart(3, "0")}</span>
       <span style={styles.name}>{sound.name}</span>
-      {sound.hint !== undefined && <span style={styles.hint}>{sound.hint}</span>}
+      {showHints && sound.hint !== undefined && <span style={styles.hint}>{sound.hint}</span>}
     </div>
   );
 });
@@ -147,10 +152,12 @@ const SampleRow = memo(function SampleRow({
   );
 });
 
-function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }: Props) {
+function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, width = 248 }: Props) {
   /** 默认收起成 rail（与试凑区同款）：首帧成本 ≈ 0，采样清单等展开了再拉。 */
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"instrument" | "sample">("instrument");
+  const showHints = width >= 260;
+  const asideRef = useRef<HTMLElement | null>(null);
   const [queries, setQueries] = useState({ instrument: "", sample: "" });
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   /** 采样共享试听元素：首次点采样时建，之后只换 src（规格：复用不新建）。 */
@@ -211,6 +218,17 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
     [],
   );
 
+  /** F-6：点抽屉外任意处收起（× 之外的第二出口）。监听只在展开时挂，收起即卸。 */
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const root = asideRef.current;
+      if (root !== null && event.target instanceof Node && !root.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [open]);
+
   /** imports 没给 = 生产：每次展开自拉一次目录（收起→展开即刷新，省一个刷新按钮）。 */
   const [fetched, setFetched] = useState<SampleEntry[] | null>(null);
   useEffect(() => {
@@ -245,7 +263,12 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
   }
 
   return (
-    <aside style={styles.aside} aria-label="音色浏览器" onPointerDownCapture={warmContext}>
+    <aside
+      ref={asideRef}
+      style={{ ...styles.aside, width }}
+      aria-label="音色浏览器"
+      onPointerDownCapture={warmContext}
+    >
       <header style={styles.head}>
         <span style={styles.title}>音色浏览器</span>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -281,7 +304,7 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
           )
         }
       />
-      <div style={{ ...styles.list, height }} data-sounds-list="">
+      <div style={styles.list} data-sounds-list="">
         {tab === "instrument"
           ? visibleSounds.map((sound) => (
               <InstrumentRow
@@ -289,6 +312,7 @@ function SoundsDrawerInner({ imports, notePlayer, rowHeight = 28, height = 400 }
                 sound={sound}
                 playing={playingKey === `gm:${sound.program}`}
                 rowHeight={rowHeight}
+                showHints={showHints}
                 onAudition={auditionSound}
               />
             ))

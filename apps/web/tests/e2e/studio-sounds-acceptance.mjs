@@ -79,6 +79,8 @@ try {
       const { createRoot } = typeof domMod.createRoot === "function" ? domMod : domMod.default;
       const host = document.createElement("div");
       host.id = "sounds-e2e-host";
+      host.style.position = "relative"; // 覆盖式 drawer（absolute）在隔离宿主里的定位锚
+      host.style.minHeight = "70vh";
       document.body.appendChild(host);
       const imports = Array.from({ length: 200 }, (_, i) => ({
         path: i === 0 ? loopPath : `/tmp/sr-sounds-e2e/fake-${i}.wav`,
@@ -117,6 +119,22 @@ try {
   }));
   const sampleRows = await page.locator('[data-sounds-list] [data-kind="sample"]').count();
   check("② 切采样 tab 200 行、帧 ≤16ms", sampleRows === 200 && tabFrameMs <= 16, `行数 ${sampleRows}，帧 ${Math.round(tabFrameMs * 10) / 10}ms`);
+
+  // ②b 名字优先：248px 宽（<260）时 hint 列隐藏，「Honky-tonk Piano」完整显示不截断（F-6）
+  const nameCheck = await page.evaluate(() => {
+    const row = document.querySelector('[data-sound-key="gm:3"]');
+    if (!row) return { text: null, clipped: true, spanCount: -1 };
+    const spans = row.querySelectorAll("span");
+    const name = spans[1]; // [program][name]（hint 隐藏时恰好 2 个 span）
+    return {
+      text: name?.textContent ?? null,
+      clipped: name ? name.scrollWidth > name.clientWidth : true,
+      spanCount: spans.length,
+    };
+  });
+  check("②b 音色名完整显示（hint 列 <260px 隐藏）",
+    nameCheck.text === "Honky-tonk Piano" && !nameCheck.clipped && nameCheck.spanCount === 2,
+    `文本=${nameCheck.text ?? "(无)"}，截断=${nameCheck.clipped}，span 数=${nameCheck.spanCount}`);
 
   // ③ 音色试听打点（冷/热两记：冷 >100 而热小 = pointerdown 预热没接上；两个都大 = 调度本身有问题）
   await page.locator('[data-tab="instrument"]').click();
@@ -198,7 +216,15 @@ try {
     await page.goto(BASE, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2000);
     await page.locator(".sr-sounds-rail").waitFor({ timeout: 15000 });
+    const laneWidth = () => page.evaluate(() =>
+      document.querySelector('.sr-studio-lane[data-track-id="trk-1"]')?.getBoundingClientRect().width ?? -1);
+    const laneWidthBefore = await laneWidth();
     await page.locator(".sr-sounds-rail").click();
+    await page.waitForSelector("[data-sounds-list]", { timeout: 5000 });
+    const laneWidthAfter = await laneWidth();
+    check("⑦lane 展开抽屉后可视宽度不变（覆盖式不占布局）",
+      laneWidthBefore > 0 && Math.abs(laneWidthAfter - laneWidthBefore) < 1,
+      `${Math.round(laneWidthBefore)}px → ${Math.round(laneWidthAfter)}px`);
     // ⑦a 采样：/api/agent/dir 真列表第一行 → 拖进 lane trk-1 → clip 落轨
     await page.locator('[data-tab="sample"]').click();
     await page.waitForSelector('[data-sounds-list] [data-kind="sample"]', { timeout: 8000 });
