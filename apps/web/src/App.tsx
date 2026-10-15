@@ -1169,11 +1169,18 @@ export function App() {
         }, 700);
       },
       /**
-       * A real sentence: the answer is cancelled, the agent is told to stop generating, and whatever
-       * the user already said becomes the start of their turn instead of being thrown away.
+       * A real sentence: the answer is cancelled and the agent is told to stop generating.
+       *
+       * 打断后的「接着说的那句话」怎么处理，两种识别方式不一样（MiniMax 交叉验证 #356 抓的洞）：
+       * - 流式（浏览器识别）：识别器一直在跑，打断词都在 interruptRef 里，拼成下一回合的开头；
+       * - 回合制（桥式 STT）：没有 partial，interruptRef 恒空，刚才那几百毫秒的音频就在缓冲里——
+       *   旧代码直接 takeWav() 丢掉且不留话，用户必须重说（静默丢话）。
+       * 现在回合制下如实告诉用户「没接住，请再说一次」；把那段音频救回来（按打断时刻切片重识别）
+       * 是后续改进，不在这一刀里暗改。
        */
       onCancel: () => {
         if (voiceStateRef.current !== "speaking" && voiceStateRef.current !== "thinking") return;
+        const turnBased = currentSTT().transcribe !== undefined;
         answerToken.current += 1;
         currentTTS().cancel();
         capture.current?.takeWav(); // the answer's tail is not part of the next request
@@ -1183,7 +1190,7 @@ export function App() {
         interruptRef.current = "";
         heardRef.current = heard === "" ? heardRef.current : heard === heardRef.current ? heard : `${heard} ${heardRef.current}`.trim();
         partialRef.current = "";
-        setVoiceNotice("（打断了，接着说）");
+        setVoiceNotice(turnBased ? "（已打断）刚才那句没接住，请再说一次" : "（打断了，接着说）");
         moveVoice("listening");
       },
     });

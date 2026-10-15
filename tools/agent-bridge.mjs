@@ -1595,7 +1595,17 @@ const http = createServer(async (request, response) => {
      * key 只留在桥里（和 TTS 同一条规矩）。
      */
     if (request.method === "POST" && url.pathname === "/api/agent/providers/stt") {
-      const body = await readJsonBody(request, 64 * 1024 * 1024);
+      let body;
+      try {
+        body = await readJsonBody(request, 64 * 1024 * 1024);
+      } catch (cause) {
+        // 单个回合的 WAV 上限 64MB（≈25 分钟 16k 单声道）；超了给 413 + 人话，别落成 500 英文原文。
+        const tooLarge = /too large/i.test(String(cause?.message ?? cause));
+        json(response, tooLarge ? 413 : 400, {
+          error: tooLarge ? "这段录音太大（超过 64MB 上限）——说短一点，或分两次说。" : `请求读不出来：${cause instanceof Error ? cause.message : String(cause)}`,
+        });
+        return;
+      }
       const audioBase64 = String(body.audio ?? "");
       const provider = {
         baseUrl: String(body.baseUrl ?? "").trim(),
@@ -1633,7 +1643,8 @@ const http = createServer(async (request, response) => {
         if (!upstream.ok) throw new Error(await providerFailure(upstream));
         const payload = await upstream.json().catch(() => ({}));
         const picked = adapter.pick(payload);
-        console.log(`[agent] stt ${protocolName} ${audio.length}B → ${JSON.stringify(picked.text).slice(0, 60)} (${Date.now() - started}ms)`);
+        // 不把识别文本写进日志：用户说的话属于隐私，桥日志会被翻（MiniMax #356 低危 1）。
+        console.log(`[agent] stt ${protocolName} ${audio.length}B → ${[...String(picked.text ?? '')].length} 字 (${Date.now() - started}ms)`);
         json(response, 200, picked);
       } catch (cause) {
         json(response, 200, { error: `识别失败：${cause instanceof Error ? cause.message : String(cause)}` });
