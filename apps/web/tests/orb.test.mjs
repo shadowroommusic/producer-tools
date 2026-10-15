@@ -46,6 +46,26 @@ test("F-1 接线：通话五态各自映射到不同的球态，没有落回 lis
   assert.equal(new Set(mapped).size, 5, "五态必须映射到五个不同的球态（否则又是两态撞脸）");
 });
 
+test("运动通道专属守卫（MiniMax #387 ④）：通话五态不许只靠颜色分开", () => {
+  /**
+   * 上面那条统计的是全部 10 个通道，纯颜色差就能满足——色盲用户（约 8%）就分不出来了。
+   * 这条只看运动五通道（drift/wobble/ripple/swirl/breathe）：
+   *   任意两态 ≥1 个运动通道不同；F-1 新两态（unclear/offline）对其它任一态 ≥2 个不同。
+   */
+  const MOTION = ["drift", "wobble", "ripple", "swirl", "breathe"];
+  const CALL = ["listening", "thinking", "speaking", "unclear", "offline"];
+  const diff = (a, b) => MOTION.filter((c) => Math.abs(ORB_STATES[a][c] - ORB_STATES[b][c]) > 1e-9).length;
+  for (let i = 0; i < CALL.length; i += 1) {
+    for (let j = i + 1; j < CALL.length; j += 1) {
+      const n = diff(CALL[i], CALL[j]);
+      assert.ok(n >= 1, `${CALL[i]} 与 ${CALL[j]} 的运动签名完全相同（只靠颜色分）`);
+      if (CALL[i] === "unclear" || CALL[i] === "offline" || CALL[j] === "unclear" || CALL[j] === "offline") {
+        assert.ok(n >= 2, `${CALL[i]} 与 ${CALL[j]} 只有 ${n} 个运动通道不同（新两态要更明显）`);
+      }
+    }
+  }
+});
+
 test("亮度梯度：听 > 思考 > 闲（暗处一眼分）", () => {
   assert.ok(ORB_STATES.listening.rimAlpha > ORB_STATES.thinking.rimAlpha - 0.15);
   assert.ok(ORB_STATES.thinking.rimAlpha > ORB_STATES.idle.rimAlpha);

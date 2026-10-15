@@ -361,6 +361,8 @@ export function App() {
    * 都会留下一个 2.5s 后偷偷把状态改回 listening 的闹钟——挂断之后它还会动，正是要防的事。
    */
   const unclearTimer = useRef<number | null>(null);
+  /** 「轻插话，先憋一下」的 700ms 恢复手柄（onPause 用）；挂断时和 unclear 闹钟一起清。 */
+  const pauseTimer = useRef<number | null>(null);
   const clearUnclear = useCallback(() => {
     if (unclearTimer.current === null) return;
     window.clearTimeout(unclearTimer.current);
@@ -1255,7 +1257,10 @@ export function App() {
       onPause: () => {
         if (voiceStateRef.current !== "speaking") return;
         window.speechSynthesis?.pause?.();
-        window.setTimeout(() => {
+        /** 手柄存下来：挂断时一起清（MiniMax #387 ①：通话路径上不许有没人管的定时器）。 */
+        if (pauseTimer.current !== null) window.clearTimeout(pauseTimer.current);
+        pauseTimer.current = window.setTimeout(() => {
+          pauseTimer.current = null;
           if (voiceStateRef.current === "speaking") window.speechSynthesis?.resume?.();
         }, 700);
       },
@@ -1336,6 +1341,10 @@ export function App() {
     stopListening();
     /** ① 挂断路径：unclear 的回退闹钟在这里停掉（卸载复用同一条，AGENTS.md:109）。 */
     clearUnclear();
+    if (pauseTimer.current !== null) {
+      window.clearTimeout(pauseTimer.current);
+      pauseTimer.current = null;
+    }
     answerToken.current += 1;
     speakingToken.current += 1;
     currentTTS().cancel();
