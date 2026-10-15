@@ -202,7 +202,13 @@ if (!portBusy(5173) && !process.env.UI_AUDIT_BASE) {
 mkdirSync(SHOTS, { recursive: true });
 for (const file of readdirSync(SHOTS)) if (file.endsWith(".png")) rmSync(`${SHOTS}/${file}`);
 
-const browser = await chromium.launch({ channel: "chrome", headless: process.env.HEADFUL === undefined });
+// 假麦克风（MiniMax 审计 O-7）：不给这两个 flag 时 headless 拒绝 getUserMedia，
+// 每页都冒 1-2 条 NotAllowedError，11 条固定噪声会淹没真的 console error。
+const browser = await chromium.launch({
+  channel: "chrome",
+  headless: process.env.HEADFUL === undefined,
+  args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
+});
 const audit = []; // {page, rows: [{name, tag, result, evidence, duplicates}], errors: [], badOverlays: []}
 
 for (const { id: pageId, label } of PAGES) {
