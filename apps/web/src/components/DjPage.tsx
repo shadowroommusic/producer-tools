@@ -15,6 +15,7 @@ import { IconPause, IconPlay } from "./icons";
 import { callTool } from "../lib/mcp";
 import { Player, type DeckSnapshot } from "../lib/dj-deck";
 import { formatPlanDuration, plannerTrackPayload } from "../lib/dj-plan";
+import { zhBpmSource, zhCueNote, zhCueReason } from "../lib/dj-cue-zh";
 
 type LibraryTrack = {
   id: number;
@@ -159,12 +160,9 @@ function zhReason(reason: string): string {
   if (text === "energy unknown; judge this one by ear") return "能量未知，请靠耳朵判断";
   const energy = text.match(/^(steady energy|energy lift [+\d.]+|energy drop [-\d.]+) \((.+) → (.+)\)$/);
   if (energy !== null) {
-    const label = energy[1].startsWith("steady")
-      ? "能量持平"
-      : energy[1].startsWith("energy lift")
-        ? `能量提升 ${energy[1].slice("energy lift".length).trim()}`
-        : `能量回落 ${energy[1].slice("energy drop".length).trim()}`;
-    return `${label}（${energy[2]} → ${energy[3]}）`;
+    // F-4（ui-review）：能量浮点对用户无意义（0.814868→0.978326 是天书）——关系词留下，数值括号删。
+    if (energy[1].startsWith("steady")) return "能量持平";
+    return energy[1].startsWith("energy lift") ? "能量提升" : "能量回落";
   }
   const keyUnknown = text.match(/^key unknown \((source|target)\); beatmatch by ear or tag it first$/);
   if (keyUnknown !== null) return `调性未知（${keyUnknown[1] === "source" ? "当前曲" : "候选曲"}）：靠耳朵对拍或先打标`;
@@ -929,12 +927,15 @@ export function DjPage() {
             <div className="sr-dj-aicue-head">
               <strong>AI 设 cue · 预览（未写入）</strong>
               <span className="sr-dj-cue-note">
-                {aiCue.result.bpm.value.toFixed(1)} BPM（{aiCue.result.bpm.source}）
+                {aiCue.result.bpm.value.toFixed(1)} BPM（{zhBpmSource(aiCue.result.bpm.source)}）
               </span>
             </div>
             <ul className="sr-dj-aicue-list">
-              {aiCue.result.candidates.map((cand) => (
-                <li key={cand.role}>
+              {aiCue.result.candidates.map((cand) => {
+                // F-4：reason 只出中文；插件哪天出了新句式（zhCueReason → null），原文收进 title 不裸奔
+                const zh = zhCueReason(cand.reason);
+                return (
+                <li key={cand.role} title={zh === null ? cand.reason : undefined}>
                   <span className={`sr-dj-badge${cand.role === "in" ? " sr-dj-badge-in" : cand.role === "out" ? " sr-dj-badge-out" : ""}`}>
                     {cand.role === "in" ? "进" : cand.role === "out" ? "出" : "loop"}
                   </span>
@@ -943,16 +944,22 @@ export function DjPage() {
                     {cand.end_ms !== undefined ? ` – ${mmss(cand.end_ms / 1000)}` : ""}
                   </span>
                   <span className="sr-dj-aicue-conf">{Math.round(cand.confidence * 100)}%</span>
-                  <span className="sr-dj-aicue-reason">{cand.reason}</span>
+                  {zh !== null && <span className="sr-dj-aicue-reason">{zh}</span>}
                   {(cueBlock?.cues ?? []).some((cue) => cue.role === cand.role) ? (
                     <span className="sr-dj-aicue-replace">替换现有</span>
                   ) : null}
                 </li>
-              ))}
+                );
+              })}
             </ul>
-            {aiCue.result.notes.map((note) => (
-              <p key={note} className="sr-dj-aicue-note">{note}</p>
-            ))}
+            {aiCue.result.notes.map((note) => {
+              const zh = zhCueNote(note);
+              return zh !== null ? (
+                <p key={note} className="sr-dj-aicue-note">{zh}</p>
+              ) : (
+                <p key={note} className="sr-dj-aicue-note" title={note}>本条注释只有英文，悬停查看原文</p>
+              );
+            })}
             <div className="sr-dj-aicue-actions">
               <button type="button" className="sr-page-action" onClick={applyAiCues}>写入 cues</button>
               <button type="button" className="sr-page-action" onClick={() => setAiCue(null)}>放弃</button>
@@ -1323,7 +1330,7 @@ function LibraryBrowser(props: {
               <span className="sr-dj-row-title">{item.title}</span>
               {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
               {item.key ? <span className="sr-chip">{item.key}</span> : null}
-              <span className="sr-dj-score">{Math.round(item.score * 100)}</span>
+              <span className="sr-dj-score" title={`推荐分 ${Math.round(item.score * 100)} / 100`}>匹配 {Math.round(item.score * 100)}</span>
               <button
                 type="button"
                 className="sr-page-action"
