@@ -62,7 +62,6 @@ import {
   describeRemove,
   dupBadgeMap,
   dupFieldRows,
-  extractCovers,
   findDuplicates,
   partitionDupGroups,
   trackMoveToCrate,
@@ -240,17 +239,11 @@ export function LibraryPage() {
       }
       if (seq !== scanSeq.current) return;
       if (job.status === "completed") {
+        // 封面+分析已挂在扫描管线尾巴上（#94 B1），数字走 job 的 pipeline_json，前端不重复跑
         const line =
           describeScan(job) +
           (job.failed > 0 && job.failures.length > 0 ? `（第一个失败：${describeFailure(job.failures[0])}）` : "");
         setScanNote(line);
-        // 封面提取跟在扫描尾巴上（规格 §1：这一步也在这里做；幂等，已有 cover 的跳过）。
-        try {
-          const covers = await extractCovers();
-          if (covers.extracted > 0 && seq === scanSeq.current) setScanNote(`${line}；封面 +${covers.extracted}`);
-        } catch {
-          /* 封面失败不挡扫描结果 */
-        }
       } else if (job.status === "running") {
         setScanNote(`扫了 10 分钟还没完（${job.done}/${job.total}）——任务在后台继续，稍后刷新列表看`);
       } else {
@@ -300,6 +293,7 @@ export function LibraryPage() {
       const result = await analyzeMissing(25);
       say(
         `补齐缺失分析：候选 ${result.candidates} · 补全 ${result.analysed} · 失败 ${result.failed}` +
+          (result.key_skipped_low_confidence > 0 ? ` · 调性低置信跳过 ${result.key_skipped_low_confidence}` : "") +
           (result.errors.length > 0 ? `（${result.errors[0]}）` : "") +
           `，用时 ${result.ms}ms`,
       );

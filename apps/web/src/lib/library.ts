@@ -77,10 +77,31 @@ export type ScanJob = {
   missing: number;
   ms: number | null;
   error: string | null;
+  /** #94 B1：扫完自动补封面+分析的总结（JSON 字符串）；老 job 没有这列。 */
+  pipeline_json?: string | null;
   started_at?: number;
   finished_at?: number | null;
   failures: Array<Record<string, unknown>>;
 };
+
+/** pipeline_json 的形状：covers = extract_covers 的结果；analysis = 自动补分析的总结。 */
+export type ScanPipeline = {
+  covers?: { extracted?: number; none?: number };
+  analysis?: {
+    candidates?: number; analysed?: number; failed?: number;
+    key_skipped_low_confidence?: number; rounds?: number; warning?: string | null;
+  };
+};
+
+/** 防御性解析 pipeline_json：老 job 没这列、坏 JSON 都当没有。 */
+export function parseScanPipeline(job: Pick<ScanJob, "pipeline_json">): ScanPipeline | null {
+  if (!job.pipeline_json) return null;
+  try {
+    return JSON.parse(job.pipeline_json) as ScanPipeline;
+  } catch {
+    return null;
+  }
+}
 
 export type Stats = {
   tracks: number;
@@ -253,7 +274,19 @@ export function describeScan(job: ScanJob): string {
   if (job.unchanged > 0) parts.push(`未变 ${job.unchanged}`);
   if (job.failed > 0) parts.push(`失败 ${job.failed}`);
   if (job.missing > 0) parts.push(`${job.missing} 行本次没找到（库行保留，不删）`);
-  return `${parts.join(" · ")}，用时 ${job.ms ?? 0}ms`;
+  // #94 B1：扫完自动补封面+分析的总结落 pipeline_json（前端轮询，job 行是唯一通道）
+  const pipeline = parseScanPipeline(job);
+  if (pipeline?.covers?.extracted) parts.push(`封面 +${pipeline.covers.extracted}`);
+  const analysis = pipeline?.analysis;
+  if (analysis && (analysis.candidates ?? 0) > 0) {
+    const piece = [`分析补 ${analysis.analysed ?? 0}/${analysis.candidates}`];
+    if (analysis.failed) piece.push(`失败 ${analysis.failed}`);
+    if (analysis.key_skipped_low_confidence) piece.push(`调性低置信跳过 ${analysis.key_skipped_low_confidence}`);
+    parts.push(piece.join(" · "));
+  }
+  const line = `${parts.join(" · ")}，用时 ${job.ms ?? 0}ms`;
+  // 插件缺失降级为 warning：job 仍 completed，error 栏写明原因
+  return job.error ? `${line}（${job.error}）` : line;
 }
 
 /** 扫描中的进度句：喂进度显示位（二期 SSE 来了也显示它）。 */
