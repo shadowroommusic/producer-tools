@@ -981,6 +981,13 @@ export function App() {
   const partialRef = useRef("");
   const [voicePartial, setVoicePartial] = useState("");
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  /**
+   * 正在念的那句话（球旁边的字幕）。
+   *
+   * 用户 2026-10 的反馈是「球看着还行但非常不清晰」——TTS 声音一过就没有痕迹，听不清就要重问。
+   * 字幕把「在听 → 在想 → 在说」三态写成一行字：说的话有回声、识别有回执、思考有等待感。
+   */
+  const [spokenSentence, setSpokenSentence] = useState<string | null>(null);
   const turnRef = useRef<TurnDetector | null>(null);
   const bargeRef = useRef<BargeInDetector | null>(null);
   /** Bumped on every interruption, so a canceled answer's `onend` cannot resume the call twice. */
@@ -1231,6 +1238,12 @@ export function App() {
     }
     if (answer === "") return;
 
+    if (voiceState === "listening") {
+      // 回到倾听：把上一句字幕擦掉（下一轮的字幕要么是识别结果，要么是「在听…」）。
+      setSpokenSentence(null);
+      return;
+    }
+
     if (voiceState === "thinking") {
       spokenUpTo.current = 0;
       speakingToken.current += 1;
@@ -1255,6 +1268,7 @@ export function App() {
     }
     spokenUpTo.current = speakable.length;
     const text = next.join(" ");
+    setSpokenSentence(text);
     currentTTS().speak(text, {
       voiceId: currentVoiceId(),
       onEnd: () => {
@@ -2723,6 +2737,21 @@ export function App() {
         voiceState={voiceState}
         voiceLevel={() => level.current}
         onCallToggle={() => (voiceMode ? hangUp() : void startCall())}
+        caption={
+          /*
+           * 通话没起来（麦克风被拒等）时也要把话说出来——否则用户点球什么都不发生，
+           * 字幕是唯一能解释「为什么没反应」的地方。
+           */
+          voiceMode
+            ? voiceState === "speaking"
+              ? (spokenSentence ?? undefined)
+              : voiceState === "thinking"
+                ? (voiceNotice ?? "在想…")
+                : voicePartial !== ""
+                  ? voicePartial
+                  : "在听…"
+            : (voiceNotice ?? undefined)
+        }
       />
     </>
   );

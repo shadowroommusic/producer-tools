@@ -3261,6 +3261,36 @@
   cursor: grabbing;
 }
 
+/*
+ * 通话字幕（2026-10-16）：球下的一行字，把「在听 / 在想 / 在说」说清楚。
+ * 不接事件（pointer-events:none）——它漂在页面上，不能挡任何点击；最长两行，超出省略。
+ */
+.sr-orb-caption {
+  position: absolute;
+  /* 挂在球**上方**：球默认停屏幕中下方（吸附边），字幕放下面会被视口裁掉（2026-10-16 实测）。 */
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  /* width:max-content 是关键：绝对定位子元素被 80px 宽的球容器 shrink-to-fit 压成竖排文字
+     （2026-10-16 截图实锤：pill 只有 42px 宽，「在听…」被折成两行）。 */
+  width: max-content;
+  max-width: 300px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sr-bg, #0b0b0f) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sr-label-tertiary, #94a3b8) 24%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--sr-label-secondary, #cbd5e1);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 /* v5 起球体全由 OrbGlass 的 canvas 绘制（暗核光圈）；这里的 DOM 壳样式
    只留容器/球面命中/面板，旧的内核/能量环/刻度环/弧/波形样式已随 v5 删除。 */
 
@@ -4168,4 +4198,3 @@
   outline-offset: -0.5px;
 }
 .sr-clip-badge--offkey { color: var(--sr-warn, #e0a030); }
-

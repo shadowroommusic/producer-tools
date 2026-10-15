@@ -70,6 +70,7 @@ export function ButlerOrb({
   voiceState = "listening",
   voiceLevel,
   onCallToggle,
+  caption,
 }: {
   mode?: OrbMode;
   progress?: number;
@@ -85,6 +86,8 @@ export function ButlerOrb({
   voiceLevel?: () => number;
   /** 有了它，点球 = 开始/挂断真通话；没有则退回本地电平演示（旧行为）。 */
   onCallToggle?: () => void;
+  /** 球旁的一行字幕：在听（识别中的话）/ 在想（等待）/ 在说（正在念的那句）。 */
+  caption?: string;
 }) {
   const [position, setPosition] = useState(
     () =>
@@ -304,6 +307,16 @@ export function ButlerOrb({
         {/* v5 暗核光圈：五态三通道 + 干活酸绿弧都画在这一层（无 3D 依赖、不会 NaN 崩）。 */}
         <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} progress={effectiveProgress} reducedMotion={reducedMotion.current} />
       </div>
+      {/*
+        通话字幕（用户 2026-10：「球看着还行但非常不清晰」）。三态各有一行字：
+        在听（识别中的话）/ 在想（等待，含「正在识别…」「没听清」这类可读提示）/ 在说（正在念的句子）。
+        pointer-events:none——字幕绝不能挡球或页面的点击。
+      */}
+      {caption !== undefined && caption !== "" && (
+        <div className="sr-orb-caption" aria-live="polite" data-call-caption>
+          {caption}
+        </div>
+      )}
 
       {expanded && (
         <div className="sr-orb-panel" onPointerDown={(event) => event.stopPropagation()}>

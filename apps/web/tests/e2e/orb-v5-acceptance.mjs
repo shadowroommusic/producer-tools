@@ -27,8 +27,14 @@ const check = (name, ok, detail) => {
 };
 
 mkdirSync(SHOTS, { recursive: true });
-const browser = await chromium.launch({ channel: "chrome", headless: true });
-const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "no-preference" });
+// 假麦克风：2026-10-16 起点球=真通话（App.startCall → getUserMedia），没有麦克风时
+// 通话起不来、球当然停在 idle——那是环境不是回归。用 fake device 让「真通话」这条路可测。
+const browser = await chromium.launch({
+  channel: "chrome",
+  headless: true,
+  args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"],
+});
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "no-preference", permissions: ["microphone"] });
 const page = await context.newPage();
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".sr-orb-ball canvas", { timeout: 20000 });
@@ -118,6 +124,12 @@ const dragOrbTo = async (targetX, targetY) => {
   await page.waitForTimeout(300);
   const afterClick = (await orbState())?.mode;
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); // 先回 listening，再走 Esc 那条路
+  // 起点球=真通话（2026-10-16）：startCall 里先 await getUserMedia 才 setVoiceMode(true)，
+  // 点完立刻按 Esc 会落在「还没开麦」的缝里——等它真的进 listening 再按。
+  for (let i = 0; i < 20; i += 1) {
+    if ((await orbState())?.mode === "listening") break;
+    await page.waitForTimeout(100);
+  }
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
   const afterEsc = (await orbState())?.mode;
