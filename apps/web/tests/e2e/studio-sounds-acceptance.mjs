@@ -65,13 +65,18 @@ try {
   // 第一个指向真 WAV（桥在时能播），其余是假路径（不点它们）。
   const mount = await page.evaluate(async (loopPath) => {
     try {
-      const [reactMod, domMod, drawerMod] = await Promise.all([
+      const [reactMod, domMod, flushMod, drawerMod] = await Promise.all([
         import("/node_modules/.vite/deps/react.js"),
         import("/node_modules/.vite/deps/react-dom_client.js"),
+        // flushSync 住在 react-dom（不是 react-dom/client）——原脚本从 client 解构，必然 undefined。
+        import("/node_modules/.vite/deps/react-dom.js"),
         import("/src/components/StudioSoundsDrawer.tsx"),
       ]);
       const React = reactMod.default;
-      const { createRoot, flushSync } = domMod;
+      // Vite 的 dep 预打包把 react-dom/client 的命名导出收进 default（实测 createRoot 不在顶层，
+      // 顶层解构会得到 undefined → "createRoot is not a function"）。两形状都兜住。
+      const { createRoot } = typeof domMod.createRoot === "function" ? domMod : domMod.default;
+      const flushSync = flushMod.flushSync ?? flushMod.default?.flushSync;
       const host = document.createElement("div");
       host.id = "sounds-e2e-host";
       document.body.appendChild(host);

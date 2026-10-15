@@ -9,7 +9,9 @@
  * ② 桥目前没有任何目录列表端点（裁决书「已有」系误判）——imports 由调用方 props 注入，
  *    挂载阶段再定 fetch 通道。
  */
-import { GM_HINTS, GM_NAMES } from "./studio-sounds-gm128";
+// 显式 .ts 后缀：本模块被 node --test 直接 import，node 的 ESM 解析不做扩展名补全
+// （仓内既有约定：dj-deck.ts → "./studio.ts"）。Vite 侧 tsconfig 已开 allowImportingTsExtensions。
+import { GM_HINTS, GM_NAMES } from "./studio-sounds-gm128.ts";
 import type { StudioNote } from "./studio";
 
 /** 拖音色/采样的自定义 MIME（与试凑区 SCRATCH_MIME 同套路，时间轴 Files 通道不碰它）。 */
