@@ -1,15 +1,15 @@
 /**
- * 悬浮球 v5 的状态参数表：五态至少在两个通道上不同（v4 的病就是 thinking/working 与 idle 撞脸）；
- * lerpHue 走最短路径（350°→10° 走 +20°）。
+ * 悬浮球状态参数表：**七态**（五态 + F-1 的 unclear/offline）至少在两个通道上不同
+ * （v4 的病就是 thinking/working 与 idle 撞脸）；lerpHue 走最短路径（350°→10° 走 +20°）。
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ORB_STATES, lerpHue } from "../src/lib/orb-states.ts";
 
-const MODES = ["idle", "listening", "speaking", "thinking", "working"];
+const MODES = ["idle", "listening", "speaking", "thinking", "working", "unclear", "offline"];
 const CHANNELS = ["hueA", "hueB", "drift", "rimAlpha", "rimWidth", "glow", "breathe", "ripple", "swirl"];
 
-test("五态齐全，且任意两态至少在两个通道上不同", () => {
+test("七态齐全，且任意两态至少在两个通道上不同", () => {
   for (const mode of MODES) assert.ok(ORB_STATES[mode], `缺 ${mode}`);
   for (let i = 0; i < MODES.length; i += 1) {
     for (let j = i + 1; j < MODES.length; j += 1) {
@@ -29,6 +29,14 @@ test("色相族分工：说话在青绿区，其余蓝紫区；思考追边最�
   assert.ok(ORB_STATES.thinking.drift > ORB_STATES.idle.drift * 10, "思考追边必须一眼看出比空闲快");
   assert.ok(ORB_STATES.thinking.swirl > 0 && ORB_STATES.idle.swirl === 0, "旋流只属于思考");
   assert.ok(ORB_STATES.speaking.ripple > 0 && ORB_STATES.idle.ripple === 0, "波纹只属于说话");
+});
+
+test("F-1 新两态：没听清=琥珀晃、断线=灰且全静止", () => {
+  assert.ok(ORB_STATES.unclear.hueA >= 25 && ORB_STATES.unclear.hueB <= 60, "unclear 应在琥珀族");
+  assert.ok(ORB_STATES.unclear.wobble > ORB_STATES.listening.wobble * 2, "没听清的横向晃动要明显大于在听");
+  assert.ok(ORB_STATES.offline.drift === 0 && ORB_STATES.offline.breathe === 0 && ORB_STATES.offline.wobble === 0, "断线全静止");
+  assert.ok(ORB_STATES.offline.glow < ORB_STATES.idle.glow * 0.5, "断线要暗到一眼看出");
+  assert.ok(ORB_STATES.offline.swirl === 0 && ORB_STATES.offline.ripple === 0, "断线不追边不起波");
 });
 
 test("亮度梯度：听 > 思考 > 闲（暗处一眼分）", () => {

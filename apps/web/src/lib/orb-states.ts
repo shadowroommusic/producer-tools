@@ -3,7 +3,12 @@
  * 通道分工见表头；任意两态至少在两个通道上不同（tests/orb.test.mjs 钉住）。
  */
 
-export type OrbVisualMode = "idle" | "listening" | "speaking" | "thinking" | "working";
+/**
+ * 球的外观状态七态：原来的五态 + Kimi UI 评审 F-1 新增的两种「通话异常」态——
+ *   unclear（没听清，琥珀慢闪 + 横向晃动，与四态都不同）；offline（断线，灰、静止）。
+ * 口径来自 docs/ui-review-kimi.md §③ F-1 / docs/ui-review-deepseek.md ②。
+ */
+export type OrbVisualMode = "idle" | "listening" | "speaking" | "thinking" | "working" | "unclear" | "offline";
 
 /** 五态参数表：drift 单位 turns/s；rimWidth 相对球半径；ripple/swirl/breathe 是强度开关。
  *  终验口径（orb-v5-acceptance ⑧）：五态同尺寸截图两两 mean-abs-diff ≥ 8/255——所以色相族
@@ -18,6 +23,16 @@ export const ORB_STATES: Record<
   speaking: { hueA: 140, hueB: 190, drift: 0.05, rimAlpha: 0.85, rimWidth: 0.12, glow: 0.72, breathe: 0, wobble: 0.03, ripple: 1, swirl: 0 },
   thinking: { hueA: 272, hueB: 318, drift: 0.55, rimAlpha: 0.9, rimWidth: 0.1, glow: 0.75, breathe: 0, wobble: 0.02, ripple: 0, swirl: 1 },
   working: { hueA: 210, hueB: 262, drift: 0.08, rimAlpha: 0.6, rimWidth: 0.1, glow: 0.55, breathe: 0, wobble: 0.025, ripple: 0, swirl: 0 },
+  /**
+   * 没听清：琥珀慢闪 + 明显横向晃动（wobble 全场最高、drift 慢），一眼区别于 listening 的呼吸。
+   * 它是「请你再说一次」的邀请，不是错误——所以不熄灭、不红。
+   */
+  unclear: { hueA: 32, hueB: 52, drift: 0.12, rimAlpha: 0.8, rimWidth: 0.14, glow: 0.62, breathe: 0.05, wobble: 0.12, ripple: 0, swirl: 0 },
+  /**
+   * 断线：灰、静止——drift/breathe/wobble/swirl/ripple 全 0、glow 与 rimAlpha 压到最低。
+   * 运动规则是「什么都不动」，与其余六态在任何一帧都看得出区别。
+   */
+  offline: { hueA: 210, hueB: 210, drift: 0, rimAlpha: 0.22, rimWidth: 0.06, glow: 0.12, breathe: 0, wobble: 0, ripple: 0, swirl: 0 },
 };
 
 /** 色相沿最短路径插值（350°→10° 走 +20° 而不是 -340°）。 */
