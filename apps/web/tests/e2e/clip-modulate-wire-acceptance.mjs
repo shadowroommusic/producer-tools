@@ -49,7 +49,10 @@ const seed = {
       muted: false,
       soloed: false,
       volume: 80,
-      clips: [{ id: "clip-wire-b", name: "干净贝斯", start: 0, length: 2, source: "" }],
+      clips: [
+        { id: "clip-wire-b", name: "干净贝斯", start: 0, length: 2, source: "" },
+        { id: "clip-wire-c", name: "原型链陷阱", start: 4, length: 2, source: "" },
+      ],
     },
   ],
 };
@@ -108,6 +111,33 @@ try {
   });
   check("③ localStorage 里 gainLfo 字段真实落盘", stored !== null && Math.abs(stored.rateHz - 1) < 0.001,
     JSON.stringify(stored));
+
+  // ③b 原型链键：rate="toString" 曾经能穿过 `in` 检查（GAIN_LFO_RATES 原型上取到函数）→ rateHz=NaN。
+  // 修好后必须收敛到 1bar 的 1.00 Hz，且落盘的是数字不是 null。
+  await page.locator(".sr-menu-backdrop").last().dispatchEvent("pointerdown").catch(() => {});
+  await fetch(`${BRIDGE}/api/agent/media-events`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      server: "shadow-music-generator",
+      tool: "clip_modulate",
+      ok: true,
+      text: JSON.stringify({ clip_id: "clip-wire-c", rate: "toString", depth: 0.7 }),
+      args: { clip_id: "clip-wire-c", rate: "toString", depth: 0.7 },
+    }),
+  });
+  let trap = null;
+  for (let attempt = 0; attempt < 10 && trap === null; attempt += 1) {
+    await page.waitForTimeout(1200);
+    trap = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("shadowroom.studio.projects.v1") ?? "{}";
+      const parsed = JSON.parse(raw);
+      const clip = parsed.projects?.[0]?.tracks?.[0]?.clips?.find((entry) => entry.id === "clip-wire-c");
+      return clip?.gainLfo ?? null;
+    });
+  }
+  check("③b rate=\"toString\" 收敛到 1bar（原型链键不产生 NaN/null）",
+    trap !== null && trap.rateHz === 1 && trap.depth === 0.7, JSON.stringify(trap));
 
   await page.screenshot({ path: `${SHOTS}/clip-modulate-wire.png` });
   check("④ 截图留存", true, `${SHOTS}/clip-modulate-wire.png`);

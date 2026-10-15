@@ -53,13 +53,18 @@ test("验收 c（静态）：播放路径源码不出现 gainLfo/gain_lfo", () =
   // 播放图 = clipGain/fadeGain/rampGain 的定义处与 rAF 走带；gain_lfo 只允许出现在
   // 类型/写入/导出/菜单四处。直接全文搜关键播放实现，命中即违规。
   const studio = readFileSync(new URL("../src/lib/studio.ts", import.meta.url), "utf8");
-  const playbackHelpers = studio.slice(
-    studio.indexOf("export function fadeGain"),
-    studio.indexOf("// ---------- 泵感调制"),
-  );
+  const helperStart = studio.indexOf("export function fadeGain");
+  const helperEnd = studio.indexOf("// ---------- 泵感调制");
+  assert.ok(helperStart > 0 && helperEnd > helperStart, `studio.ts 播放辅助段锚点失效（${helperStart}→${helperEnd}）`);
+  const playbackHelpers = studio.slice(helperStart, helperEnd);
   assert.equal(playbackHelpers.includes("gainLfo"), false, "fadeGain/rampGain/clipGain 不得读 gainLfo");
-  // 上面的切片覆盖 fadeGain/rampGain/clipGain 及其后所有播放辅助函数（到泵感注释为止）
+  // 切片必须非空：锚点写反会切出空串、includes 恒 false——守卫就变成一句废话（MiniMax 交叉验证抓到过）。
   const page = readFileSync(new URL("../src/components/StudioPage.tsx", import.meta.url), "utf8");
-  const players = page.slice(page.indexOf("// ---------- players"), page.indexOf("const clipVolume"));
+  const playersStart = page.indexOf("// ---------- players");
+  const playersEnd = page.indexOf("// ---------- arrangement editing");
+  assert.ok(playersStart > 0 && playersEnd > playersStart,
+    `StudioPage players 段锚点失效（${playersStart}→${playersEnd}）——空切片会让下面的断言恒过`);
+  const players = page.slice(playersStart, playersEnd);
+  assert.ok(players.length > 1000, `players 段切片异常短（${players.length} 字符），锚点疑被改动`);
   assert.equal(players.includes("gainLfo"), false, "players effect（每 clip 一个 <audio>）不得读 gainLfo");
 });

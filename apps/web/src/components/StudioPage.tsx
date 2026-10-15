@@ -334,7 +334,11 @@ export function StudioPage({
     const onModulate = (event: Event) => {
       const detail = (event as CustomEvent).detail as { clipId?: string; rate?: string; depth?: number } | null;
       if (detail?.clipId === undefined || detail.clipId === null) return;
-      const rate = (detail.rate !== undefined && detail.rate in GAIN_LFO_RATES ? detail.rate : "1bar") as GainLfoRate;
+      // Object.hasOwn 而不是 `in`：`in` 走原型链，"toString" 这类键能过检，取到继承函数后
+      // rateHz 会变 NaN（导出成 null、generator 静默不泵）。认不出的档一律收敛到 1bar。
+      const rate = (
+        detail.rate !== undefined && Object.hasOwn(GAIN_LFO_RATES, detail.rate) ? detail.rate : "1bar"
+      ) as GainLfoRate;
       const depth = typeof detail.depth === "number" ? detail.depth : 0.7;
       onChangeRef.current((current) => applyClipModulation(current, detail.clipId as string, rate, depth));
     };
