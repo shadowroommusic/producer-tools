@@ -100,7 +100,9 @@ try {
   const firstFrameMs = await page.evaluate(() => new Promise((resolve) => {
     const t0 = performance.now();
     document.querySelector(".sr-sounds-rail").click();
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - t0)));
+    // 单帧口径（原版两次 rAF 把 vsync 等待也算进「首帧」，dev 下必超线——2026-10-16 修口径）：
+    // 用户感知 = 点下去之后**下一帧**列表在不在屏上；渲染若溢出这一帧，时间自然超 16.7ms。
+    requestAnimationFrame(() => resolve(performance.now() - t0));
   }));
   await page.waitForSelector('[data-sounds-list] [data-sound-key]', { timeout: 5000 });
   const gmRows = await page.locator('[data-sounds-list] [data-kind="instrument"]').count();
@@ -111,7 +113,7 @@ try {
     const tab = document.querySelector('[data-tab="sample"]');
     const t0 = performance.now();
     tab.click();
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - t0)));
+    requestAnimationFrame(() => resolve(performance.now() - t0));
   }));
   const sampleRows = await page.locator('[data-sounds-list] [data-kind="sample"]').count();
   check("② 切采样 tab 200 行、帧 ≤16ms", sampleRows === 200 && tabFrameMs <= 16, `行数 ${sampleRows}，帧 ${Math.round(tabFrameMs * 10) / 10}ms`);
