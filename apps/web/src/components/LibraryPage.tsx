@@ -104,6 +104,8 @@ export function LibraryPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ track: TrackRow; mode: "trash" | "permanent"; detail: TrackDetail | null } | null>(null);
   const [permaArmed, setPermaArmed] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** 删除失败的弹窗行内文案（P2-B）：页级 alert 之外，弹窗里也要说——用户盯着按钮时不用找。 */
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   /** 查重：结果留作角标；acoustic 组排队进二选一弹窗；exact/suspect 只上报告与角标。 */
   const [dupBusy, setDupBusy] = useState(false);
@@ -421,6 +423,7 @@ export function LibraryPage() {
     (track: TrackRow, mode: "trash" | "permanent") => {
       setMenu(null);
       setPermaArmed(false);
+      setDeleteError(null);
       setDeleteTarget({ track, mode, detail: null });
       void trackDetail(track.id)
         .then((row) => setDeleteTarget((current) => (current?.track.id === track.id ? { ...current, detail: row } : current)))
@@ -443,11 +446,13 @@ export function LibraryPage() {
       if (selectedId === track.id) setSelectedId(null);
       await Promise.all([refreshStats(), reloadTracks()]);
     } catch (cause) {
-      fail("删除失败", cause);
+      const text = `删除失败：${cause instanceof Error ? cause.message : String(cause)}`;
+      setDeleteError(text); // 弹窗行内（P2-B）
+      say(text); // 页级 alert 双通道保留
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, deleting, say, fail, selectedId, refreshStats, reloadTracks]);
+  }, [deleteTarget, deleting, say, selectedId, refreshStats, reloadTracks]);
 
   // 弹窗的 Esc（删除确认与查重二选一共用）。
   useEffect(() => {
@@ -1020,6 +1025,11 @@ export function LibraryPage() {
                 <input type="checkbox" checked={permaArmed} onChange={(event) => setPermaArmed(event.target.checked)} />
                 我知道无法恢复
               </label>
+            ) : null}
+            {deleteError !== null ? (
+              <p className="sr-lib-dialog-error" role="alert">
+                {deleteError}
+              </p>
             ) : null}
             <div className="sr-lib-dialog-actions">
               <button ref={cancelRef} type="button" className="sr-btn" onClick={() => setDeleteTarget(null)}>

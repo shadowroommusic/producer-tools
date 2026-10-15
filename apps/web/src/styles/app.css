@@ -4248,3 +4248,12 @@
   outline-offset: -0.5px;
 }
 .sr-clip-badge--offkey { color: var(--sr-warn, #e0a030); }
+
+/* ---------- 曲目库页：删除确认弹窗行内错误（P2-B；其余 sr-lib 样式在 library.css，本条按派单落这里） ---------- */
+
+.sr-lib-dialog-error {
+  margin: 0;
+  color: var(--sr-danger);
+  font-size: var(--sr-text-13);
+  overflow-wrap: anywhere;
+}

@@ -24,6 +24,7 @@ const STEMS = "/Users/lazora/Documents/ShadowRoom/stems/kit-demo-demo";
 const FF = "/Users/lazora/Documents/ShadowRoom/bin/ffmpeg";
 const TRASH = `${process.env.HOME}/.Trash`;
 const SHOTS = "/tmp/sp-shots/library-accept";
+const EXPORTS = "/Users/lazora/Documents/ShadowRoom/exports/library-inline-error";
 const AUDIO_COUNT = 16; // 8 软链 + acc.wav/accb.wav/acc.mp3 + trash/perma/remove + meta×2
 const results = [];
 const check = (name, ok, detail) => {
@@ -358,24 +359,53 @@ checkTrash(
   `标题「${trashTitle.trim()}」· 焦点取消=${focusIsCancel} · 小字链接=${permaLink} · 文件消失=${trashFileGone} 库行没了=${trashRowGone}`,
 );
 /**
- * ⑫c 弹窗状态与结果一致（2026-10-16 全量扫补）：本机桥父进程的 TCC 没有废纸篓权限（见 ⑫b），
- * 删除会失败——产品这时**留在弹窗里说出来**是对的，但下一步要点行就会先被 scrim 挡住（本文件
- * ⑬ 曾在全量扫里超时 30s，就是踩了这条）。这里把两种出口都钉住：成功=弹窗关；失败=弹窗留着且
- * 带失败文案（不许点了没反应），然后按 Esc 收起再继续。
+ * ⑫c 删除失败的弹窗行内错误（P2-B，2026-10-16 从「两出口钉住」升级成会红的断言）：
+ * 失败时 弹窗必须留着 + 弹窗内必须有行内失败文案（.sr-lib-dialog-error）+ 页级 alert 双通道保留。
+ * 确定性触发：route 拦截 /api/call 里 tool=track_remove 的请求，回纯文本「RuntimeError…」
+ * ——这就是插件在桥父进程无废纸篓 TCC 权限时的真实错误形状（前端 JSON.parse 炸出
+ * 「Unexpected token 'R'」；插件侧统一 JSON 形状是 P2-A，派给 ZCode）。与宿主 TCC 权限无关，
+ * 任何机器都走失败分支，不依赖真桥失败。⑫ 的真桥点击在本机已失败过一次、弹窗按设计留着，
+ * 先 Esc 收起（它就是全量扫里卡住 ⑬ 的那张 scrim）再做拦截断言。
+ * 拦截目标用 libaccept-04：mock 失败什么都不删，后面 ③ 抽屉还要用它。
  */
-const stuckCount = await page.locator(".sr-lib-dialog").count();
-const stuckNotice = (await page.locator(".sr-lib-notice").count()) === 0
-  ? ""
-  : (await page.locator(".sr-lib-notice").first().innerText()).replace(/\s+/g, " ").slice(0, 140);
-check(
-  "⑫c 弹窗状态与结果一致（成功=关；失败=弹窗留着 + 页级 alert 说出来，不静默）",
-  stuckCount === 0 || /失败|错误|无法/.test(stuckNotice),
-  stuckCount === 0 ? "弹窗已关（本次删除成功）" : `弹窗仍在，页级提示：「${stuckNotice === "" ? "(无)" : stuckNotice}」`,
-);
-if (stuckCount > 0) {
+if ((await page.locator(".sr-lib-dialog").count()) > 0) {
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
 }
+await openMenu("libaccept-04");
+await menuItem("移到废纸篓…").click();
+await page.waitForSelector(".sr-lib-dialog", { timeout: 5000 });
+await page.route("**/api/call", async (route) => {
+  const body = route.request().postData() ?? "";
+  if (body.includes('"track_remove"')) {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ result: "RuntimeError: simulated trash failure (bridge parent lacks Trash TCC)", isError: false }),
+    });
+  } else {
+    await route.continue();
+  }
+});
+await page.getByRole("button", { name: "移入废纸篓", exact: true }).click();
+await page.waitForSelector(".sr-lib-dialog-error", { timeout: 5000 }).catch(() => null);
+const stuckCount = await page.locator(".sr-lib-dialog").count();
+const inlineError = ((await page.locator(".sr-lib-dialog .sr-lib-dialog-error").first().innerText().catch(() => "")) ?? "")
+  .replace(/\s+/g, " ")
+  .trim();
+const pageNotice = (await page.locator(".sr-lib-notice").count()) === 0
+  ? ""
+  : (await page.locator(".sr-lib-notice").first().innerText()).replace(/\s+/g, " ").slice(0, 140);
+mkdirSync(EXPORTS, { recursive: true });
+await page.screenshot({ path: `${EXPORTS}/12c-inline-error.png` });
+await page.unroute("**/api/call");
+check(
+  "⑫c 删除失败：弹窗留着 + 行内失败文案 + 页级 alert 双通道（route 拦截 track_remove，与真桥 TCC 无关）",
+  stuckCount === 1 && /失败/.test(inlineError) && /失败/.test(pageNotice),
+  `弹窗=${stuckCount} · 行内「${inlineError.slice(0, 90) || "（无）"}」 · 页级「${pageNotice || "（无）"}」`,
+);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(300);
 // ⑫b 废纸篓机制对照：跑着的 mcp 桥是 Codex 运行时拉起的——它父进程的 TCC 没有 Trash 权限，
 // 过桥 track_remove(remove_file=true) 时 send2trash 不报错但文件不进 ~/.Trash（静默消失，
 // 数据丢失级，已报总线）。机制本身用本机直调验证：文件确实进废纸篓、可找回。
