@@ -22,10 +22,10 @@
  *   SHADOWROOM_AGENT_PORT      default 8788
  */
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 const HOST = process.env.SHADOWROOM_AGENT_HOST ?? "127.0.0.1";
@@ -1883,6 +1883,52 @@ const http = createServer(async (request, response) => {
         .map((entry) => entry.trim())
         .filter((entry) => entry !== "");
       json(response, 200, { paths });
+      return;
+    }
+
+    /**
+     * 采样浏览器的目录枚举（Bitwig 刀3-D「采样」tab 的数据来源）。
+     *
+     * 刻意比 `/api/agent/file`（任意路径 + 可服务扩展）更窄：只允许白名单目录、只报音频文件，
+     * 不做递归、上限 400 条。`/api/agent/file` 负责"按 path 流字节"，这里负责"让我看看有什么"——
+     * 裁决书 §②D 假设的「现有目录能力」实际只存在于这一半，补上另一半即可，UI 不用绕过桥。
+     */
+    if (request.method === "GET" && url.pathname === "/api/agent/dir") {
+      const rel = (url.searchParams.get("dir") ?? "imports").replace(/^\/+/, "");
+      const resolved = resolve(WORKSPACES, rel);
+      const allowed = [IMPORTS_DIR, RECORDINGS_DIR].some(
+        (base) => resolved === base || resolved.startsWith(base + sep),
+      );
+      if (!allowed) {
+        json(response, 403, { error: `目录不在可枚举白名单（imports / recordings）：${rel}` });
+        return;
+      }
+      if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+        json(response, 404, { error: `no such dir: ${resolved}` });
+        return;
+      }
+      // imports/ 是「按日期分目录」的（imports/2026-10-15/xxx.wav），所以枚举要向下走几层：
+      // 深度 ≤4、跳过隐藏项、只收能流式的音频扩展名、400 条封顶（裁决书 D 的列表预算）。
+      const entries = [];
+      const walk = (dir, depth) => {
+        if (depth > 4 || entries.length >= 400) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (entry.name.startsWith(".") || entries.length >= 400) continue;
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(full, depth + 1);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          const extension = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
+          if (!STREAMABLE.has(extension)) continue;
+          const stats = statSync(full);
+          entries.push({ name: entry.name, path: full, size: stats.size, mtime: stats.mtimeMs });
+        }
+      };
+      walk(resolved, 1);
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      json(response, 200, { dir: rel, root: resolved, entries });
       return;
     }
 
