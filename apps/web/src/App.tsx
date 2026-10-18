@@ -1768,7 +1768,7 @@ export function App() {
     .map((entry) => ({
       id: entry.id,
       title: entry.title,
-      meta: `${entry.messages.filter((message) => message.role !== "notice").length} 条 · ${timeAgo(entry.createdAt)}`,
+      meta: `${entry.messages.filter((message) => message.role !== "notice").length} 条 · ${timeAgo(entry.lastActiveAt)}`,
       state: entry.calls.some((call) => call.status === "running")
         ? "running"
         : entry.messages.length > 0

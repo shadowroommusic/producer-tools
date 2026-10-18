@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, type CSSProperties } from "react";
 import { ORB_STATES, lerpHue, type OrbVisualMode } from "../lib/orb-states.ts";
+import "../styles/orb-refine.css";
 
 export type { OrbVisualMode } from "../lib/orb-states.ts";
 

@@ -1,0 +1,237 @@
+/*
+ * Butler energy form.
+ *
+ * The old orb read as a glass bubble because a dark sphere, highlight and two hard rims were all
+ * visible at once. This layer removes those material edges and keeps the part that made it feel
+ * alive: the particle core. A soft, irregular plasma field supplies the silhouette, while the
+ * canvas remains the sharpest part of the visual.
+ */
+
+.sr-orb-ball {
+  isolation: isolate;
+  filter: none;
+}
+
+.sr-orb-visual::before {
+  content: "";
+  position: absolute;
+  inset: 8%;
+  z-index: 1;
+  border-radius:
+    48% 52% 45% 55% /
+    54% 44% 56% 46%;
+  background:
+    radial-gradient(circle at 35% 34%, hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.28), transparent 30%),
+    radial-gradient(circle at 68% 62%, hsl(calc(var(--orb-hue-b) * 1deg) 100% 66% / 0.24), transparent 36%),
+    conic-gradient(
+      from 25deg,
+      hsl(calc(var(--orb-hue-a) * 1deg) 100% 66% / 0.08),
+      hsl(calc(var(--orb-hue-b) * 1deg) 100% 70% / 0.3),
+      hsl(calc(var(--orb-hue-a) * 1deg + 70deg) 100% 72% / 0.12),
+      hsl(calc(var(--orb-hue-a) * 1deg) 100% 66% / 0.08)
+    );
+  filter: blur(9px) saturate(1.25);
+  mix-blend-mode: screen;
+  opacity: calc(0.52 + var(--orb-glow) * 0.22);
+  animation: sr-energy-morph 9s ease-in-out infinite alternate;
+}
+
+.sr-orb-visual::after {
+  content: "";
+  position: absolute;
+  inset: -3%;
+  z-index: 0;
+  border-radius:
+    52% 48% 56% 44% /
+    43% 55% 45% 57%;
+  border: 1px solid hsl(calc(var(--orb-hue-a) * 1deg) 100% 74% / 0.16);
+  filter: blur(1.8px);
+  box-shadow:
+    0 0 10px hsl(calc(var(--orb-hue-a) * 1deg) 100% 66% / 0.2),
+    0 0 28px hsl(calc(var(--orb-hue-b) * 1deg) 100% 60% / 0.12);
+  opacity: calc(0.24 + var(--orb-glow) * 0.24);
+  animation: sr-energy-halo 7s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.sr-orb-shell {
+  inset: 7%;
+  border: 0;
+  background:
+    radial-gradient(circle at 50% 48%, rgb(3 8 6 / 44%) 0 18%, rgb(4 10 7 / 28%) 48%, transparent 76%);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.sr-orb-rim,
+.sr-orb-sheen {
+  display: none;
+}
+
+.sr-orb-plasma {
+  inset: 3%;
+  overflow: visible;
+  border-radius: 50%;
+  filter:
+    saturate(1.18)
+    drop-shadow(0 0 8px hsl(calc(var(--orb-hue-b) * 1deg) 100% 64% / 0.38));
+  -webkit-mask-image: radial-gradient(circle, #000 0 54%, rgb(0 0 0 / 0.92) 66%, transparent 94%);
+  mask-image: radial-gradient(circle, #000 0 54%, rgb(0 0 0 / 0.92) 66%, transparent 94%);
+}
+
+.sr-orb-plasma::after {
+  opacity: 0.28;
+  box-shadow: inset 0 -12px 22px rgb(0 0 0 / 0.32);
+}
+
+.sr-orb-aura {
+  inset: -17%;
+  filter: blur(11px);
+  opacity: calc(0.45 + var(--orb-glow) * 0.3);
+}
+
+.sr-orb-ripple {
+  inset: 2%;
+  border-width: 0.75px;
+  opacity: 0;
+}
+
+.sr-orb-orbit {
+  inset: 14%;
+  opacity: 0.18;
+  filter: drop-shadow(0 0 4px hsl(calc(var(--orb-hue-b) * 1deg) 100% 75% / 0.55));
+}
+
+.sr-orb-progress {
+  inset: -1%;
+}
+
+.sr-orb-progress circle {
+  stroke-width: 1.05;
+}
+
+.sr-orb-progress-track {
+  stroke: hsl(calc(var(--orb-hue-a) * 1deg) 100% 70% / 0.1);
+}
+
+.sr-orb-progress-value {
+  stroke: hsl(calc(var(--orb-hue-a) * 1deg) 100% 74% / 0.88);
+  filter:
+    drop-shadow(0 0 3px hsl(calc(var(--orb-hue-a) * 1deg) 100% 68% / 0.75))
+    drop-shadow(0 0 9px hsl(calc(var(--orb-hue-b) * 1deg) 100% 62% / 0.32));
+}
+
+.sr-orb-progress-spark::after {
+  width: 4px;
+  height: 4px;
+  background: hsl(calc(var(--orb-hue-a) * 1deg) 100% 86%);
+  box-shadow:
+    0 0 4px 1px hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.85),
+    0 0 13px 4px hsl(calc(var(--orb-hue-b) * 1deg) 100% 64% / 0.3);
+}
+
+.sr-orb-visual[data-mode="listening"]::before {
+  animation-duration: 3.8s;
+  filter: blur(8px) saturate(1.32);
+}
+
+.sr-orb-visual[data-mode="listening"]::after {
+  opacity: calc(0.34 + var(--orb-voice) * 0.38);
+  scale: calc(1 + var(--orb-voice) * 0.07);
+}
+
+.sr-orb-visual[data-mode="thinking"]::before {
+  animation:
+    sr-energy-morph 2.4s ease-in-out infinite alternate,
+    sr-energy-think 5.6s linear infinite;
+  filter: blur(7px) saturate(1.4) brightness(1.08);
+}
+
+.sr-orb-visual[data-mode="thinking"] .sr-orb-orbit {
+  opacity: 0.52;
+}
+
+.sr-orb-visual[data-mode="speaking"]::before {
+  animation:
+    sr-energy-morph 1.75s ease-in-out infinite alternate,
+    sr-energy-speak 2.4s ease-in-out infinite;
+  filter: blur(7px) saturate(1.45) brightness(1.12);
+}
+
+.sr-orb-visual[data-mode="speaking"] .sr-orb-ripple {
+  border-color: hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.34);
+}
+
+.sr-orb-visual[data-mode="working"]::before {
+  animation-duration: 4.6s;
+  filter: blur(8px) saturate(1.32) brightness(1.05);
+}
+
+.sr-orb-visual[data-mode="unclear"]::before {
+  animation-duration: 6.4s;
+}
+
+.sr-orb-visual[data-mode="offline"]::before,
+.sr-orb-visual[data-mode="offline"]::after {
+  animation: none;
+  filter: grayscale(0.75) blur(9px);
+  opacity: 0.22;
+}
+
+.sr-orb-visual[data-mode="offline"] .sr-orb-plasma {
+  filter: grayscale(0.8) brightness(0.72);
+}
+
+@keyframes sr-energy-morph {
+  0% {
+    border-radius: 48% 52% 45% 55% / 54% 44% 56% 46%;
+    transform: rotate(-4deg) scale(0.97);
+  }
+  42% {
+    border-radius: 55% 45% 52% 48% / 44% 56% 42% 58%;
+    transform: rotate(3deg) scale(1.03);
+  }
+  74% {
+    border-radius: 43% 57% 49% 51% / 58% 41% 59% 42%;
+    transform: rotate(-1deg) scale(1);
+  }
+  100% {
+    border-radius: 52% 48% 56% 44% / 46% 55% 45% 54%;
+    transform: rotate(5deg) scale(1.025);
+  }
+}
+
+@keyframes sr-energy-halo {
+  from {
+    transform: rotate(-6deg) scale(0.97);
+  }
+  to {
+    transform: rotate(7deg) scale(1.035);
+  }
+}
+
+@keyframes sr-energy-think {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes sr-energy-speak {
+  0%,
+  100% {
+    scale: 0.97;
+  }
+  38% {
+    scale: 1.055;
+  }
+  64% {
+    scale: 0.995;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-orb-visual::before,
+  .sr-orb-visual::after {
+    animation: none;
+  }
+}

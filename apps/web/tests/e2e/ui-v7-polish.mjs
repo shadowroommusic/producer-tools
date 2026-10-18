@@ -155,15 +155,22 @@ const narrowDj = await page.evaluate(() => {
   const dj = document.querySelector(".sr-dj");
   const main = document.querySelector(".sr-dj-main");
   const library = document.querySelector(".sr-dj-library");
+  const board = document.querySelector(".sr-dj-board")?.getBoundingClientRect();
   return {
     columns: main === null ? "" : getComputedStyle(main).gridTemplateColumns,
     pageOverflow: dj === null ? -1 : dj.scrollWidth - dj.clientWidth,
     libraryOverflow: library === null ? -1 : library.scrollWidth - library.clientWidth,
+    boardTop: board?.top ?? -1,
+    boardBottom: board?.bottom ?? -1,
   };
 });
 check(
-  "⑨ 1024 DJ：库与 set 板改为纵向工作站",
-  !narrowDj.columns.includes(" ") && narrowDj.pageOverflow <= 1 && narrowDj.libraryOverflow <= 1,
+  "⑨ 1024 DJ：库与 Set 板紧凑双栏且 Set 在首屏",
+  narrowDj.columns.split(" ").filter(Boolean).length === 2 &&
+    narrowDj.pageOverflow <= 1 &&
+    narrowDj.libraryOverflow <= 1 &&
+    narrowDj.boardTop < 400 &&
+    narrowDj.boardBottom <= 800,
   JSON.stringify(narrowDj),
 );
 await shot("08-dj-1024");

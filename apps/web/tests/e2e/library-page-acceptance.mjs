@@ -152,6 +152,7 @@ const openMenu = async (rowText) => {
 const menuItem = (name) => page.locator(".sr-lib-rowmenu-item", { hasText: name }).first();
 
 // ---- ① 扫描：行数增长对账 + 结果只走进度位
+await page.getByRole("button", { name: "入库音乐", exact: true }).click();
 await page.locator(".sr-lib-scanpath").fill(FIX);
 await page.getByRole("button", { name: "扫描文件夹", exact: true }).click();
 await page.waitForFunction(
@@ -186,6 +187,7 @@ expected.tag = capped((await call("list_tracks", { tags: ["house"], limit: 300 }
 await search("libaccept");
 const searchCount = await rowsNow();
 await search("");
+await page.getByRole("button", { name: "筛选", exact: true }).click();
 await page.locator('.sr-lib-filters input[aria-label="BPM 下限"]').fill("80");
 await page.locator('.sr-lib-filters input[aria-label="BPM 上限"]').fill("90");
 await page.waitForFunction((want) => document.querySelectorAll(".sr-lib-row").length === want, expected.bpm, { timeout: 10000 });

@@ -93,8 +93,10 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
   const debouncedForm = useDebounced(form, 250);
 
   const [scanPath, setScanPath] = useState("");
+  const [scanOpen, setScanOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   /** 右键菜单（二期全量）：root（动作）/ rename（内联改名）/ crates（加入分类库）三态。 */
   const [menu, setMenu] = useState<{ x: number; y: number; track: TrackRow } | null>(null);
   const [menuMode, setMenuMode] = useState<"root" | "rename" | "crates">("root");
@@ -585,6 +587,9 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
 
   const patchForm = (patch: Partial<FilterForm>) => setForm((current) => ({ ...current, ...patch }));
   const active = filtersActive(form);
+  const advancedFilterCount = [form.bpmMin, form.bpmMax, form.camelot, form.tag].filter(
+    (value) => value.trim() !== "",
+  ).length;
   const libraryEmpty = stats !== null && stats.tracks === 0;
   const missing = stats?.missing_analysis ?? 0;
 
@@ -619,8 +624,39 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
         </div>
       </header>
       <section className="sr-lib-toolbar" aria-label="入库与整理">
-        <div className="sr-lib-scan-cluster">
-          <span className="sr-lib-toolbar-label sr-mono">入库</span>
+        <div className="sr-lib-commandbar">
+          <button
+            type="button"
+            className="sr-btn sr-btn--accent sr-lib-ingest-trigger"
+            aria-expanded={scanOpen}
+            onClick={() => setScanOpen((open) => !open)}
+          >
+            <span aria-hidden="true">＋</span>
+            入库音乐
+          </button>
+          <span className="sr-lib-command-note">
+            {scanning
+              ? "正在扫描并提取 BPM、调性与封面…"
+              : scanNote ??
+                (libraryEmpty ? "曲目库还是空的，先从本地文件夹入库。" : "扫描本地文件夹，增量更新曲目与分析结果。")}
+          </span>
+          <div className="sr-lib-toolbar-actions">
+            <button
+              type="button"
+              className="sr-btn"
+              data-open={boardOpen || undefined}
+              aria-expanded={boardOpen}
+              onClick={() => setBoardOpen((open) => !open)}
+            >
+              统计与偏好
+            </button>
+            <button type="button" className="sr-btn" aria-label="查重" disabled={dupBusy} onClick={() => void onDedupe()}>
+              {dupBusy ? "查重中…" : "查找重复"}
+            </button>
+          </div>
+        </div>
+        {scanOpen ? (
+        <div className="sr-lib-ingest-panel">
           <input
             className="sr-input sr-lib-scanpath"
             value={scanPath}
@@ -634,24 +670,11 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
           <button type="button" className="sr-btn sr-btn--accent" disabled={scanPath.trim() === "" || scanning} onClick={() => void onScan()}>
             {scanning ? "扫描中…" : "扫描文件夹"}
           </button>
+          <span className="sr-lib-scanprogress" data-slot="scan-progress" aria-live="polite">
+            {scanning ? "正在入库并提取封面、BPM 与调性…" : (scanNote ?? "")}
+          </span>
         </div>
-        <span className="sr-lib-scanprogress" data-slot="scan-progress" aria-live="polite">
-          {scanning ? "正在入库并提取封面、BPM 与调性…" : (scanNote ?? "")}
-        </span>
-        <div className="sr-lib-toolbar-actions">
-          <button
-            type="button"
-            className="sr-btn"
-            data-open={boardOpen || undefined}
-            aria-expanded={boardOpen}
-            onClick={() => setBoardOpen((open) => !open)}
-          >
-            统计与偏好
-          </button>
-          <button type="button" className="sr-btn" aria-label="查重" disabled={dupBusy} onClick={() => void onDedupe()}>
-            {dupBusy ? "查重中…" : "查找重复"}
-          </button>
-        </div>
+        ) : null}
       </section>
 
       {boardOpen ? (
@@ -779,47 +802,74 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
       <div className="sr-lib-main" data-drawer={selectedId !== null || undefined}>
         <section className="sr-lib-list" aria-label="曲目列表">
           <div className="sr-lib-filters">
-            <input
-              className="sr-input sr-lib-search"
-              value={form.query}
-              placeholder="搜索标题、艺人或专辑"
-              aria-label="搜索标题、艺人、专辑"
-              onChange={(event) => patchForm({ query: event.target.value })}
-            />
-            <input
-              className="sr-input sr-input--num"
-              value={form.bpmMin}
-              placeholder="BPM ≥"
-              aria-label="BPM 下限"
-              inputMode="decimal"
-              onChange={(event) => patchForm({ bpmMin: event.target.value })}
-            />
-            <input
-              className="sr-input sr-input--num"
-              value={form.bpmMax}
-              placeholder="BPM ≤"
-              aria-label="BPM 上限"
-              inputMode="decimal"
-              onChange={(event) => patchForm({ bpmMax: event.target.value })}
-            />
-            <input
-              className="sr-input sr-input--key"
-              value={form.camelot}
-              placeholder="如 8A"
-              aria-label="Camelot 调性代码"
-              onChange={(event) => patchForm({ camelot: event.target.value })}
-            />
-            <input
-              className="sr-input sr-lib-tag"
-              value={form.tag}
-              placeholder="tag"
-              aria-label="genre tag"
-              onChange={(event) => patchForm({ tag: event.target.value })}
-            />
-            {active ? (
-              <button type="button" className="sr-btn" onClick={() => setForm(EMPTY_FILTERS)}>
-                清除筛选
+            <div className="sr-lib-filter-row">
+              <input
+                className="sr-input sr-lib-search"
+                value={form.query}
+                placeholder="搜索标题、艺人或专辑"
+                aria-label="搜索标题、艺人、专辑"
+                onChange={(event) => patchForm({ query: event.target.value })}
+              />
+              <button
+                type="button"
+                className="sr-btn sr-lib-filter-toggle"
+                data-open={filtersOpen || undefined}
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((open) => !open)}
+              >
+                筛选{advancedFilterCount > 0 ? ` · ${advancedFilterCount}` : ""}
               </button>
+              {active ? (
+                <button type="button" className="sr-btn" onClick={() => setForm(EMPTY_FILTERS)}>
+                  清除筛选
+                </button>
+              ) : null}
+            </div>
+            {filtersOpen ? (
+              <div className="sr-lib-filter-panel">
+                <label className="sr-lib-filter-field">
+                  <span>BPM 下限</span>
+                  <input
+                    className="sr-input sr-input--num"
+                    value={form.bpmMin}
+                    placeholder="不限"
+                    aria-label="BPM 下限"
+                    inputMode="decimal"
+                    onChange={(event) => patchForm({ bpmMin: event.target.value })}
+                  />
+                </label>
+                <label className="sr-lib-filter-field">
+                  <span>BPM 上限</span>
+                  <input
+                    className="sr-input sr-input--num"
+                    value={form.bpmMax}
+                    placeholder="不限"
+                    aria-label="BPM 上限"
+                    inputMode="decimal"
+                    onChange={(event) => patchForm({ bpmMax: event.target.value })}
+                  />
+                </label>
+                <label className="sr-lib-filter-field">
+                  <span>Camelot</span>
+                  <input
+                    className="sr-input sr-input--key"
+                    value={form.camelot}
+                    placeholder="如 8A"
+                    aria-label="Camelot 调性代码"
+                    onChange={(event) => patchForm({ camelot: event.target.value })}
+                  />
+                </label>
+                <label className="sr-lib-filter-field">
+                  <span>Genre tag</span>
+                  <input
+                    className="sr-input sr-lib-tag"
+                    value={form.tag}
+                    placeholder="如 house"
+                    aria-label="genre tag"
+                    onChange={(event) => patchForm({ tag: event.target.value })}
+                  />
+                </label>
+              </div>
             ) : null}
           </div>
           <div className="sr-lib-list-summary">
@@ -841,7 +891,7 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
           <div className="sr-lib-rows">
             {tracks !== null && tracks.length === 0 ? (
               libraryEmpty ? (
-                <p className="sr-lib-empty">还没有曲目。在上面填一个文件夹路径，点「扫描文件夹」把音乐收进来。</p>
+                <p className="sr-lib-empty">还没有曲目。点上方「入库音乐」，选择一个本地文件夹开始扫描。</p>
               ) : active ? (
                 <p className="sr-lib-empty">没有符合条件的曲目——放宽 BPM 区间或清掉筛选试试。</p>
               ) : (

@@ -17,6 +17,8 @@ import { Player, type DeckSnapshot } from "../lib/dj-deck";
 import { formatPlanDuration, plannerTrackPayload } from "../lib/dj-plan";
 import { zhBpmSource, zhCueNote, zhCueReason } from "../lib/dj-cue-zh";
 import type { DjAgentContext } from "../lib/agent-context";
+import { coverUrl } from "../lib/library";
+import "../styles/dj.css";
 
 type LibraryTrack = {
   id: number;
@@ -28,6 +30,7 @@ type LibraryTrack = {
   camelot: string | null;
   energy: number | null;
   duration_ms: number | null;
+  cover_path?: string | null;
 };
 
 type DjCue = {
@@ -265,6 +268,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<SuggestionRow[]>([]);
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [plan, setPlan] = useState<PlanResult | null>(null);
@@ -296,6 +300,20 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
       // storage may be full or blocked; the set keeps working in memory
     }
   }, [draft]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = () => setMoreOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
 
   useEffect(() => {
     onContextChange?.({
@@ -774,24 +792,37 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
 
   return (
     <div className="sr-dj">
-      <header className="sr-compact-page-head">
-        <div>
+      <header className="sr-dj-hero">
+        <div className="sr-dj-hero-copy">
           <span className="sr-eyebrow">
             <span className="sr-eyebrow-dot" />
             PERFORMANCE
           </span>
           <h1>DJ</h1>
-          <p>从曲目库搭一套 set；推荐、排序、Cue 与导出都留在同一条工作流里。</p>
+          <p>选歌、排序、设 Cue；左边找歌，右边搭 Set。</p>
+        </div>
+        <div className="sr-dj-hero-meta" aria-label="Set 概览">
+          <span><strong>{draft.trackIds.length}</strong> 首</span>
+          <span>
+            <strong>{plan === null ? "—" : formatPlanDuration(plan.summary.total_duration_ms)}</strong>
+            总长
+          </span>
+          <span>
+            <strong>{plan === null ? Math.round(draft.overlapMs / 1000) : Math.round(draft.overlapMs / 1000)}s</strong>
+            overlap
+          </span>
         </div>
       </header>
       <div className="sr-dj-topbar">
-        <input
-          className="sr-input"
-          value={draft.name}
-          aria-label="set 名"
-          onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-        />
-        <span className="sr-dj-count">{draft.trackIds.length} 首</span>
+        <div className="sr-dj-setline">
+          <span className="sr-dj-toolbar-label sr-mono">SET</span>
+          <input
+            className="sr-input sr-dj-name"
+            value={draft.name}
+            aria-label="set 名"
+            onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+          />
+        </div>
         {draft.trackIds.length === 0 ? (
           // D6（2026-09-25 巡检）：空 set 时 16 秒的读数像是"已经有重叠"——空场显示 0 秒，
           // 草稿里的默认值保留，加歌后自动恢复。
@@ -825,53 +856,84 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
             {formatPlanDuration(plan.summary.total_duration_ms)}
           </span>
         ) : null}
-        {plan !== null && plan.summary.warning_count > 0 ? (
+        <div className="sr-dj-actions">
+          {plan !== null && plan.summary.warning_count > 0 ? (
+            <button
+              type="button"
+              className="sr-dj-badge sr-dj-warn-toggle"
+              aria-expanded={warningsOpen}
+              title="plan_set 的警告——点开看原文"
+              onClick={() => setWarningsOpen((open) => !open)}
+            >
+              ⚠ {plan.summary.warning_count}
+            </button>
+          ) : null}
           <button
             type="button"
-            className="sr-dj-badge sr-dj-warn-toggle"
-            aria-expanded={warningsOpen}
-            title="plan_set 的警告——点开看原文"
-            onClick={() => setWarningsOpen((open) => !open)}
+            className="sr-page-action sr-dj-action-primary"
+            disabled={orderBusy || draft.trackIds.length < 2}
+            title="planner.order_set：贪心链 + 2-opt 重排整个 set"
+            onClick={() => void applyAiOrder()}
           >
-            ⚠ {plan.summary.warning_count}
+            {orderBusy ? "排序中…" : "AI 排序"}
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="sr-page-action"
-          disabled={orderBusy || draft.trackIds.length < 2}
-          title="planner.order_set：贪心链 + 2-opt 重排整个 set"
-          onClick={() => void applyAiOrder()}
-        >
-          {orderBusy ? "排序中…" : "AI 排序"}
-        </button>
-        {undoOrder !== null ? (
-          <button type="button" className="sr-page-action" onClick={undoAiOrder}>
-            撤销排序
+          {undoOrder !== null ? (
+            <button type="button" className="sr-page-action" onClick={undoAiOrder}>
+              撤销排序
+            </button>
+          ) : null}
+          <button type="button" className="sr-page-action" onClick={newSet}>
+            新建 set
           </button>
-        ) : null}
-        <button type="button" className="sr-page-action" onClick={newSet}>
-          新建 set
-        </button>
-        <button
-          type="button"
-          className="sr-page-action"
-          aria-expanded={setChoices !== null}
-          disabled={importBusy}
-          title="library.set_list / set_detail：把导入的 Rekordbox XML 歌单或历史 set 落进看板"
-          onClick={() => void openImport()}
-        >
-          {importBusy && setChoices === null ? "读取中…" : "导入 set"}
-        </button>
-        <button
-          type="button"
-          className="sr-page-action"
-          disabled={exportBusy || draft.trackIds.length === 0}
-          title="先落 crate（library.crate_create/crate_add），再 crate_export_m3u 写到 exports/"
-          onClick={() => void exportM3u()}
-        >
-          {exportBusy ? "导出中…" : "导出 m3u"}
-        </button>
+          <button
+            type="button"
+            className="sr-page-action sr-dj-more-toggle"
+            aria-label="更多 Set 操作"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              setMoreOpen((open) => !open);
+            }}
+          >
+            ⋯
+          </button>
+          {moreOpen ? (
+            <div
+              className="sr-dj-more-menu"
+              role="menu"
+              aria-label="更多 Set 操作"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="sr-page-action"
+                disabled={importBusy}
+                title="把导入的 Rekordbox XML 歌单或历史 set 落进看板"
+                onClick={() => {
+                  setMoreOpen(false);
+                  void openImport();
+                }}
+              >
+                {importBusy && setChoices === null ? "读取中…" : "导入 set"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="sr-page-action"
+                disabled={exportBusy || draft.trackIds.length === 0}
+                title="导出为 m3u"
+                onClick={() => {
+                  setMoreOpen(false);
+                  void exportM3u();
+                }}
+              >
+                {exportBusy ? "导出中…" : "导出 m3u"}
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
       {plan !== null && warningsOpen && plan.warnings.length > 0 ? (
         <div className="sr-dj-warnings" role="note">
@@ -905,7 +967,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
         </div>
       ) : null}
       {notice !== null ? <div className="sr-dj-notice" role="alert">{notice}</div> : null}
-      <div className="sr-dj-main">
+      <div className="sr-dj-main" data-set-empty={draft.trackIds.length === 0 || undefined}>
         <LibraryBrowser
           suggestions={suggestions}
           suggestBusy={suggestBusy}
@@ -1433,6 +1495,11 @@ function LibraryBrowser(props: {
               }
             }}
           >
+            {track.cover_path ? (
+              <img className="sr-dj-row-cover" src={coverUrl(track.cover_path)} alt="" loading="lazy" />
+            ) : (
+              <span className="sr-dj-row-cover sr-dj-row-cover--ph" aria-hidden="true">♪</span>
+            )}
             <span className="sr-dj-row-title">{track.title ?? track.path.split("/").pop()}</span>
             {track.artist ? <span className="sr-dj-row-artist">{track.artist}</span> : null}
             {track.bpm !== null ? <span className="sr-chip">{Number(track.bpm.toFixed(1))} BPM</span> : null}
