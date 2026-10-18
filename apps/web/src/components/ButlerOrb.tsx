@@ -1,5 +1,5 @@
 /**
- * 悬浮球 v5：暗核光圈（方向 A，照 iOS 18 Siri）+ 一行输入面板 + 点球即通话。
+ * 悬浮球 v6：玻璃球体 + 液态双边缘 + 粒子内核 + 点球即通话。
  *
  * 形态与五态口径见 OrbGlass.tsx 头注；这里只管交互：**点一下球立刻进入通话动态**
  * （listening 动画 + 波形，麦克风经 lib/mic.ts 共享流），再点一下 / Esc 挂断回静态；
@@ -29,15 +29,10 @@ import { GlassSphere } from "./OrbGlass";
 export type OrbMode = OrbVisualMode;
 
 /**
- * 尺寸：用户巡检 2026-09-25（D2）指出 120px 空闲球压在推荐卡末行与 Studio 时间线中央、还吃掉
- * 点击——收敛为 **64px 空闲 / 80px 说话**：够一眼看见，又不再抢戏；历史定稿 120/150 作废。
+ * 尺寸：v6 把主体从容器角落撑满，闲置 72px、通话 112px。再小会牺牲玻璃边缘和语音刻度的清晰度；
+ * 再大会重新压住 Studio/DJ 的主要内容。位置逻辑仍负责夹取和避让控件。
  */
-const ACTIVE_SIZE = 80;
-/**
- * 通话开关的命中半径（球心到指针的距离）：可见球面直径 64px，命中半径再宽一圈（64px 直径 =
- * 44×44 最小点击目标），点"边上"也算；球面之外的方形角落（容器吃掉的区域）只拖不点。
- */
-const HIT_RADIUS = 32;
+const ACTIVE_SIZE = 112;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
@@ -119,6 +114,7 @@ export function ButlerOrb({
     const stored = loadPosition(window.localStorage);
     return stored === null ? defaultPosition(viewport, controls) : avoidProtected(stored, controls, viewport);
   });
+  const previousSizeRef = useRef(ORB_SIZE);
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
   /** 本地演示通话（没有 onCallToggle 时的旧行为：只有麦克风电平，不接会话）。 */
@@ -250,12 +246,13 @@ export function ButlerOrb({
   }, [callOn, externalCall, onCallEnd, onCallToggle, voiceMode]);
 
   // 拖动 + 点球即通话。
-  // 指针事件只挂在球面上，但**只有距球心 32px 内（64px 命中圆）的轻点才是点球**：球面外圈
-  // 边角只拖不点，底下的内容不再被"看不见的手"按到（D2）。
+  // 指针事件只挂在球面上，命中区随当前球径变化（留 3px 防误触边缘）；球面方形角落只拖不点，
+  // 底下的内容不会被"看不见的手"按到（D2）。
   const hitBall = (event: React.PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return (
-      Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2)) <= HIT_RADIUS
+      Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2)) <=
+      rect.width / 2 - 3
     );
   };
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -348,11 +345,22 @@ export function ButlerOrb({
    * 尺寸切换时重新夹取：球从 64 长到 80（或退回）时，旧坐标是按另一个尺寸算的，
    * 会让多出来的 16px 悬在视口外（P-8 实证）。只在真的越界时 setState，避免抖动。
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const snapped = snapToViewport(position, viewport, protectedRects(), size);
-    if (snapped.x !== position.x || snapped.y !== position.y) setPosition(snapped);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const previous = previousSizeRef.current;
+    previousSizeRef.current = size;
+    if (previous === size) return;
+    setPosition((current) =>
+      snapToViewport(
+        {
+          x: current.x - (size - previous) / 2,
+          y: current.y - (size - previous) / 2,
+        },
+        viewport,
+        protectedRects(),
+        size,
+      ),
+    );
   }, [size]);
 
   // 视口变了要重新量字幕（换窗口大小/全屏）。
@@ -417,7 +425,7 @@ export function ButlerOrb({
           if (event.key === "Enter" || event.key === " ") setExpanded((open) => !open);
         }}
       >
-        {/* v5 暗核光圈：五态三通道 + 干活酸绿弧都画在这一层（无 3D 依赖、不会 NaN 崩）。 */}
+        {/* v6 材质分层：CSS 负责高清玻璃/双边缘，canvas 只画粒子和语音细节。 */}
         <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} progress={effectiveProgress} reducedMotion={reducedMotion.current} />
       </div>
       {/*

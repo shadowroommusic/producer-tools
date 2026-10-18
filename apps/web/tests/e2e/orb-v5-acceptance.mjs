@@ -1,5 +1,5 @@
 /**
- * 悬浮球 v5 收尾验收（题面 8 条，PASS/FAIL 逐条打印，可重复跑）：
+ * 悬浮球 v6 收尾验收（题面 8 条，PASS/FAIL 逐条打印，可重复跑）：
  * ① 球可见且无「管家」文字（含展开面板的 placeholder/aria-label/title）
  * ② 全文档无「听话」按钮/开关
  * ③ 点球进入通话态（data-mode 变化）④ 再点/Esc 回 idle
@@ -7,7 +7,7 @@
  * ⑥ 刷新后位置保持（localStorage 生效）
  * ⑦ 球外点击穿透（被球容器盖住的下层按钮仍能收到 click，含容器四角 elementFromPoint）
  * ⑧ 五态截图两两像素差超阈值（qa-orb-force 强制态、qa-orb-progress 钉进度；
- *    同尺寸 96×96 PNG，两两 mean-abs-diff ≥ 8/255）
+ *    同尺寸 128×128 PNG，完整包住 112px 通话态球，两两 mean-abs-diff ≥ 8/255）
  *
  * 前置：5173 dev server（本脚本自己的分支起在 5174 时用 ORB_E2E_BASE=http://localhost:5174 覆盖）。
  * 五态截图落 exports/agent-bench-2026-10/orb-v5/zcode/。用法：node tests/e2e/orb-v5-acceptance.mjs
@@ -109,12 +109,35 @@ const dragOrbTo = async (targetX, targetY) => {
 
 // ③ 点球进入通话态
 {
-  const before = (await orbState())?.mode;
+  const beforeState = await orbState();
+  const before = beforeState?.mode;
   const b = await ball.boundingBox();
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
-  await page.waitForTimeout(400);
-  const after = (await orbState())?.mode;
-  check("③ 点球进入通话态（data-mode 变化）", before === "idle" && after === "listening", `data-mode: ${before} → ${after}`);
+  await page.waitForTimeout(600);
+  const afterState = await orbState();
+  const after = afterState?.mode;
+  const canvas = await page.locator(".sr-orb-ball canvas").evaluate((el) => ({
+    css: el.getBoundingClientRect().width,
+    backing: el.width,
+  }));
+  const centerDelta =
+    beforeState === null || afterState === null
+      ? Infinity
+      : Math.hypot(
+          beforeState.rect.x + beforeState.rect.w / 2 - (afterState.rect.x + afterState.rect.w / 2),
+          beforeState.rect.y + beforeState.rect.h / 2 - (afterState.rect.y + afterState.rect.h / 2),
+        );
+  const backingRatio = canvas.css > 0 ? canvas.backing / canvas.css : 0;
+  check(
+    "③ 点球进入通话态：72→112px、高清背板、中心不跳走",
+    before === "idle" &&
+      after === "listening" &&
+      beforeState?.rect.w === 72 &&
+      afterState?.rect.w === 112 &&
+      backingRatio >= 2.5 &&
+      centerDelta <= 12,
+    `data-mode: ${before} → ${after}；尺寸 ${beforeState?.rect.w} → ${afterState?.rect.w}；canvas ${canvas.backing}/${canvas.css.toFixed(1)}px=${backingRatio.toFixed(2)}×；中心偏移 ${centerDelta.toFixed(1)}px`,
+  );
 }
 
 // ④ 再点 / Esc 回 idle
@@ -225,6 +248,7 @@ const dragOrbTo = async (targetX, targetY) => {
 // ⑧ 五态截图两两像素差 ≥ 8/255（qa-orb-force 强制、qa-orb-progress 钉 0.55）
 {
   const shots = {};
+  const CAPTURE = 128;
   for (const mode of MODES) {
     await page.evaluate((m) => {
       localStorage.setItem("qa-orb-force", m);
@@ -234,7 +258,12 @@ const dragOrbTo = async (targetX, targetY) => {
     await page.waitForSelector(".sr-orb-ball canvas", { timeout: 20000 });
     await page.waitForTimeout(1600); // 参数 morph ~0.4s + 稳定两帧
     const b = await ball.boundingBox();
-    const clip = { x: b.x + b.width / 2 - 48, y: b.y + b.height / 2 - 48, width: 96, height: 96 };
+    const clip = {
+      x: b.x + b.width / 2 - CAPTURE / 2,
+      y: b.y + b.height / 2 - CAPTURE / 2,
+      width: CAPTURE,
+      height: CAPTURE,
+    };
     const buf = await page.screenshot({ clip });
     shots[mode] = buf;
     writeFileSync(`${SHOTS}/state-${mode}.png`, buf);
@@ -244,7 +273,7 @@ const dragOrbTo = async (targetX, targetY) => {
     localStorage.removeItem("qa-orb-progress");
   });
   const entries = MODES.map((m) => [m, shots[m].toString("base64")]);
-  const pairs = await page.evaluate(async ({ modes, b64s }) => {
+  const pairs = await page.evaluate(async ({ modes, b64s, capture }) => {
     const imgs = {};
     await Promise.all(
       modes.map(
@@ -260,12 +289,12 @@ const dragOrbTo = async (targetX, targetY) => {
       ),
     );
     const canvas = document.createElement("canvas");
-    canvas.width = 96;
-    canvas.height = 96;
+    canvas.width = capture;
+    canvas.height = capture;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     const pixels = (img) => {
-      ctx.clearRect(0, 0, 96, 96);
-      ctx.drawImage(img, 0, 0, 96, 96);
+      ctx.clearRect(0, 0, capture, capture);
+      ctx.drawImage(img, 0, 0, capture, capture);
       return ctx.getImageData(0, 0, 96, 96).data;
     };
     const out = [];
@@ -279,7 +308,7 @@ const dragOrbTo = async (targetX, targetY) => {
       }
     }
     return out;
-  }, { modes: MODES, b64s: Object.fromEntries(entries) });
+  }, { modes: MODES, b64s: Object.fromEntries(entries), capture: CAPTURE });
   const min = pairs.reduce((acc, [, , d]) => Math.min(acc, d), Infinity);
   check("⑧ 五态截图两两像素差 ≥ 8/255", min >= DIFF_THRESHOLD, `最小 mean-abs-diff=${min.toFixed(2)}/255；${pairs.map(([a, b, d]) => `${a}-${b}:${d.toFixed(1)}`).join(" ")}`);
   console.log(`      五态截图：${SHOTS}/state-{${MODES.join(",")}}.png`);

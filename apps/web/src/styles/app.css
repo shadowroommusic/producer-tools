@@ -3187,38 +3187,6 @@
   color: var(--sr-accent);
 }
 
-/* ── 悬浮球 = 全 app 的管家（任务 13）────────────────────────────────────── */
-/* 亮度/颜色变化一律 120–200ms 缓动，不要弹跳（契约定的动效纪律）。 */
-.sr-orb {
-  position: fixed;
-  z-index: 60;
-  /* 容器不吃事件：fixed 方块盖在内容上点不动（D2）——pointer-events 只挂在球面上。
-     尺寸跟 ButlerOrb 的 --sr-orb-size 走（64 空闲 / 80 说话，2026-09-25 巡检收敛，
-     此前的 120/150 压内容）。 */
-  width: var(--sr-orb-size, 64px);
-  height: var(--sr-orb-size, 64px);
-  pointer-events: none;
-  user-select: none;
-  touch-action: none;
-}
-
-.sr-orb--dragging {
-  opacity: 0.5;
-}
-
-.sr-orb-ball {
-  position: relative;
-  width: var(--sr-orb-size, 64px);
-  height: var(--sr-orb-size, 64px);
-  border-radius: 50%;
-  cursor: grab;
-  pointer-events: auto;
-}
-
-.sr-orb-ball:active {
-  cursor: grabbing;
-}
-
 /*
  * 通话字幕（2026-10-16）：球下的一行字，把「在听 / 在想 / 在说」说清楚。
  * 不接事件（pointer-events:none）——它漂在页面上，不能挡任何点击；最长两行，超出省略。
@@ -3234,17 +3202,26 @@
      （2026-10-16 截图实锤：pill 只有 42px 宽，「在听…」被折成两行）。 */
   width: max-content;
   max-width: min(320px, calc(100vw - 16px));
-  padding: 4px 10px;
-  border-radius: 10px;
+  padding: 6px 11px;
+  border-radius: 12px;
   /* --sr-surface-elevated：跟着主题走。原来写的 `--sr-bg` 不是 token，fallback #0b0b0f 恒生效，
      于是浅色主题下字幕还是深色药丸（实测）——「一个答案」也管颜色。 */
-  background: color-mix(in srgb, var(--sr-surface-elevated, #1a1d16) 92%, transparent);
+  background:
+    linear-gradient(
+      135deg,
+      hsl(calc(var(--orb-hue-a, 210) * 1deg) 90% 56% / 0.11),
+      transparent 46%
+    ),
+    color-mix(in srgb, var(--sr-surface-elevated, #1a1d16) 96%, transparent);
   border: 1px solid var(--sr-border-strong, rgb(242 245 236 / 17%));
-  backdrop-filter: blur(6px);
-  /* 用户 2026-10-16：「非常不清晰」。12px/次要色 → 13px/主文字色（深色下 #f2f5ec on #1a1d16 ≈ 14:1）。 */
+  backdrop-filter: blur(10px) saturate(1.18);
+  box-shadow:
+    0 8px 24px rgb(0 0 0 / 0.34),
+    inset 0 1px rgb(255 255 255 / 0.06);
   color: var(--sr-label-primary, #f2f5ec);
-  font-size: var(--sr-text-13, 13px);
-  line-height: 1.4;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3268,8 +3245,8 @@
 /* 状态点：球旁字幕是唯一状态位（F-2 收敛，通话条不再渲染状态）—— 听=红点闪 / 想=琥珀闪 / 说=酸绿。 */
 .sr-orb-caption-dot {
   flex: none;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: var(--sr-radius-pill, 999px);
   background: var(--sr-live, #4ade7b);
 }
@@ -3337,48 +3314,31 @@
   justify-content: flex-end;
 }
 
-/* v5 起球体全由 OrbGlass 的 canvas 绘制（暗核光圈）；这里的 DOM 壳样式
-   只留容器/球面命中/面板，旧的内核/能量环/刻度环/弧/波形样式已随 v5 删除。 */
-
-/* 展开的小面板：语音 + 一行文字输入。 */
-.sr-orb-panel {
-  position: absolute;
-  right: 0;
-  bottom: 64px;
-  width: 240px;
-  padding: 10px;
-  border-radius: var(--sr-radius-lg, 12px);
-  border: 1px solid color-mix(in srgb, var(--sr-label-tertiary) 30%, transparent);
-  background: color-mix(in srgb, var(--sr-surface-elevated, #1a1d16) 92%, transparent);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-  display: grid;
-  gap: 8px;
+/* ── 悬浮球 v6：高清晰度玻璃核 + 等离子粒子 + 状态专属运动 ─────────────── */
+@property --orb-voice {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
 }
 
-.sr-orb-input {
-  display: flex;
-  gap: 6px;
+@property --orb-hue-a {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 210;
 }
 
-.sr-orb-input .sr-input {
-  flex: 1;
-  min-width: 0;
+@property --orb-hue-b {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 255;
 }
 
-.sr-orb-hint {
-  margin: 0;
-  font-size: 11px;
-  opacity: 0.6;
-}
-
-/* ── 悬浮球 v2：canvas 粒子等离子球 ───────────────────────────────────── */
 .sr-orb {
   position: fixed;
   z-index: 60;
-  /* 尺寸跟 --sr-orb-size 走（64 空闲 / 80 说话）；容器不吃事件（D2：fixed 方块不得盖住内容）。 */
-  width: var(--sr-orb-size, 64px);
-  height: var(--sr-orb-size, 64px);
+  /* 尺寸跟 --sr-orb-size 走（72 空闲 / 112 通话）；容器不吃事件（D2）。 */
+  width: var(--sr-orb-size, 72px);
+  height: var(--sr-orb-size, 72px);
   pointer-events: none;
   user-select: none;
   touch-action: none;
@@ -3386,7 +3346,7 @@
 }
 
 .sr-orb--active {
-  /* 说话/干活的尺寸由 --sr-orb-size（80px）接管，不再叠 transform 缩放。 */
+  /* 说话/干活由 --sr-orb-size（112px）接管，不再叠 transform 缩放。 */
   transform: none;
 }
 
@@ -3396,8 +3356,8 @@
 
 .sr-orb-ball {
   position: relative;
-  width: var(--sr-orb-size, 64px);
-  height: var(--sr-orb-size, 64px);
+  width: var(--sr-orb-size, 72px);
+  height: var(--sr-orb-size, 72px);
   border-radius: 50%;
   cursor: grab;
   pointer-events: auto;
@@ -3407,13 +3367,411 @@
   cursor: grabbing;
 }
 
+.sr-orb-visual {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  border-radius: 50%;
+  pointer-events: none;
+  transition:
+    --orb-hue-a 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    --orb-hue-b 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 360ms ease;
+}
+
+.sr-orb--active .sr-orb-visual {
+  animation: sr-orb-ignite 560ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sr-orb-visual[data-mode="offline"] {
+  filter: grayscale(0.8) brightness(0.72);
+}
+
+.sr-orb-aura {
+  position: absolute;
+  inset: -19%;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle,
+      hsl(calc(var(--orb-hue-a) * 1deg) 100% 68% / calc(0.08 + var(--orb-glow) * 0.15)) 0 27%,
+      hsl(calc(var(--orb-hue-b) * 1deg) 100% 64% / calc(0.04 + var(--orb-glow) * 0.08)) 42%,
+      transparent 70%
+    );
+  filter: blur(5px);
+  mix-blend-mode: screen;
+  opacity: calc(0.48 + var(--orb-glow) * 0.32);
+  animation: sr-orb-aura-breathe 4.8s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.sr-orb-shell {
+  position: absolute;
+  inset: 7.5%;
+  z-index: 1;
+  border: 1px solid hsl(calc(var(--orb-hue-a) * 1deg) 90% 78% / 0.13);
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at 29% 20%, rgb(255 255 255 / 0.16) 0 1.5%, transparent 24%),
+    radial-gradient(ellipse at 67% 76%, hsl(calc(var(--orb-hue-b) * 1deg) 100% 67% / 0.13), transparent 43%),
+    radial-gradient(circle at 50% 48%, #0b1624 0 24%, #050914 65%, #02040b 100%);
+  box-shadow:
+    inset 0 1px 1px rgb(255 255 255 / 0.23),
+    inset 4px 2px 8px hsl(calc(var(--orb-hue-a) * 1deg) 100% 70% / 0.09),
+    inset -5px -7px 14px rgb(0 0 0 / 0.72),
+    0 7px 20px rgb(0 0 0 / 0.42);
+}
+
+.sr-orb-plasma {
+  position: absolute;
+  inset: 13%;
+  z-index: 2;
+  overflow: hidden;
+  border-radius: 50%;
+  mask-image: radial-gradient(circle, #000 0 69%, rgb(0 0 0 / 0.85) 78%, transparent 100%);
+}
+
+.sr-orb-plasma::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 -9px 16px rgb(0 0 0 / 0.46);
+}
+
 .sr-orb-canvas {
   position: absolute;
   inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
   pointer-events: none;
 }
+
+.sr-orb-sheen {
+  position: absolute;
+  inset: 8.5%;
+  z-index: 3;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at 31% 16%, rgb(255 255 255 / 0.52) 0 2%, rgb(255 255 255 / 0.14) 8%, transparent 24%),
+    radial-gradient(ellipse at 78% 82%, hsl(calc(var(--orb-hue-b) * 1deg) 100% 80% / 0.22), transparent 24%),
+    linear-gradient(132deg, rgb(255 255 255 / 0.12), transparent 27% 63%, rgb(255 255 255 / 0.055));
+  mix-blend-mode: screen;
+  opacity: 0.9;
+  animation: sr-orb-sheen 7s ease-in-out infinite;
+}
+
+.sr-orb-rim {
+  position: absolute;
+  z-index: 5;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 18deg,
+    hsl(calc(var(--orb-hue-a) * 1deg) 100% 68%),
+    hsl(calc(var(--orb-hue-b) * 1deg) 100% 66%),
+    hsl(calc(var(--orb-hue-a) * 1deg + 55deg) 100% 79%),
+    hsl(calc(var(--orb-hue-b) * 1deg + 22deg) 100% 60%),
+    hsl(calc(var(--orb-hue-a) * 1deg) 100% 68%)
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--orb-rim-size)),
+    #000 calc(100% - var(--orb-rim-size) + 0.6px)
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--orb-rim-size)),
+    #000 calc(100% - var(--orb-rim-size) + 0.6px)
+  );
+  opacity: var(--orb-rim-alpha);
+  filter:
+    saturate(1.28)
+    drop-shadow(0 0 3px hsl(calc(var(--orb-hue-a) * 1deg) 100% 67% / 0.92))
+    drop-shadow(0 0 8px hsl(calc(var(--orb-hue-b) * 1deg) 100% 62% / 0.45));
+  animation: sr-orb-ring-spin var(--orb-spin) linear infinite;
+  scale: calc(1 + var(--orb-voice) * 0.035);
+  will-change: rotate, scale;
+}
+
+.sr-orb-rim--outer {
+  inset: 4.5%;
+}
+
+.sr-orb-rim--inner {
+  inset: 11%;
+  opacity: calc(var(--orb-rim-alpha) * 0.47);
+  --orb-rim-size: var(--orb-rim-inner-size);
+  animation-direction: reverse;
+  animation-duration: calc(var(--orb-spin) * 1.45);
+}
+
+.sr-orb-ripple {
+  position: absolute;
+  inset: 8%;
+  z-index: 0;
+  border: 1px solid hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.5);
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.sr-orb-orbit {
+  position: absolute;
+  inset: 18%;
+  z-index: 4;
+  border: 1px solid transparent;
+  border-top-color: hsl(calc(var(--orb-hue-b) * 1deg) 100% 80% / 0.8);
+  border-right-color: hsl(calc(var(--orb-hue-a) * 1deg) 100% 74% / 0.2);
+  border-radius: 50%;
+  opacity: 0;
+  transform: rotate(-24deg) scaleY(0.54);
+}
+
+.sr-orb-orbit::after {
+  content: "";
+  position: absolute;
+  top: -1.5px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: hsl(calc(var(--orb-hue-b) * 1deg) 100% 84%);
+  box-shadow: 0 0 5px hsl(calc(var(--orb-hue-b) * 1deg) 100% 72%);
+  translate: -50% 0;
+}
+
+.sr-orb-orbit--two {
+  inset: 26%;
+  opacity: 0;
+  transform: rotate(160deg) scaleY(0.72);
+}
+
+.sr-orb-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: visible;
+  opacity: 0;
+  transform: rotate(-90deg);
+  transition: opacity 220ms ease;
+  pointer-events: none;
+}
+
+.sr-orb-progress circle {
+  fill: none;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.sr-orb-progress-track {
+  stroke: rgb(217 255 61 / 0.12);
+}
+
+.sr-orb-progress-value {
+  stroke: var(--sr-accent, #d9ff3d);
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 3px rgb(217 255 61 / 0.8));
+}
+
+.sr-orb-progress-value--chase {
+  animation: sr-orb-progress-chase 1.5s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+.sr-orb-visual[data-mode="listening"] .sr-orb-aura {
+  animation: sr-orb-listen-aura 1.5s ease-in-out infinite;
+}
+
+.sr-orb-visual[data-mode="listening"] .sr-orb-rim--outer {
+  filter:
+    saturate(1.35)
+    brightness(1.12)
+    drop-shadow(0 0 4px hsl(calc(var(--orb-hue-b) * 1deg) 100% 68% / 0.95))
+    drop-shadow(0 0 13px hsl(calc(var(--orb-hue-a) * 1deg) 100% 62% / 0.54));
+}
+
+.sr-orb-visual[data-mode="thinking"] .sr-orb-aura {
+  animation: sr-orb-think-aura 0.95s ease-in-out infinite;
+}
+
+.sr-orb-visual[data-mode="thinking"] .sr-orb-plasma {
+  filter: brightness(1.18) saturate(1.22);
+}
+
+.sr-orb-visual[data-mode="thinking"] .sr-orb-rim--inner {
+  opacity: calc(var(--orb-rim-alpha) * 0.72);
+}
+
+.sr-orb-visual[data-mode="thinking"] .sr-orb-orbit {
+  border-width: 1.35px;
+  opacity: calc(0.62 + var(--orb-glow) * 0.34);
+  filter: drop-shadow(0 0 3px hsl(calc(var(--orb-hue-b) * 1deg) 100% 74% / 0.82));
+  animation: sr-orb-orbit-spin 1.55s linear infinite;
+}
+
+.sr-orb-visual[data-mode="thinking"] .sr-orb-orbit--two {
+  opacity: 0.82;
+  animation-duration: 2.25s;
+  animation-direction: reverse;
+}
+
+.sr-orb-visual[data-mode="speaking"] .sr-orb-rim--outer {
+  filter:
+    saturate(1.2)
+    brightness(1.12)
+    drop-shadow(0 0 4px hsl(calc(var(--orb-hue-a) * 1deg) 100% 70% / 0.9))
+    drop-shadow(0 0 12px hsl(calc(var(--orb-hue-b) * 1deg) 100% 64% / 0.42));
+}
+
+.sr-orb-visual[data-mode="speaking"] .sr-orb-ripple {
+  animation: sr-orb-speaking-ripple 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.sr-orb-visual[data-mode="speaking"] .sr-orb-ripple--two {
+  animation-delay: 1.2s;
+}
+
+.sr-orb-visual[data-mode="working"] .sr-orb-progress {
+  opacity: 1;
+}
+
+.sr-orb-visual[data-mode="working"] .sr-orb-aura {
+  animation-duration: 2.3s;
+}
+
+.sr-orb-visual[data-mode="unclear"] .sr-orb-aura {
+  animation: sr-orb-unclear-pulse 1.8s ease-in-out infinite;
+}
+
+.sr-orb-visual[data-mode="offline"] .sr-orb-aura,
+.sr-orb-visual[data-mode="offline"] .sr-orb-rim,
+.sr-orb-visual[data-mode="offline"] .sr-orb-sheen {
+  animation: none;
+}
+
+@keyframes sr-orb-ignite {
+  0% {
+    opacity: 0.35;
+    transform: scale(0.78);
+  }
+  58% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes sr-orb-ring-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes sr-orb-aura-breathe {
+  0%,
+  100% {
+    opacity: calc(0.38 + var(--orb-glow) * 0.2);
+    transform: scale(0.93);
+  }
+  50% {
+    opacity: calc(0.62 + var(--orb-glow) * 0.28);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes sr-orb-listen-aura {
+  0%,
+  100% {
+    opacity: calc(0.52 + var(--orb-voice) * 0.2);
+    transform: scale(calc(0.97 + var(--orb-voice) * 0.045));
+  }
+  50% {
+    opacity: calc(0.76 + var(--orb-voice) * 0.2);
+    transform: scale(calc(1.07 + var(--orb-voice) * 0.08));
+  }
+}
+
+@keyframes sr-orb-think-aura {
+  0%,
+  100% {
+    opacity: 0.58;
+    transform: scale(0.98) rotate(0deg);
+  }
+  50% {
+    opacity: 0.92;
+    transform: scale(1.1) rotate(8deg);
+  }
+}
+
+@keyframes sr-orb-unclear-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translateX(-2px) scale(0.98);
+  }
+  50% {
+    opacity: 0.82;
+    transform: translateX(2px) scale(1.06);
+  }
+}
+
+@keyframes sr-orb-sheen {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: rotate(-2deg);
+  }
+  50% {
+    opacity: 1;
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes sr-orb-orbit-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes sr-orb-speaking-ripple {
+  0% {
+    opacity: 0.48;
+    transform: scale(0.92);
+  }
+  72% {
+    opacity: 0;
+    transform: scale(1.34);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.34);
+  }
+}
+
+@keyframes sr-orb-progress-chase {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-orb-visual,
+  .sr-orb-aura,
+  .sr-orb-rim,
+  .sr-orb-orbit,
+  .sr-orb-ripple,
+  .sr-orb-sheen,
+  .sr-orb-progress-value {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* 细把手：面板顶部一条 24×3 的圆角短线，无文字。 */
 .sr-orb-handle {
   display: block;

@@ -24,7 +24,7 @@ test("七态齐全，且任意两态至少在两个通道上不同", () => {
 test("色相族分工：说话在青绿区，其余蓝紫区；思考追边最快；干活有独立通道", () => {
   assert.ok(ORB_STATES.speaking.hueA >= 140 && ORB_STATES.speaking.hueB <= 210, "speaking 应在青绿族");
   for (const mode of ["idle", "listening", "thinking", "working"]) {
-    assert.ok(ORB_STATES[mode].hueA >= 200 && ORB_STATES[mode].hueB <= 320, `${mode} 应在蓝紫族`);
+    assert.ok(ORB_STATES[mode].hueA >= 200 && ORB_STATES[mode].hueB <= 335, `${mode} 应在蓝紫族`);
   }
   assert.ok(ORB_STATES.thinking.drift > ORB_STATES.idle.drift * 10, "思考追边必须一眼看出比空闲快");
   assert.ok(ORB_STATES.thinking.swirl > 0 && ORB_STATES.idle.swirl === 0, "旋流只属于思考");

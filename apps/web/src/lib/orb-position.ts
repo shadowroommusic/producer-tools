@@ -7,7 +7,7 @@
  * `shadowroom.orb.position`。
  */
 
-export const ORB_SIZE = 64;
+export const ORB_SIZE = 72;
 export const POSITION_KEY = "shadowroom.orb.position";
 
 /** 视口与受保护矩形的离屏形状（DOMRect 的字段子集即可）。 */
@@ -21,8 +21,8 @@ const SNAP_DISTANCE = 48;
 /**
  * 视口边界夹取：窗口内留 12px 边距，不许只露半个球。
  *
- * `size` 必须传**当前**球径（64 空闲 / 80 通话）：2026-10-16 实测——按 64 夹到右缘后
- * 通话态长到 80，会多出 16px 悬在视口外（用户报「球被裁掉小半」）。夹取与吸附都按它算。
+ * `size` 必须传**当前**球径（72 空闲 / 112 通话）：按小尺寸夹到边缘后再长大，
+ * 多出来的部分会悬到视口外。夹取、吸附和控件距离都按当前尺寸计算。
  */
 export function clampToViewport(x: number, y: number, viewport: Viewport, size: number = ORB_SIZE): Position {
   return {
@@ -45,16 +45,16 @@ export function avoidProtected(next: Position, protectedRects: Rect[], viewport:
   let nearest = protectedRects[0];
   let bestDistance = Infinity;
   for (const rect of protectedRects) {
-    const dx = rect.x + rect.w / 2 - (next.x + ORB_SIZE / 2);
-    const dy = rect.y + rect.h / 2 - (next.y + ORB_SIZE / 2);
+    const dx = rect.x + rect.w / 2 - (next.x + size / 2);
+    const dy = rect.y + rect.h / 2 - (next.y + size / 2);
     const distance = dx * dx + dy * dy;
     if (distance < bestDistance) {
       bestDistance = distance;
       nearest = rect;
     }
   }
-  const awayX = Math.sign(next.x + ORB_SIZE / 2 - (nearest.x + nearest.w / 2)) || -1;
-  const awayY = Math.sign(next.y + ORB_SIZE / 2 - (nearest.y + nearest.h / 2)) || -1;
+  const awayX = Math.sign(next.x + size / 2 - (nearest.x + nearest.w / 2)) || -1;
+  const awayY = Math.sign(next.y + size / 2 - (nearest.y + nearest.h / 2)) || -1;
   let candidate = { ...next };
   // 垂直优先退让，顶住后整行水平扫描。
   for (let step = 0; step < 24; step += 1) {

@@ -1,5 +1,5 @@
 /**
- * 悬浮球 v5 的五态参数表与色相插值（从 OrbGlass.tsx 拆出来：.tsx 进不了 node 单测）。
+ * 悬浮球 v6 的七态参数表与色相插值（从 OrbGlass.tsx 拆出来：.tsx 进不了 node 单测）。
  * 通道分工见表头；任意两态至少在两个通道上不同（tests/orb.test.mjs 钉住）。
  */
 import type { CallState } from "./call-states.ts";
@@ -44,9 +44,9 @@ export const ORB_STATES: Record<
   { hueA: number; hueB: number; drift: number; rimAlpha: number; rimWidth: number; glow: number; breathe: number; wobble: number; ripple: number; swirl: number }
 > = {
   idle: { hueA: 205, hueB: 235, drift: 0.02, rimAlpha: 0.5, rimWidth: 0.08, glow: 0.45, breathe: 0.035, wobble: 0.02, ripple: 0, swirl: 0 },
-  listening: { hueA: 228, hueB: 300, drift: 0.06, rimAlpha: 0.88, rimWidth: 0.16, glow: 0.7, breathe: 0, wobble: 0.03, ripple: 0, swirl: 0 },
-  speaking: { hueA: 140, hueB: 190, drift: 0.05, rimAlpha: 0.85, rimWidth: 0.12, glow: 0.72, breathe: 0, wobble: 0.03, ripple: 1, swirl: 0 },
-  thinking: { hueA: 272, hueB: 318, drift: 0.55, rimAlpha: 0.9, rimWidth: 0.1, glow: 0.75, breathe: 0, wobble: 0.02, ripple: 0, swirl: 1 },
+  listening: { hueA: 228, hueB: 300, drift: 0.06, rimAlpha: 0.96, rimWidth: 0.18, glow: 0.8, breathe: 0, wobble: 0.03, ripple: 0, swirl: 0 },
+  speaking: { hueA: 140, hueB: 190, drift: 0.05, rimAlpha: 0.94, rimWidth: 0.14, glow: 0.82, breathe: 0, wobble: 0.03, ripple: 1, swirl: 0 },
+  thinking: { hueA: 272, hueB: 332, drift: 0.72, rimAlpha: 0.95, rimWidth: 0.1, glow: 0.85, breathe: 0, wobble: 0.02, ripple: 0, swirl: 1 },
   /**
    * 干活：drift 0.08 → 0.16（MiniMax #393 ④ 缺口 b）。原来 listening(0.06) 与 working(0.08)
    * 在运动五通道上只差 0.02 漂移——肉眼几乎分不开、全靠颜色，色盲用户就分不出来。翻倍后
