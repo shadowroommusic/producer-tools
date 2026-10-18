@@ -153,8 +153,15 @@ export type TrackFilters = {
 
 // ---------------------------------------------------------------- 工具封装
 
-export const listTracks = (filters: TrackFilters) =>
-  tool<{ tracks: TrackRow[] }>("list_tracks", { limit: 200, ...filters }).then((res) => res.tracks);
+export const listTracks = (
+  filters: TrackFilters,
+  page: { limit?: number; offset?: number } = {},
+) =>
+  tool<{ tracks: TrackRow[] }>("list_tracks", {
+    limit: page.limit ?? 200,
+    offset: page.offset ?? 0,
+    ...filters,
+  }).then((res) => res.tracks);
 
 export const trackDetail = (id: number) => tool<TrackDetail>("track_detail", { id });
 

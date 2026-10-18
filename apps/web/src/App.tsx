@@ -1759,16 +1759,22 @@ export function App() {
   const selected = plugins.find((plugin) => plugin.repo === activePlugin) ?? plugins[2];
   const active = plugins.find((plugin) => plugin.repo === activePlugin);
 
-  const summaries: SessionSummary[] = store.sessions.filter((entry) => entry.kind === "butler").map((entry) => ({
-    id: entry.id,
-    title: entry.title,
-    meta: `${entry.messages.filter((message) => message.role !== "notice").length} 条 · ${timeAgo(entry.createdAt)}`,
-    state: entry.calls.some((call) => call.status === "running")
-      ? "running"
-      : entry.messages.length > 0
-        ? "done"
-        : "draft",
-  }));
+  const summaries: SessionSummary[] = store.sessions
+    .filter(
+      (entry) =>
+        entry.kind === "butler" &&
+        (entry.messages.length > 0 || entry.id === butlerSession?.id),
+    )
+    .map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      meta: `${entry.messages.filter((message) => message.role !== "notice").length} 条 · ${timeAgo(entry.createdAt)}`,
+      state: entry.calls.some((call) => call.status === "running")
+        ? "running"
+        : entry.messages.length > 0
+          ? "done"
+          : "draft",
+    }));
 
   /** One composer, two homes (the main column or the dock); the dock gets a shorter placeholder. */
   /**

@@ -46,7 +46,6 @@ import {
   scanJobDetail,
   setList,
   slotLetter,
-  sourceOf,
   trackDetail,
   type FilterForm,
   type PrefModel,
@@ -82,9 +81,13 @@ function useDebounced<T>(value: T, ms: number): T {
   return debounced;
 }
 
+const LIBRARY_PAGE_SIZE = 80;
+
 export function LibraryPage({ onContextChange }: { onContextChange?: (context: LibraryAgentContext) => void }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [tracks, setTracks] = useState<TrackRow[] | null>(null);
+  const [hasMoreTracks, setHasMoreTracks] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState<FilterForm>(EMPTY_FILTERS);
   const debouncedForm = useDebounced(form, 250);
@@ -146,15 +149,41 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
   const reloadTracks = useCallback(async () => {
     const seq = ++listSeq.current;
     try {
-      const rows = await listTracks(buildTrackFilters(debouncedForm));
-      if (seq === listSeq.current) setTracks(rows);
+      const rows = await listTracks(buildTrackFilters(debouncedForm), { limit: LIBRARY_PAGE_SIZE, offset: 0 });
+      if (seq === listSeq.current) {
+        setTracks(rows);
+        setHasMoreTracks(rows.length === LIBRARY_PAGE_SIZE);
+      }
     } catch (cause) {
       if (seq === listSeq.current) {
         setTracks([]);
+        setHasMoreTracks(false);
         fail("曲目列表读取失败", cause);
       }
     }
   }, [debouncedForm, fail]);
+
+  const loadMoreTracks = useCallback(async () => {
+    if (loadingMore || !hasMoreTracks) return;
+    const seq = listSeq.current;
+    setLoadingMore(true);
+    try {
+      const rows = await listTracks(buildTrackFilters(debouncedForm), {
+        limit: LIBRARY_PAGE_SIZE,
+        offset: tracks?.length ?? 0,
+      });
+      if (seq !== listSeq.current) return;
+      setTracks((current) => {
+        const seen = new Set((current ?? []).map((track) => track.id));
+        return [...(current ?? []), ...rows.filter((track) => !seen.has(track.id))];
+      });
+      setHasMoreTracks(rows.length === LIBRARY_PAGE_SIZE);
+    } catch (cause) {
+      if (seq === listSeq.current) fail("继续读取曲目失败", cause);
+    } finally {
+      if (seq === listSeq.current) setLoadingMore(false);
+    }
+  }, [debouncedForm, fail, hasMoreTracks, loadingMore, tracks?.length]);
 
   useEffect(() => {
     void refreshStats();
@@ -561,48 +590,69 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
 
   return (
     <div className="sr-lib">
-      <header className="sr-compact-page-head">
-        <div>
+      <header className="sr-lib-hero" aria-label="曲目库概览">
+        <div className="sr-lib-hero-copy">
           <span className="sr-eyebrow">
             <span className="sr-eyebrow-dot" />
             SOUND LIBRARY
           </span>
           <h1>曲目库</h1>
-          <p>扫描、分析与理解你的声音资产，再把它们带进 Studio 或 DJ。</p>
+          <p>扫描、分析并整理声音资产，再把它们带进 Studio 或 DJ。</p>
+        </div>
+        <div className="sr-lib-hero-stats" aria-label="曲目库统计">
+          <span className="sr-lib-stat">
+            <strong>{stats?.tracks ?? "—"}</strong>
+            <small>曲目</small>
+          </span>
+          <span className="sr-lib-stat">
+            <strong>{stats ? `${Math.round(stats.bpm_rate * 100)}%` : "—"}</strong>
+            <small>有 BPM</small>
+          </span>
+          <span className="sr-lib-stat">
+            <strong>{stats ? `${Math.round(stats.key_rate * 100)}%` : "—"}</strong>
+            <small>有调性</small>
+          </span>
+          <span className="sr-lib-stat" data-warn={missing > 0 || undefined}>
+            <strong>{stats?.missing_analysis ?? "—"}</strong>
+            <small>待分析</small>
+          </span>
         </div>
       </header>
-      <div className="sr-lib-topbar">
-        <input
-          className="sr-input sr-lib-scanpath"
-          value={scanPath}
-          placeholder="文件夹路径，如 ~/Documents/ShadowRoom/recordings"
-          aria-label="要扫描的文件夹路径"
-          onChange={(event) => setScanPath(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void onScan();
-          }}
-        />
-        <button type="button" className="sr-btn sr-btn--accent" disabled={scanPath.trim() === "" || scanning} onClick={() => void onScan()}>
-          {scanning ? "扫描中…" : "扫描文件夹"}
-        </button>
+      <section className="sr-lib-toolbar" aria-label="入库与整理">
+        <div className="sr-lib-scan-cluster">
+          <span className="sr-lib-toolbar-label sr-mono">入库</span>
+          <input
+            className="sr-input sr-lib-scanpath"
+            value={scanPath}
+            placeholder="文件夹路径，例如 ~/Music/tech-house"
+            aria-label="要扫描的文件夹路径"
+            onChange={(event) => setScanPath(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void onScan();
+            }}
+          />
+          <button type="button" className="sr-btn sr-btn--accent" disabled={scanPath.trim() === "" || scanning} onClick={() => void onScan()}>
+            {scanning ? "扫描中…" : "扫描文件夹"}
+          </button>
+        </div>
         <span className="sr-lib-scanprogress" data-slot="scan-progress" aria-live="polite">
-          {scanning ? "扫描中…" : (scanNote ?? "")}
+          {scanning ? "正在入库并提取封面、BPM 与调性…" : (scanNote ?? "")}
         </span>
-        <span className="sr-lib-count">{stats === null ? "统计读取中…" : `共 ${stats.tracks} 首 · 缺分析 ${missing}`}</span>
-        <button
-          type="button"
-          className="sr-btn"
-          data-open={boardOpen || undefined}
-          aria-expanded={boardOpen}
-          onClick={() => setBoardOpen((open) => !open)}
-        >
-          统计与偏好
-        </button>
-        <button type="button" className="sr-btn" disabled={dupBusy} onClick={() => void onDedupe()}>
-          {dupBusy ? "查重中…" : "查重"}
-        </button>
-        <span className="sr-lib-linkage">推荐与排歌在 DJ 页 · 曲目库管「入库 / 可查 / 可学」</span>
-      </div>
+        <div className="sr-lib-toolbar-actions">
+          <button
+            type="button"
+            className="sr-btn"
+            data-open={boardOpen || undefined}
+            aria-expanded={boardOpen}
+            onClick={() => setBoardOpen((open) => !open)}
+          >
+            统计与偏好
+          </button>
+          <button type="button" className="sr-btn" aria-label="查重" disabled={dupBusy} onClick={() => void onDedupe()}>
+            {dupBusy ? "查重中…" : "查找重复"}
+          </button>
+        </div>
+      </section>
 
       {boardOpen ? (
         <section className="sr-lib-board" aria-label="统计与偏好">
@@ -730,9 +780,9 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
         <section className="sr-lib-list" aria-label="曲目列表">
           <div className="sr-lib-filters">
             <input
-              className="sr-input"
+              className="sr-input sr-lib-search"
               value={form.query}
-              placeholder="搜索 标题/艺人/专辑"
+              placeholder="搜索标题、艺人或专辑"
               aria-label="搜索标题、艺人、专辑"
               onChange={(event) => patchForm({ query: event.target.value })}
             />
@@ -772,11 +822,22 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
               </button>
             ) : null}
           </div>
-          <span className="sr-lib-count">
-            {tracks === null
-              ? "加载中…"
-              : `显示 ${tracks.length} 首（共 ${stats?.tracks ?? "—"} 首）${tracks.length >= 200 ? " · 只显示前 200" : ""}`}
-          </span>
+          <div className="sr-lib-list-summary">
+            <span className="sr-lib-count">
+              {tracks === null
+                ? "正在读取曲目…"
+                : `已载入 ${tracks.length} 首${active ? "（筛选结果）" : ` / 共 ${stats?.tracks ?? "—"} 首`}`}
+            </span>
+            <span className="sr-lib-linkage">推荐与排歌在 DJ 页 · 这里负责入库、检索与整理</span>
+          </div>
+          <div className="sr-lib-table-head" aria-hidden="true">
+            <span />
+            <span>曲目 / 艺人</span>
+            <span>BPM</span>
+            <span>调性</span>
+            <span>时长</span>
+            <span />
+          </div>
           <div className="sr-lib-rows">
             {tracks !== null && tracks.length === 0 ? (
               libraryEmpty ? (
@@ -804,12 +865,20 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
                   // 联网确认没有封面（#94 B2 的显式标记）：与「还没抓过」的占位区分开
                   <span className="sr-lib-row-cover sr-lib-row-cover--none" title="联网确认无封面" aria-label="联网确认无封面" />
                 ) : track.cover_path !== null ? (
-                  <img className="sr-lib-row-cover" src={coverUrl(track.cover_path)} alt="" loading="lazy" />
+                  <img className="sr-lib-row-cover" src={coverUrl(track.cover_path)} alt={`${track.title ?? "曲目"} 封面`} loading="lazy" />
                 ) : (
                   <span className="sr-lib-row-cover sr-lib-row-cover--ph" aria-hidden="true" />
                 )}
-                <span className="sr-lib-row-title">{track.title ?? track.path.split("/").pop()}</span>
-                {dupBadges.has(track.id) ? <span className="sr-lib-dupbadge">{dupBadges.get(track.id)}</span> : null}
+                <span className="sr-lib-row-copy">
+                  <span className="sr-lib-row-titleline">
+                    <span className="sr-lib-row-title">{track.title ?? track.path.split("/").pop()}</span>
+                    {dupBadges.has(track.id) ? <span className="sr-lib-dupbadge">{dupBadges.get(track.id)}</span> : null}
+                  </span>
+                  <span className="sr-lib-row-artist">{track.artist ?? "未知艺人"}</span>
+                </span>
+                <span className="sr-lib-row-bpm">{track.bpm === null ? "—" : `${Math.round(track.bpm * 10) / 10}`}</span>
+                <span className="sr-lib-row-key">{track.camelot ?? track.key ?? "—"}</span>
+                <span className="sr-lib-row-time">{formatMs(track.duration_ms)}</span>
                 {previewing === track.id ? (
                   <span
                     className="sr-lib-previewing"
@@ -820,16 +889,18 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
                       stopPreview();
                     }}
                   >
-                    ■ 停
+                    ■
                   </span>
-                ) : null}
-                <span className="sr-lib-row-artist">{track.artist ?? "—"}</span>
-                <span className="sr-lib-row-bpm">{track.bpm === null ? "—" : `${Math.round(track.bpm * 10) / 10} BPM`}</span>
-                <span className="sr-lib-row-key">{track.camelot ?? track.key ?? "—"}</span>
-                <span className="sr-lib-row-time">{formatMs(track.duration_ms)}</span>
-                <span className="sr-lib-row-source">{sourceOf(track.path)}</span>
+                ) : (
+                  <span className="sr-lib-row-more" aria-hidden="true">···</span>
+                )}
               </button>
             ))}
+            {tracks !== null && tracks.length > 0 && hasMoreTracks ? (
+              <button type="button" className="sr-lib-loadmore" disabled={loadingMore} onClick={() => void loadMoreTracks()}>
+                {loadingMore ? "继续载入…" : `加载更多曲目（已显示 ${tracks.length}）`}
+              </button>
+            ) : null}
           </div>
         </section>
 

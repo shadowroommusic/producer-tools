@@ -49,6 +49,7 @@ await page.addInitScript((seed) => {
   activeWorkerIds: { studio: "studio-1", dj: "dj-1", library: "library-1" },
   sessions: [
     session("butler-1", "butler", "管家专属", "BUTLER-ONLY"),
+    { ...session("butler-old-empty", "butler", "新会话", ""), messages: [] },
     session("studio-1", "studio", "Studio 助手", "STUDIO-ONLY"),
     session("dj-1", "dj", "DJ 助手", "DJ-ONLY"),
     session("library-1", "library", "曲目库助手", "LIBRARY-ONLY"),
@@ -59,7 +60,7 @@ await page.goto(BASE, { waitUntil: "domcontentloaded" });
 await page.waitForTimeout(600);
 
 check(
-  "① 侧栏只显示管家话题，不显示页面 worker",
+  "① 侧栏只显示有内容的管家话题，不显示旧空会话与页面 worker",
   (await page.locator(".sr-session-row").count()) === 1 &&
     (await page.locator(".sr-session-row", { hasText: "管家专属" }).count()) === 1 &&
     (await page.locator(".sr-session-row", { hasText: "Studio 助手" }).count()) === 0,
@@ -132,7 +133,7 @@ const butlers = (store.sessions ?? []).filter((entry) => entry.kind === "butler"
 const activeButler = butlers.find((entry) => entry.id === store.activeButlerId);
 check(
   "⑨ “新对话”只创建管家话题",
-  butlers.length === 2 && activeButler?.title === "新对话" && (await page.getByRole("textbox").count()) > 0,
+  butlers.length === 3 && activeButler?.title === "新对话" && (await page.getByRole("textbox").count()) > 0,
   `butlers=${butlers.length} active=${activeButler?.title ?? "(none)"}`,
 );
 

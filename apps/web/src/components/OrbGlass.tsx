@@ -55,7 +55,7 @@ export function GlassSphere({
   const state = useRef({ mode, level, progress, still: reducedMotion === true });
   state.current = { mode, level, progress, still: reducedMotion === true };
   const visual = ORB_STATES[mode] ?? ORB_STATES.idle;
-  const rim = Math.max(1.5, size * visual.rimWidth * 0.18);
+  const rim = Math.max(1, size * visual.rimWidth * 0.14);
   const progressValue =
     progress !== undefined && Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : undefined;
   const style = {
@@ -82,7 +82,7 @@ export function GlassSphere({
      * Supersample beyond Retina: the active orb is only ~112 CSS px and has fine dust/voice ticks.
      * A 3× backing store removes the stair-stepping visible in v5 even when the window is scaled.
      */
-    const dpr = Math.min(3, Math.max(2, window.devicePixelRatio || 1));
+    const dpr = Math.min(3, Math.max(2.75, window.devicePixelRatio || 1));
     const px = FINITE(size, 64) * dpr;
     if (!Number.isFinite(px) || px <= 0) return;
     canvas.width = Math.round(px);
@@ -112,7 +112,7 @@ export function GlassSphere({
       const r = size / 2;
       const cx = r;
       const cy = r;
-      const plasmaR = r * 0.36;
+      const plasmaR = r * 0.47;
       ctx.clearRect(0, 0, size, size);
 
       // Three independently moving plasma lobes. They stay inside a circular clip so the hero rim
@@ -133,6 +133,19 @@ export function GlassSphere({
         ctx.fillStyle = glow;
         ctx.fillRect(cx - plasmaR, cy - plasmaR, plasmaR * 2, plasmaR * 2);
       }
+      const core = ctx.createRadialGradient(
+        cx - plasmaR * 0.08,
+        cy - plasmaR * 0.12,
+        0,
+        cx,
+        cy,
+        plasmaR * 0.92,
+      );
+      core.addColorStop(0, `hsla(${current.hueA}, 100%, 82%, ${0.15 + current.glow * 0.11})`);
+      core.addColorStop(0.3, `hsla(${current.hueB}, 100%, 66%, ${0.055 + current.glow * 0.05})`);
+      core.addColorStop(1, `hsla(${current.hueB}, 100%, 55%, 0)`);
+      ctx.fillStyle = core;
+      ctx.fillRect(cx - plasmaR, cy - plasmaR, plasmaR * 2, plasmaR * 2);
 
       /**
        * Speaking is a material morph, not a second animation pasted on top. Every mote has a stable
@@ -164,25 +177,52 @@ export function GlassSphere({
         }
       }
 
-      const count = m === "offline" ? 8 : m === "thinking" ? 40 : m === "speaking" ? 42 : 24;
+      const count =
+        m === "offline"
+          ? 10
+          : m === "thinking"
+            ? 64
+            : m === "listening"
+              ? 56
+              : m === "speaking"
+                ? 52
+                : m === "working"
+                  ? 54
+                  : 42;
       for (let i = 0; i < count; i += 1) {
         const seed = i * 0.61803398875;
+        const depth = ((i * 17) % 31) / 30;
         const radius =
           plasmaR *
           (0.16 + ((i * 37) % 67) / 100) *
+          (0.78 + depth * 0.32) *
+          (i % 9 === 0 ? 1.42 : 1) *
           (m === "listening" ? 1 + smoothedLevel * 0.08 : 1);
         const direction = i % 3 === 0 ? -1 : 1;
         const angle = seed * TAU + (still ? 0 : t * (0.055 + current.drift * direction));
         const orbitX = cx + Math.cos(angle) * radius;
         const orbitY = cy + Math.sin(angle) * radius * (0.78 + ((i * 11) % 9) / 50);
+        const trailAngle = angle - (still ? 0 : 0.06 + current.drift * 0.22) * direction;
+        const trailX = cx + Math.cos(trailAngle) * radius;
+        const trailY = cy + Math.sin(trailAngle) * radius * (0.78 + ((i * 11) % 9) / 50);
         const lane = (i + 0.5) / count;
         const waveX = cx + (lane - 0.5) * plasmaR * 1.72 + (((i * 7) % 5) - 2) * 0.16;
         const waveY = waveYAt(lane, i % 2 === 0 ? -1 : 1);
         const x = lerp(orbitX, waveX, voiceBlend);
         const y = lerp(orbitY, waveY, voiceBlend);
         const sparkle = still ? 0.65 : 0.42 + Math.sin(t * 1.7 + seed * 8) * 0.3;
-        const dot = (0.55 + ((i * 13) % 7) / 10) * (1 + voiceBlend * 0.16);
+        const dot = (0.42 + depth * 0.62 + ((i * 13) % 7) / 20) * (1 + voiceBlend * 0.16);
         const hue = lerpHue(current.hueA, current.hueB, voiceBlend > 0.25 ? lane : (i % 9) / 8);
+        if (!still && voiceBlend < 0.2 && i % 2 === 0) {
+          const tx = lerp(trailX, waveX, voiceBlend);
+          const ty = lerp(trailY, waveY, voiceBlend);
+          ctx.strokeStyle = `hsla(${hue}, 100%, 72%, ${0.05 + depth * 0.07})`;
+          ctx.lineWidth = Math.max(0.45, dot * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(tx, ty);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
         if (voiceBlend > 0.36 && i % 5 === 0) {
           ctx.fillStyle = `hsla(${hue}, 100%, 68%, ${voiceBlend * 0.12})`;
           ctx.beginPath();

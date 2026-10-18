@@ -135,7 +135,7 @@ await page.addInitScript(() => {
 });
 mkdirSync(SHOTS, { recursive: true });
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
-await page.waitForSelector(".sr-lib-topbar", { timeout: 15000 });
+await page.waitForSelector(".sr-lib-toolbar", { timeout: 15000 });
 await page.waitForFunction(() => document.querySelectorAll(".sr-lib-row").length > 0, null, { timeout: 15000 });
 
 const search = async (text) => {
@@ -165,7 +165,7 @@ await page.waitForFunction(
 const scanLine = await page.locator('[data-slot="scan-progress"]').textContent();
 const statsAfter = await call("stats", {});
 const strayNotice = await page.locator(".sr-lib-notice").count();
-const visibleAfterScan = Math.min(statsAfter.tracks, 200);
+const visibleAfterScan = Math.min(statsAfter.tracks, 80);
 await page.waitForFunction((want) => document.querySelectorAll(".sr-lib-row").length === want, visibleAfterScan, { timeout: 15000 });
 check(
   "① 扫描 16 首：stats +16、UI 行数对账、结果只走进度位",
@@ -177,7 +177,7 @@ await page.screenshot({ path: `${SHOTS}/02-scanned.png` });
 // ② 的数字基准必须在扫描**之后**重取：#94 B1 起扫描尾巴会自动给全库缺分析的曲目补 BPM/调性，
 // 行数在扫描期间会变（2026-10-16 实测：16 首 fixture 触发全库补分析，bpm80-90 从 20 涨到 100+，
 // 旧脚本拿扫描前的快照等，等到超时）。
-const capped = (count) => Math.min(count, 200); // UI 一屏最多 200 行，桥口径要跟着封顶
+const capped = (count) => Math.min(count, 80); // 首屏一页 80 行；加载更多会继续追加
 expected.bpm = capped((await call("list_tracks", { bpm_min: 80, bpm_max: 90, limit: 300 })).tracks.length);
 expected.camelot = capped((await call("list_tracks", { camelot: "8A", limit: 300 })).tracks.length);
 expected.tag = capped((await call("list_tracks", { tags: ["house"], limit: 300 })).tracks.length);
@@ -504,7 +504,11 @@ check("④b 忘记偏好两次点击确认（不真忘）", armed && disarmedTex
 
 // ---- ⑥ 联动口径
 const linkage = await page.locator(".sr-lib-linkage").textContent();
-check("⑥ 联动口径文案在页面上", linkage.includes("推荐与排歌在 DJ 页") && linkage.includes("入库 / 可查 / 可学"), linkage.trim());
+check(
+  "⑥ 联动口径文案在页面上",
+  linkage.includes("推荐与排歌在 DJ 页") && linkage.includes("入库、检索与整理"),
+  linkage.trim(),
+);
 
 // ---- ⑦ 零 console error
 check("⑦ 零 console error", consoleErrors.length === 0, consoleErrors.length ? consoleErrors.join(" | ").slice(0, 240) : "clean");
