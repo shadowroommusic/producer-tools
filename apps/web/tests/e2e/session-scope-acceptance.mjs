@@ -74,17 +74,22 @@ check(
 await page.getByRole("button", { name: "Studio", exact: true }).click();
 await page.waitForTimeout(500);
 check(
-  "③ 进入 Studio 不自动弹 dock",
-  (await page.locator(".sr-dock").count()) === 0 && (await page.locator(".sr-dock-rail-btn").count()) === 1,
-  `dock=${await page.locator(".sr-dock").count()} rail=${await page.locator(".sr-dock-rail-btn").count()}`,
+  "③ 进入 Studio 不自动弹 dock，且不出现第二套通话入口",
+  (await page.locator(".sr-dock").count()) === 0 &&
+    (await page.locator(".sr-dock-rail-btn").count()) === 1 &&
+    (await page.getByRole("button", { name: "语音输入" }).count()) === 0,
+  `dock=${await page.locator(".sr-dock").count()} rail=${await page.locator(".sr-dock-rail-btn").count()} mic=${await page.getByRole("button", { name: "语音输入" }).count()}`,
 );
 await page.locator(".sr-dock-rail-btn").click();
 await page.waitForTimeout(300);
 const studioText = await page.locator(".sr-dock").innerText();
 check(
   "④ Studio dock 只显示 Studio worker 历史",
-  studioText.includes("STUDIO-ONLY") && !studioText.includes("DJ-ONLY") && !studioText.includes("BUTLER-ONLY"),
-  studioText.replace(/\n+/g, " | ").slice(0, 180),
+  studioText.includes("STUDIO-ONLY") &&
+    !studioText.includes("DJ-ONLY") &&
+    !studioText.includes("BUTLER-ONLY") &&
+    (await page.locator(".sr-dock .sr-voice").count()) === 0,
+  `${studioText.replace(/\n+/g, " | ").slice(0, 180)} · mic=${await page.locator(".sr-dock .sr-voice").count()}`,
 );
 writeFileSync(`${SHOTS}/studio-worker.png`, await page.screenshot());
 

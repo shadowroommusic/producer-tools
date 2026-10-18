@@ -147,7 +147,8 @@ What was measured and matters:
   plugins page, then **对话**: butler topics only. Page workers never appear as extra sidebar rows.
 - **Composer** — the generic agent shape: an attach menu (**+**) for a file/folder path or a plugin
   (which becomes a context chip and a `mention` input item), mode chips, a **model picker** on the
-  right, and the send/stop circle. No plugin picker here.
+  right, and the send/stop circle. No plugin picker and no microphone here: calling is a single
+  global action owned by the orb, so page workers cannot expose a second call entry.
 - **Transcript** — user bubbles, streamed answers, folded 思考 rows (`ReasoningRow`, DSH's geometry),
   tool rows in the order they happened, notice rows, and a per-turn `tokens · seconds` line.
 - **Pages** — 工作台 (`WorkbenchHome`: recent projects, recent conversations, the plugins entry — the

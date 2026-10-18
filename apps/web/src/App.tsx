@@ -112,7 +112,6 @@ import {
   createTurnDetector,
   saveRecording,
   startCapture,
-  microphoneSupported,
   type TurnDetector,
   type VoiceCapture,
 } from "./lib/voice";
@@ -1232,7 +1231,6 @@ export function App() {
    * The callbacks go through refs: the speech session outlives renders, but it must always reach the
    * *current* submit (the one that knows which session is active).
    */
-  const voiceSupported = microphoneSupported();
   const lastAssistant = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant");
   const submitRef = useRef(submit);
   submitRef.current = submit;
@@ -1821,15 +1819,6 @@ export function App() {
         onDetach={(name) => setAttachments((current) => current.filter((entry) => entry.name !== name))}
         plugins={plugins}
         pluginRoot={workspaces}
-        listening={voiceMode}
-        voiceSupported={voiceSupported}
-        onToggleVoice={() => (voiceMode ? hangUp() : void startCall())}
-        voiceMode={voiceMode}
-        voiceState={voiceState}
-        voiceLevel={() => level.current}
-        voicePartial={voicePartial}
-        voiceNotice={voiceNotice}
-        onEndVoice={hangUp}
         {...(placeholder === undefined ? {} : { placeholder })}
       />
     </>
