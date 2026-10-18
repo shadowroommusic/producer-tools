@@ -147,6 +147,8 @@ What was measured and matters:
 
 - **Sidebar** — workspaces (工作台 / 曲目库 / Studio / DJ / 设置), one **插件** entry that opens the
   plugins page, then **对话**: butler topics only. Page workers never appear as extra sidebar rows.
+  Butler topics with zero messages are hidden except for the currently selected one, so old empty
+  “新对话” rows do not accumulate forever.
 - **Composer** — the generic agent shape: an attach menu (**+**) for a file/folder path or a plugin
   (which becomes a context chip and a `mention` input item), mode chips, a **model picker** on the
   right, and the send/stop circle. No plugin picker and no microphone here: calling is a single
@@ -156,6 +158,19 @@ What was measured and matters:
 - **Pages** — 工作台 (`WorkbenchHome`: recent projects, recent conversations, the plugins entry — the
   landing page), the plugins page (`PluginsPage`), and a plugin's panel (`PluginPanelPage`). Picking
   a plugin card opens its panel as a page in the centre column.
+- **Studio** (`StudioPage` + `styles/studio.css`) — identity row (project name, track/clip count,
+  project length / 10-minute cap), then the transport row. Temporary engine controls live under More;
+  scratch and sound browser are 44px rail buttons that open overlay drawers without changing timeline
+  width. A zero-track project renders a centred creation card instead of an empty track-header gutter.
+- **DJ** (`DjPage` + `styles/dj.css`) — Set identity/overview at the top, then a two-pane workspace:
+  scrolling library and Set board. Row preview/add actions are quiet until hover/focus; import/export
+  live in More. An empty deck collapses to a status strip.
+- **Library** (`LibraryPage` + `styles/library.css`) — overview stats, a compact command surface for
+  ingest and search, advanced filters on demand, then a fixed-header scrolling catalog. The list loads
+  80 tracks at a time and offers explicit “load more” instead of claiming a permanent 200-row ceiling.
+- **Butler orb** (`OrbGlass` + `styles/orb-refine.css`) — a particle/plasma energy form rather than a
+  glass bubble: hard rims/reflections are removed, while the particle core, trails, state motion and
+  speaking waveform remain.
 - **Dock** — the current page's worker conversation plus its composer. Studio / DJ / library are
   collapsed on first visit; each page remembers its own state. Collapsed it becomes a 44px rail.
   A global butler route suggestion appears as a temporary route card on the current page; confirming
