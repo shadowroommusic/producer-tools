@@ -324,7 +324,14 @@ export function SettingsPage({
   return (
     <section className="sr-settings">
       <header className="sr-settings-head">
-        <h2 className="sr-settings-title">设置</h2>
+        <div>
+          <span className="sr-eyebrow">
+            <span className="sr-eyebrow-dot" />
+            CONTROL ROOM
+          </span>
+          <h2 className="sr-settings-title">设置</h2>
+          <p className="sr-settings-sub">模型、声音与工作流，全部在这台机器上管理。</p>
+        </div>
         <span className="sr-settings-meta sr-mono">
           {settings.providers.length} 个供应商 ·{" "}
           {settings.providers.reduce((count, provider) => count + provider.models.length + Object.values(provider.capabilities).reduce((inner, config) => inner + (config?.models.length ?? 0), 0), 0)} 个模型

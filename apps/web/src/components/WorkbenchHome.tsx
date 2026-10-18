@@ -5,7 +5,7 @@
  * drew the same chat twice. Here the left side answers "where was I?" instead: recent Studio
  * projects, recent conversations, and the state of the plugins.
  */
-import { IconChat, IconPlugin, IconStudio } from "./icons";
+import { IconChat, IconDj, IconLibrary, IconPlugin, IconPlus, IconStudio } from "./icons";
 import { timeAgo } from "../lib/sessions";
 import type { PluginEntry, SessionSummary } from "./Sidebar";
 import type { StudioProject } from "../lib/studio";
@@ -17,6 +17,8 @@ export function WorkbenchHome({
   onOpenProject,
   onOpenSession,
   onOpenPlugins,
+  onOpenLibrary,
+  onOpenDj,
   onCreateProject,
 }: {
   projects: StudioProject[];
@@ -25,6 +27,8 @@ export function WorkbenchHome({
   onOpenProject: (id: string) => void;
   onOpenSession: (id: string) => void;
   onOpenPlugins: () => void;
+  onOpenLibrary: () => void;
+  onOpenDj: () => void;
   onCreateProject: () => void;
 }) {
   const connected = plugins.filter((plugin) => plugin.connected).length;
@@ -32,11 +36,64 @@ export function WorkbenchHome({
   return (
     <div className="sr-page sr-workbench">
       <header className="sr-page-header">
+        <span className="sr-eyebrow">
+          <span className="sr-eyebrow-dot" />
+          CREATIVE WORKSPACE
+        </span>
         <h1 className="sr-page-title">工作台</h1>
         <p className="sr-page-sub">最近做的工程和会话。右边是对话：打字或说话，主区留给作品。</p>
       </header>
 
       <div className="sr-page-body sr-scroll">
+        <section className="sr-home-hero" aria-label="开始创作">
+          <div className="sr-home-hero-copy">
+            <span className="sr-eyebrow">
+              <span className="sr-eyebrow-dot" />
+              CREATE · IMPORT · PERFORM
+            </span>
+            <h2>把一句话，变成能播放的 demo。</h2>
+            <p>
+              在 Studio 写歌，在曲目库整理声音，在 DJ 里排一套 set；需要时直接让管家接管，它会带着当前工程上下文执行。
+            </p>
+            <div className="sr-home-actions">
+              <button type="button" className="sr-home-action sr-home-action--primary" onClick={onCreateProject}>
+                <IconPlus size={16} />
+                新建 Studio 工程
+              </button>
+              <button type="button" className="sr-home-action" onClick={onOpenLibrary}>
+                <IconLibrary size={16} />
+                曲目库
+              </button>
+              <button type="button" className="sr-home-action" onClick={onOpenDj}>
+                <IconDj size={16} />
+                排 DJ Set
+              </button>
+              <button type="button" className="sr-home-action" onClick={onOpenPlugins}>
+                <IconPlugin size={16} />
+                插件
+              </button>
+            </div>
+          </div>
+          <div className="sr-home-visual" aria-hidden="true">
+            <span className="sr-home-orbit sr-home-orbit--one" />
+            <span className="sr-home-orbit sr-home-orbit--two" />
+            <span className="sr-home-core">
+              <span className="sr-home-wave">
+                {Array.from({ length: 19 }, (_, index) => (
+                  <i
+                    key={index}
+                    style={{
+                      height: `${6 + ((index * 7) % 23)}px`,
+                      opacity: 0.38 + ((index * 3) % 5) * 0.1,
+                      animationDelay: `${index * -73}ms`,
+                    }}
+                  />
+                ))}
+              </span>
+            </span>
+          </div>
+        </section>
+
         <section className="sr-page-section">
           <div className="sr-page-section-head">
             <h2 className="sr-page-section-title">最近的工程</h2>

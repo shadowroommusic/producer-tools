@@ -304,8 +304,18 @@ const dragOrbTo = async (targetX, targetY) => {
         const a = pixels(imgs[modes[i]]);
         const b = pixels(imgs[modes[j]]);
         let sum = 0;
-        for (let p = 0; p < a.length; p += 1) sum += Math.abs(a[p] - b[p]);
-        out.push([modes[i], modes[j], sum / a.length]);
+        let count = 0;
+        const radius = capture / 2;
+        for (let p = 0; p < a.length; p += 4) {
+          const pixel = p / 4;
+          const x = pixel % capture;
+          const y = Math.floor(pixel / capture);
+          // Measure the orb disc, not the page texture in the four corners.
+          if (Math.hypot(x + 0.5 - radius, y + 0.5 - radius) > radius) continue;
+          sum += Math.abs(a[p] - b[p]) + Math.abs(a[p + 1] - b[p + 1]) + Math.abs(a[p + 2] - b[p + 2]);
+          count += 1;
+        }
+        out.push([modes[i], modes[j], sum / Math.max(1, count) / 3]);
       }
     }
     return out;

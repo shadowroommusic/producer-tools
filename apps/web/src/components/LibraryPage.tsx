@@ -535,6 +535,16 @@ export function LibraryPage() {
 
   return (
     <div className="sr-lib">
+      <header className="sr-compact-page-head">
+        <div>
+          <span className="sr-eyebrow">
+            <span className="sr-eyebrow-dot" />
+            SOUND LIBRARY
+          </span>
+          <h1>曲目库</h1>
+          <p>扫描、分析与理解你的声音资产，再把它们带进 Studio 或 DJ。</p>
+        </div>
+      </header>
       <div className="sr-lib-topbar">
         <input
           className="sr-input sr-lib-scanpath"

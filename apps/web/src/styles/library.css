@@ -425,6 +425,41 @@
   }
 }
 
+[data-theme="light"] .sr-lib-topbar,
+[data-theme="light"] .sr-lib-board,
+[data-theme="light"] .sr-lib-list,
+[data-theme="light"] .sr-lib-dupreport {
+  border-color: rgb(10 11 9 / 10%);
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 84%), rgb(238 243 232 / 72%)),
+    #f5f8f2;
+  box-shadow: inset 0 1px rgb(255 255 255 / 85%);
+}
+
+[data-theme="light"] .sr-lib-tile {
+  border-color: rgb(10 11 9 / 8%);
+  background: rgb(255 255 255 / 48%);
+}
+
+[data-theme="light"] .sr-lib-row:hover {
+  border-color: rgb(10 11 9 / 8%);
+  background: rgb(10 11 9 / 4%);
+}
+
+[data-theme="light"] .sr-lib-row[data-selected] {
+  border-color: rgb(117 147 0 / 26%);
+  background: linear-gradient(90deg, rgb(156 190 0 / 13%), transparent);
+}
+
+[data-theme="light"] .sr-lib-rowmenu,
+[data-theme="light"] .sr-lib-dialog {
+  border-color: rgb(10 11 9 / 12%);
+  background:
+    radial-gradient(320px 180px at 20% 0%, rgb(217 255 61 / 16%), transparent 70%),
+    #fbfcf8;
+  box-shadow: 0 24px 64px rgb(10 11 9 / 18%);
+}
+
 /* 封面显示位（预留：二期嵌入封面 / cover.jpg，存 _library/covers/<id>.jpg）。 */
 .sr-lib-cover {
   flex: none;
@@ -972,4 +1007,161 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* UI v7 — library surface */
+.sr-lib {
+  gap: 14px;
+  padding: 18px 20px 20px;
+}
+
+.sr-lib .sr-compact-page-head {
+  margin: 0 2px;
+}
+
+.sr-lib-topbar {
+  padding: 10px 12px;
+  border: 1px solid rgb(217 255 61 / 8%);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 2.4%), transparent 62%),
+    rgb(9 15 11 / 78%);
+  box-shadow: inset 0 1px rgb(255 255 255 / 2%);
+}
+
+.sr-lib-topbar .sr-lib-scanpath {
+  height: 36px;
+}
+
+.sr-lib-linkage {
+  padding: 3px 8px;
+  border: 1px solid rgb(217 255 61 / 7%);
+  border-radius: var(--sr-radius-pill);
+  background: rgb(217 255 61 / 3%);
+}
+
+.sr-lib-board,
+.sr-lib-list,
+.sr-lib-dupreport {
+  border: 1px solid rgb(217 255 61 / 8%);
+  border-radius: 16px;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 2.2%), transparent 54%),
+    rgb(9 15 11 / 76%);
+  box-shadow: inset 0 1px rgb(255 255 255 / 1.8%);
+}
+
+.sr-lib-board {
+  padding: 14px;
+}
+
+.sr-lib-tile {
+  border: 1px solid rgb(217 255 61 / 8%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 1.8%);
+}
+
+.sr-lib-tile-num {
+  color: var(--sr-accent);
+  font-size: 20px;
+  font-weight: 600;
+  text-shadow: 0 0 16px rgb(217 255 61 / 18%);
+}
+
+.sr-lib-main {
+  gap: 14px;
+}
+
+.sr-lib-list {
+  padding: 14px;
+}
+
+.sr-lib-filters {
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgb(217 255 61 / 6%);
+}
+
+.sr-lib-filters .sr-input {
+  height: 33px;
+}
+
+.sr-lib-rows {
+  gap: 1px;
+}
+
+.sr-lib-row {
+  min-height: 43px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  transition:
+    background var(--sr-dur-fast),
+    border-color var(--sr-dur-fast),
+    transform var(--sr-dur-fast);
+}
+
+.sr-lib-row:hover {
+  border-color: rgb(217 255 61 / 7%);
+  background: rgb(217 255 61 / 4.5%);
+}
+
+.sr-lib-row[data-selected] {
+  border-color: rgb(217 255 61 / 24%);
+  background:
+    linear-gradient(90deg, rgb(217 255 61 / 9%), transparent);
+  outline: none;
+  box-shadow: inset 2px 0 var(--sr-accent);
+}
+
+.sr-lib-row-cover {
+  width: 31px;
+  height: 31px;
+  border: 1px solid rgb(255 255 255 / 5%);
+  border-radius: 8px;
+  background: rgb(217 255 61 / 4%);
+}
+
+.sr-lib-row-cover--ph,
+.sr-lib-row-cover--none {
+  background:
+    radial-gradient(circle, rgb(217 255 61 / 13%) 0 18%, transparent 20%),
+    linear-gradient(135deg, rgb(217 255 61 / 5%), rgb(255 255 255 / 1%));
+}
+
+.sr-lib-row-title {
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.sr-lib-row-source {
+  border: 1px solid rgb(217 255 61 / 7%);
+  background: rgb(217 255 61 / 3%);
+}
+
+.sr-lib-rowmenu,
+.sr-lib-dialog {
+  border: 1px solid rgb(217 255 61 / 16%);
+  background:
+    radial-gradient(320px 180px at 20% 0%, rgb(217 255 61 / 6%), transparent 70%),
+    #0c130f;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 58%);
+}
+
+@container (max-width: 420px) {
+  .sr-lib-row {
+    align-items: center;
+    row-gap: 3px;
+  }
+
+  .sr-lib-row-title {
+    flex-basis: calc(100% - 42px);
+  }
+
+  .sr-lib-row-bpm {
+    margin-left: 41px;
+  }
+
+  .sr-lib-row-artist {
+    max-width: 12ch;
+  }
 }

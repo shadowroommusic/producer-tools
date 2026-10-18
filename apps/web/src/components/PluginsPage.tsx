@@ -32,6 +32,10 @@ export function PluginsPage({
   return (
     <div className="sr-page">
       <header className="sr-page-header">
+        <span className="sr-eyebrow">
+          <span className="sr-eyebrow-dot" />
+          MCP TOOLBOX
+        </span>
         <h1 className="sr-page-title">插件</h1>
         <p className="sr-page-sub">在你的工作台里使用 ShadowRoom 的工具</p>
         <input

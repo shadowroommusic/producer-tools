@@ -751,6 +751,16 @@ export function DjPage() {
 
   return (
     <div className="sr-dj">
+      <header className="sr-compact-page-head">
+        <div>
+          <span className="sr-eyebrow">
+            <span className="sr-eyebrow-dot" />
+            PERFORMANCE
+          </span>
+          <h1>DJ</h1>
+          <p>从曲目库搭一套 set；推荐、排序、Cue 与导出都留在同一条工作流里。</p>
+        </div>
+      </header>
       <div className="sr-dj-topbar">
         <input
           className="sr-input"

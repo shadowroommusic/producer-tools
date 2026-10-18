@@ -50,6 +50,10 @@ export function StudioProjects({
   return (
     <div className="sr-page">
       <header className="sr-page-header">
+        <span className="sr-eyebrow">
+          <span className="sr-eyebrow-dot" />
+          MULTITRACK STUDIO
+        </span>
         <h1 className="sr-page-title">Studio</h1>
         <p className="sr-page-sub">多轨工程：说一句想做什么，智能体把片段排进来</p>
       </header>

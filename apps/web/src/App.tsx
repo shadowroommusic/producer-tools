@@ -2813,6 +2813,8 @@ export function App() {
               setDockOpen(false);
             }}
             onOpenPlugins={() => setMainView("plugins")}
+            onOpenLibrary={() => setMainView("library")}
+            onOpenDj={() => setMainView("dj")}
             onCreateProject={() => {
               const created = defaultProject();
               setProjects((current) => [created, ...current]);

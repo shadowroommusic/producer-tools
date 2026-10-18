@@ -12,18 +12,18 @@
   color-scheme: dark;
 
   /* static ramp */
-  --sr-ink-900: #0a0b09;
-  --sr-ink-800: #121410;
-  --sr-ink-700: #1a1d16;
-  --sr-ink-600: #1f221b;
-  --sr-hair-600: #272b21;
-  --sr-hair-500: #3b4131;
-  --sr-hair-400: #4a5240;
-  --sr-paper-100: #f2f5ec;
-  --sr-paper-200: #e6ebdd;
-  --sr-mist-300: #a8b19e;
-  --sr-mist-400: #7c866e;
-  --sr-mist-500: #646d59;
+  --sr-ink-900: #070b08;
+  --sr-ink-800: #0d130f;
+  --sr-ink-700: #121a15;
+  --sr-ink-600: #18231b;
+  --sr-hair-600: #263429;
+  --sr-hair-500: #3b4c3e;
+  --sr-hair-400: #536657;
+  --sr-paper-100: #f4f7f0;
+  --sr-paper-200: #e5ecdf;
+  --sr-mist-300: #aab6a7;
+  --sr-mist-400: #7e8c7f;
+  --sr-mist-500: #647166;
   --sr-acid-300: #e7ff70;
   --sr-acid-400: #d9ff3d;
   --sr-live-400: #4ade7b;
@@ -38,18 +38,18 @@
   --sr-surface-elevated: var(--sr-ink-700);
   --sr-input-fill: var(--sr-ink-700);
   --sr-bubble-fill: var(--sr-ink-700);
-  --sr-selector-fill: rgb(242 245 236 / 8%);
+  --sr-selector-fill: rgb(217 255 61 / 7%);
   --sr-floating-fill: var(--sr-ink-600);
 
   /* strokes — the hairline pair is translucent so it sits on any surface */
-  --sr-border-l2: rgb(242 245 236 / 11%);
-  --sr-border-l3: rgb(242 245 236 / 8%);
-  --sr-border-strong: rgb(242 245 236 / 17%);
+  --sr-border-l2: rgb(217 255 61 / 12%);
+  --sr-border-l3: rgb(217 255 61 / 8%);
+  --sr-border-strong: rgb(217 255 61 / 20%);
 
   /* interaction fills */
-  --sr-hover: rgb(242 245 236 / 6%);
+  --sr-hover: rgb(217 255 61 / 6%);
   --sr-hover-solid: var(--sr-ink-600);
-  --sr-active: rgb(242 245 236 / 10%);
+  --sr-active: rgb(217 255 61 / 10%);
 
   /* ink */
   --sr-label-primary: var(--sr-paper-100);
@@ -67,8 +67,11 @@
   --sr-focus: var(--sr-acid-400);
 
   /* elevation */
-  --sr-shadow-soft: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 28px rgb(0 0 0 / 30%);
-  --sr-shadow-panel: 0 12px 32px rgb(0 0 0 / 48%);
+  --sr-shadow-soft:
+    0 1px 1px rgb(255 255 255 / 3%) inset,
+    0 18px 46px rgb(0 0 0 / 34%),
+    0 0 0 1px rgb(217 255 61 / 3%);
+  --sr-shadow-panel: 0 24px 64px rgb(0 0 0 / 52%);
 
   /* type */
   --sr-font-sans: "Space Grotesk", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
