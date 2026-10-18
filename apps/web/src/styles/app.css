@@ -894,74 +894,8 @@
   pointer-events: none;
 }
 
-.sr-studio-transport {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-  min-height: 56px;
-  padding: 8px 16px;
-  border-bottom: var(--sr-shell-border);
-}
-
-.sr-transport-buttons {
-  display: flex;
-  flex: none;
-  gap: 6px;
-}
-
-.sr-transport-position,
-.sr-transport-fields,
-.sr-transport-field,
-.sr-transport-zoom,
-.sr-studio-back,
-.sr-studio-addtrack,
-.sr-studio-import {
-  flex: none;
-}
-
-.sr-transport-play[aria-pressed="true"] {
-  background: var(--sr-accent);
-  color: var(--sr-on-accent);
-}
-
-/* The transport never squeezes its own controls: it wraps instead. */
-.sr-transport-field .sr-input,
-.sr-transport-zoom {
-  flex: none;
-}
-
-.sr-transport-position {
-  min-width: 62px;
-  color: var(--sr-label-primary);
-  font-size: var(--sr-text-18);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-}
-
-.sr-transport-fields {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.sr-transport-field {
-  display: grid;
-  gap: 2px;
-}
-
-.sr-studio-addtrack {
-  white-space: nowrap;
-}
-
-/* A quiet note in the transport when a project is over the track cap (imports and stem
-   decomposition are allowed to overflow; adding by hand is not). */
-.sr-transport-hint {
-  flex: none;
-  color: var(--sr-warn, var(--sr-label-secondary));
-  font-size: 10px;
-}
+/* Studio 顶栏（两层：项目身份 + 走带）的样式已迁往 styles/studio.css——被替换的旧
+   transport 块在此删除，选择器的唯一真相在 studio.css。 */
 
 /* 录音: a dot that lights up while a take is running, and the two click-track toggles beside it. */
 .sr-settings {
@@ -1516,24 +1450,7 @@
   color: var(--sr-accent);
 }
 
-/* 音轨 / 导入音频 / 导出音频 are one block: they wrap together or not at all. */
-.sr-transport-actions {
-  display: flex;
-  flex: none;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.sr-studio-back {
-  flex: none;
-  padding: 0 12px;
-  border-radius: var(--sr-radius-pill);
-  white-space: nowrap;
-}
-
-.sr-studio-import {
-  white-space: nowrap;
-}
+/* 动作区 / 返回钮的旧 transport 样式已随两层顶栏迁往 styles/studio.css。 */
 
 .sr-transport-zoom {
   position: absolute;
@@ -1849,17 +1766,8 @@
   }
 }
 
-.sr-studio-timeline {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  /* A song wider than the pane used to spill under the dock and composer: the right resize
-     handle of a dragged-to-the-edge clip became ungrabable (measured: elementFromPoint at the
-     handle returned the composer card). Horizontal scroll makes the whole song reachable;
-     macOS overlay scrollbars take no layout height, so headers stay aligned. */
-  overflow-x: auto;
-  overflow-y: hidden;
-}
+/* 时间线外壳拆成了「定位层 .sr-studio-timeline + 滚动层 .sr-studio-timeline-scroll」
+   （0 轨空态 hero 要铺在可视区上、不随横向滚动跑）——两者都在 styles/studio.css。 */
 
 .sr-studio-grid {
   position: relative;
@@ -1876,26 +1784,7 @@
   border-bottom: var(--sr-shell-border);
 }
 
-/* S4（2026-09-25 巡检）：0 轨工程的空态引导——铺在网格第一行的高度上，说清内容从哪来。 */
-.sr-studio-empty {
-  padding: 28px 24px;
-  border-bottom: 0.5px dashed var(--sr-border-l2);
-}
-
-.sr-studio-empty-title {
-  margin: 0 0 6px;
-  color: var(--sr-label-primary);
-  font-size: var(--sr-text-14, 14px);
-  font-weight: 600;
-}
-
-.sr-studio-empty-hint {
-  margin: 0;
-  max-width: 520px;
-  color: var(--sr-label-caption);
-  font-size: 12px;
-  line-height: 1.6;
-}
+/* 0 轨空态改成了居中创作起点卡（.sr-studio-hero，见 styles/studio.css）。 */
 
 /* The song's shape: one block per section, sitting on top of the bar ruler. */
 .sr-studio-sections {
@@ -3308,13 +3197,7 @@
   z-index: 3;
 }
 
-.sr-transport-playmode {
-  white-space: nowrap;
-}
-
-.sr-transport-playmode[data-project] {
-  color: var(--sr-accent);
-}
+/* 播放模式开关收进走带 ⋯ 菜单（markup 已删，样式随迁 styles/studio.css）。 */
 
 /*
  * 通话字幕（2026-10-16）：球下的一行字，把「在听 / 在想 / 在说」说清楚。
@@ -4708,98 +4591,10 @@
   font-size: 11px;
 }
 
-/* ---------------------------------------------------------------- 试凑区（#bitwig-adoption A） */
-.sr-scratch-rail {
-  align-self: flex-start;
-  margin: 8px;
-  padding: 4px 10px;
-  border: 0.5px dashed var(--sr-border-strong);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--sr-text-dim);
-  cursor: pointer;
-}
-.sr-scratch {
-  flex: none;
-  width: 208px;
-  margin: 8px 0 8px 8px;
-  display: flex;
-  flex-direction: column;
-  border: 0.5px solid var(--sr-border-strong);
-  border-radius: 10px;
-  background: var(--sr-panel);
-  overflow: hidden;
-}
-.sr-scratch-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-bottom: 0.5px solid var(--sr-border-strong);
-}
-.sr-scratch-title { font-size: 12px; font-weight: 600; }
-.sr-scratch-hint {
-  margin: 0;
-  padding: 6px 8px;
-  font-size: 11px;
-  color: var(--sr-text-dim);
-  border-bottom: 0.5px solid var(--sr-border-strong);
-}
-.sr-scratch-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  overflow-y: auto;
-}
-.sr-scratch-cell {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 22px 6px 8px;
-  border: 0.5px solid var(--sr-border-strong);
-  border-radius: 8px;
-  cursor: grab;
-  user-select: none;
-}
-.sr-scratch-cell[data-playing] {
-  border-color: var(--sr-accent);
-  box-shadow: 0 0 0 0.5px var(--sr-accent) inset;
-}
-.sr-scratch-cell-name {
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sr-scratch-cell-meta { font-size: 10px; color: var(--sr-text-dim); }
-.sr-scratch-cell-remove {
-  position: absolute;
-  top: 2px;
-  right: 4px;
-  border: 0;
-  background: transparent;
-  color: var(--sr-text-dim);
-  cursor: pointer;
-}
-.sr-scratch-empty {
-  margin: 4px 0;
-  font-size: 11px;
-  color: var(--sr-text-dim);
-}
+/* ---------------------------------------------------------------- 试凑区 + 音色浏览器
+ * 两个面板都改成了覆盖式抽屉（不占轨道宽度），样式整体迁往 styles/studio.css；
+ * .sr-scratch-rail / .sr-sounds-rail 只作为 e2e 选择器钩子留在按钮类名里。 */
 
-/* 音色浏览器 rail（#bitwig-adoption D；面板本体样式内联在 StudioSoundsDrawer.tsx） */
-.sr-sounds-rail {
-  align-self: flex-start;
-  margin: 8px 8px 8px 0;
-  padding: 4px 10px;
-  border: 0.5px dashed var(--sr-border-strong);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--sr-text-dim);
-  cursor: pointer;
-}
 .sr-track-instrument {
   font-size: 10px;
   color: var(--sr-text-dim);

@@ -3,6 +3,11 @@
  * 边界循环试听（同时 ≤4 格，第 5 格顶掉最旧的），拖进时间轴才算进歌。
  * 没有 scene、follow actions、第二套音序器（裁决书 §③ 不做清单）。
  *
+ * 形态（ui/studio-refresh，2026-10-19）：覆盖式抽屉——展开层 absolute 浮在轨道头之上，
+ * 不占布局宽度（旧版是 flex 列、永久吃掉 208px，用户原话「占一大片地方不能收起来」）。
+ * 开关受控于 StudioPage（rail 按钮在页面侧），Esc / 点外部 / 头部 × 都能收起；
+ * 不给 open 时回退自管（隔离挂载/测试的老用法）。
+ *
  * 性能口径（裁决书 §② A）：格子 memo、循环元素复用不新建、启动用 setTimeout 直排（不走
  * rAF 逐帧等）、收起时整条不挂载。playhead 经 getPlayheadBars() 取，面板不跟 60fps 重渲染。
  */
@@ -30,14 +35,25 @@ type Props = {
   /** 取当前走带位置（小节，浮点）——引用式取值，避免面板跟随走带逐帧重渲染。 */
   getPlayheadBars: () => number;
   onRemove: (clipId: string) => void;
-  onCollapse?: never;
+  /** 受控展开（StudioPage 的统一左 rail 持有状态）；不给 = 自管（隔离挂载）。 */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
-function ScratchPadInner({ scratch, bpm, playing, getPlayheadBars, onRemove }: Props) {
-  const [open, setOpen] = useState(false);
+function ScratchPadInner({ scratch, bpm, playing, getPlayheadBars, onRemove, open, onOpenChange }: Props) {
+  const [selfOpen, setSelfOpen] = useState(false);
+  const isOpen = open ?? selfOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (onOpenChange !== undefined) onOpenChange(next);
+      else setSelfOpen(next);
+    },
+    [onOpenChange],
+  );
   const [slots, setSlots] = useState<LoopSlot[]>([]);
   const players = useRef(new Map<string, HTMLAudioElement>());
   const timers = useRef(new Map<string, number>());
+  const asideRef = useRef<HTMLElement | null>(null);
   /** 走带停了以后试凑区自己的时钟原点（首次打开时立）。 */
   const epoch = useRef<number | null>(null);
   const barMs = 240_000 / Math.max(1, bpm);
@@ -66,6 +82,26 @@ function ScratchPadInner({ scratch, bpm, playing, getPlayheadBars, onRemove }: P
     },
     [],
   );
+
+  /** 收起的三条出口之二/三：Esc、点抽屉外（× 是第一条）。监听只在展开时挂，收起即卸。
+      左 rail 按钮放行：它的 click 自己带开合逻辑，这里先关一次会让「点活动钮收起」失效。 */
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof HTMLElement && event.target.closest(".sr-studio-rail-btn") !== null) return;
+      const root = asideRef.current;
+      if (root !== null && event.target instanceof Node && !root.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [isOpen, setOpen]);
 
   const toggle = useCallback(
     (clip: StudioClip) => {
@@ -121,18 +157,12 @@ function ScratchPadInner({ scratch, bpm, playing, getPlayheadBars, onRemove }: P
 
   const playingIds = useMemo(() => new Set(slots.map((slot) => slot.clipId)), [slots]);
 
-  if (!open) {
-    return (
-      <button type="button" className="sr-scratch-rail sr-mono" onClick={() => setOpen(true)}>
-        试凑区{scratch.length > 0 ? ` · ${scratch.length}` : ""}
-      </button>
-    );
-  }
+  if (!isOpen) return null;
   return (
-    <aside className="sr-scratch" aria-label="试凑区">
-      <header className="sr-scratch-head">
-        <span className="sr-scratch-title">试凑区 · 候选 {scratch.length}</span>
-        <button type="button" className="sr-icon-btn" title="收起试凑区" onClick={() => setOpen(false)}>
+    <aside ref={asideRef} className="sr-studio-drawer sr-scratch" aria-label="试凑区">
+      <header className="sr-studio-drawer-head">
+        <span className="sr-studio-drawer-title">试凑区 · 候选 {scratch.length}</span>
+        <button type="button" className="sr-studio-drawer-close" title="收起试凑区" aria-label="收起试凑区" onClick={() => setOpen(false)}>
           ×
         </button>
       </header>

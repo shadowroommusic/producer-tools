@@ -1,0 +1,610 @@
+/*
+ * Studio 页专属样式（ui/studio-refresh，2026-10-19）。
+ *
+ * 为什么单独一个文件：app.css 是全 shell 共享的，Studio 这次重做（两层顶栏 / 左 rail +
+ * 覆盖式抽屉 / 0 轨创作起点）如果继续往里堆，会和别的页面的同名规则打架。这里只放
+ * Studio 新结构的样式；与 app.css 的分工是——本文件出现的选择器就是唯一真相，
+ * app.css 里被替换掉的旧 Studio 块已删（transport 旧布局、旧空态、旧试凑区）。
+ *
+ * 主题口径：只吃 ui-tokens 的语义 token（酸绿 --sr-accent + 深夜 ink 面），
+ * 不新造颜色。抽屉/卡片用 floating-fill + blur 的玻璃层，不炫技。
+ */
+
+/* ------------------------------------------------------------------ 两层顶栏 */
+
+.sr-studio .sr-studio-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  border-bottom: var(--sr-shell-border);
+  background: var(--sr-surface);
+}
+
+/* 第一层：项目身份——返回、工程名、状态、时长/上限。永远一行，工程名吃掉剩余宽度。 */
+.sr-studio .sr-studio-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 5px 12px;
+  border-bottom: var(--sr-shell-border);
+}
+
+.sr-studio .sr-studio-back {
+  flex: none;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--sr-radius-pill);
+  white-space: nowrap;
+}
+
+/* 工程名：按钮态一眼可读，点一下变输入框（改名单一入口，不另设「重命名」菜单项）。 */
+.sr-studio .sr-studio-name {
+  min-width: 0;
+  max-width: 46%;
+  padding: 2px 8px;
+  border: 0.5px solid transparent;
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-studio .sr-studio-name:hover {
+  border-color: var(--sr-border-l3);
+  background: var(--sr-hover);
+}
+
+.sr-studio .sr-studio-name-input {
+  min-width: 0;
+  width: 220px;
+  max-width: 46%;
+  padding: 2px 8px;
+  font-size: var(--sr-text-14);
+  font-weight: 650;
+}
+
+.sr-studio .sr-studio-meta {
+  flex: none;
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sr-studio .sr-studio-meta[data-recording] {
+  color: var(--sr-danger);
+}
+
+.sr-studio .sr-studio-clock {
+  flex: none;
+  margin-left: auto;
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 第二层：走带与核心参数。常用在这里，低频动作全部进 ⋯ 菜单（不换行成孤儿按钮）。 */
+.sr-studio .sr-studio-transport {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 50px;
+  padding: 7px 12px;
+}
+
+.sr-studio .sr-transport-buttons {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.sr-studio .sr-transport-position {
+  flex: none;
+  min-width: 62px;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-14);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.sr-studio .sr-transport-play[aria-pressed="true"] {
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
+}
+
+.sr-studio .sr-transport-fields {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+
+.sr-studio .sr-transport-field {
+  display: grid;
+  flex: none;
+  gap: 2px;
+}
+
+.sr-studio .sr-transport-field .sr-input {
+  flex: none;
+}
+
+.sr-studio .sr-transport-actions {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.sr-studio .sr-transport-actions .sr-btn {
+  min-height: 30px;
+  padding: 0 11px;
+  white-space: nowrap;
+}
+
+.sr-studio .sr-studio-addtrack {
+  gap: 5px;
+}
+
+.sr-studio .sr-transport-hint {
+  flex: none;
+  align-self: center;
+  color: var(--sr-warn, var(--sr-label-secondary));
+  font-size: 10px;
+}
+
+/* ⋯ 菜单沿用 sr-menu 语法（conversation.css 定义底座），这里只管 Studio 侧的定位。 */
+.sr-studio .sr-more-menu {
+  position: fixed;
+  z-index: 41;
+  width: 250px;
+  bottom: auto;
+  overflow-y: auto;
+}
+
+/* ⋯ 菜单里的分组线：导入/裁剪与录音开关之间的呼吸。 */
+.sr-studio .sr-more-sep {
+  height: 0.5px;
+  margin: 6px 6px 4px;
+  background: var(--sr-border-l3);
+}
+
+/* ------------------------------------------------------------------ 左 rail */
+
+/*
+ * 左侧只剩一条窄 rail（44px）：试凑区/音色浏览器从这里展开成覆盖式抽屉。
+ * 旧版试凑区展开后是 flex 列（永久占 208px 轨道宽度）——用户原话「占一大片地方
+ * 不能收起来」，根因就在这；现在展开层全部 absolute，不占任何布局宽度。
+ */
+.sr-studio .sr-studio-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 44px;
+  padding: 8px 5px;
+  border-right: var(--sr-shell-border);
+  background: var(--sr-surface);
+}
+
+.sr-studio .sr-studio-rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 4px 2px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), color var(--sr-dur-fast) var(--sr-ease),
+    border-color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-studio .sr-studio-rail-btn:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+.sr-studio .sr-studio-rail-btn[data-on] {
+  border-color: var(--sr-accent);
+  color: var(--sr-accent);
+  background: var(--sr-selector-fill);
+}
+
+.sr-studio .sr-studio-rail-badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--sr-radius-pill);
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+}
+
+/* ------------------------------------------------------- 覆盖式抽屉（通用底座） */
+
+/*
+ * 抽屉浮在轨道头/时间线之上（.sr-studio-body 是定位锚），不参与 flex 分宽。
+ * 宽度上限随容器收缩：低分辨率下盖住的空间不超一半，空态主 CTA 仍让得开。
+ * 注意：不 scoped 在 .sr-studio 下——音色浏览器会被 e2e 隔离挂载（脱离本页），
+ * 样式要能独立成立。
+ */
+.sr-studio-drawer {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: calc(44px + 6px);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: min(248px, 56%);
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: var(--sr-radius-md);
+  background: var(--sr-floating-fill);
+  box-shadow: var(--sr-shadow-panel);
+  overflow: hidden;
+}
+
+.sr-studio-drawer-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 0.5px solid var(--sr-border-strong);
+}
+
+.sr-studio-drawer-title {
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sr-studio-drawer-count {
+  flex: none;
+  color: var(--sr-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-studio-drawer-close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--sr-radius-xs);
+}
+
+.sr-studio-drawer-close:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+/* ------------------------------------------------------------------ 试凑区 */
+
+.sr-scratch-hint {
+  flex: none;
+  margin: 0;
+  padding: 6px 8px;
+  border-bottom: 0.5px solid var(--sr-border-strong);
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+}
+
+.sr-scratch-grid {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.sr-scratch-cell {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 22px 6px 8px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  cursor: grab;
+  user-select: none;
+}
+
+.sr-scratch-cell:hover {
+  border-color: var(--sr-border-strong);
+}
+
+.sr-scratch-cell[data-playing] {
+  border-color: var(--sr-accent);
+  box-shadow: 0 0 0 0.5px var(--sr-accent) inset;
+}
+
+.sr-scratch-cell-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-scratch-cell-meta {
+  color: var(--sr-label-tertiary);
+  font-size: 10px;
+}
+
+.sr-scratch-cell-remove {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--sr-radius-xs);
+}
+
+.sr-scratch-cell-remove:hover {
+  background: var(--sr-hover);
+  color: var(--sr-label-primary);
+}
+
+.sr-scratch-empty {
+  margin: 4px 0;
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------------ 音色浏览器 */
+
+/*
+ * 隔离挂载（e2e Stage-1 / 测试）下的 rail 按钮：本页生产路径由 StudioPage 的统一左 rail
+ * 渲染（.sr-studio-rail-btn，同时带 .sr-sounds-rail 类名给 e2e 选择器），这里只给脱离
+ * 本页的自管形态兜底——:not() 挡开，兜底的 margin/虚线边不渗进统一 rail。全局作用域。
+ */
+.sr-sounds-rail:not(.sr-studio-rail-btn) {
+  align-self: flex-start;
+  margin: 8px;
+  padding: 4px 10px;
+  border: 0.5px dashed var(--sr-border-strong);
+  border-radius: var(--sr-radius-sm);
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  cursor: pointer;
+}
+
+.sr-sounds-tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 0.5px solid var(--sr-border-strong);
+}
+
+.sr-sounds-tab {
+  flex: 1;
+  padding: 3px 0;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  cursor: pointer;
+  font-size: 11px;
+  transition: background-color var(--sr-dur-fast) var(--sr-ease), border-color var(--sr-dur-fast) var(--sr-ease),
+    color var(--sr-dur-fast) var(--sr-ease);
+}
+
+.sr-sounds-tab[aria-selected="true"] {
+  border-color: var(--sr-accent);
+  background: var(--sr-selector-fill);
+  color: inherit;
+}
+
+.sr-sounds-search {
+  flex: none;
+  margin: 6px 8px;
+  padding: 3px 8px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+}
+
+.sr-sounds-search:focus {
+  border-color: var(--sr-accent);
+  outline: none;
+}
+
+.sr-sounds-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+}
+
+.sr-sounds-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: var(--sr-radius-sm);
+  background: var(--sr-surface-2);
+  cursor: grab;
+  user-select: none;
+  /* 首帧 ≤16ms 的物理手段：屏外行跳过排版（DOM 还在，选择器/count 不受影响），
+     contain-intrinsic 给占位尺寸防滚动条抖动。 */
+  content-visibility: auto;
+  contain-intrinsic-width: auto 200px;
+}
+
+.sr-sounds-row[data-playing] {
+  border-color: var(--sr-accent);
+  box-shadow: 0 0 0 0.5px var(--sr-accent) inset;
+}
+
+.sr-sounds-program {
+  flex: none;
+  width: 28px;
+  color: var(--sr-label-tertiary);
+  font-family: var(--sr-font-mono);
+  font-size: 10px;
+}
+
+.sr-sounds-name {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-sounds-hint {
+  max-width: 90px;
+  color: var(--sr-label-tertiary);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-sounds-empty {
+  margin: 4px 0;
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------- 0 轨创作起点 */
+
+/*
+ * 0 轨时轨道头列整个不渲染，时间线吃满宽；空态做成时间线上的居中玻璃卡
+ * （真正的创作起点：工程名 + 三个动作 CTA + 管家入口），不再是网格左上角一段说明文字。
+ * hero 挂在滚动容器外的定位层上，横向滚动时保持居中。
+ */
+.sr-studio .sr-studio-hero {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  pointer-events: none;
+}
+
+/* 左抽屉展开时把居中点右移，低分辨率下 CTA 不被盖住（宽度口径与 .sr-studio-drawer 一致）。 */
+.sr-studio .sr-studio-body[data-left-drawer] .sr-studio-hero {
+  padding-left: calc(min(248px, 56%) + 20px);
+}
+
+.sr-studio .sr-studio-hero-card {
+  display: grid;
+  gap: 14px;
+  width: min(440px, 100%);
+  padding: 26px 28px;
+  border: 0.5px solid var(--sr-border-strong);
+  border-radius: var(--sr-radius-card);
+  background: color-mix(in srgb, var(--sr-surface-elevated) 88%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--sr-shadow-panel);
+  pointer-events: auto;
+}
+
+.sr-studio .sr-studio-hero-eyebrow {
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.sr-studio .sr-studio-hero-name {
+  margin: 0;
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-26);
+  font-weight: 700;
+  line-height: var(--sr-line-26);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-studio .sr-studio-hero-hint {
+  margin: 0;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.sr-studio .sr-studio-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sr-studio .sr-studio-hero-actions .sr-btn {
+  flex: 1 1 auto;
+  min-width: 104px;
+}
+
+.sr-studio .sr-studio-hero-butler {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sr-border-l3);
+  color: var(--sr-label-tertiary);
+  font-size: 11px;
+}
+
+.sr-studio .sr-studio-hero-butler .sr-btn {
+  flex: none;
+}
+
+/* ----------------------------------------------- 时间线外壳（滚动层与定位层拆开） */
+
+.sr-studio .sr-studio-timeline {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.sr-studio .sr-studio-timeline-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}

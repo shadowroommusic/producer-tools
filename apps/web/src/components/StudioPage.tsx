@@ -65,6 +65,9 @@ import { peaksFor } from "../lib/waveform";
 import { createMetronome } from "../lib/metronome";
 import { acquireMicrophone, releaseMicrophone } from "../lib/mic";
 import { PianoRoll } from "./PianoRoll";
+/* Studio 专属样式单独成文件（不进 app.css），这里引入一次即可生效于全页。
+   分工见文件头注释：本文件出现的选择器即唯一真相。 */
+import "../styles/studio.css";
 
 /** Pixels per bar at zoom 1. */
 const BAR_PX = 56;
@@ -95,6 +98,9 @@ function formatClock(seconds: number): string {
   const rest = safe % 60;
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
+
+/** 左抽屉开关的会话记忆键（sessionStorage：本次会话记住，关标签页即忘）。 */
+const LEFT_DRAWER_KEY = "shadowroom.studio.leftdrawer";
 
 /** One container the generator can write, as `list_export_formats` reports it. */
 export type ExportFormat = { id: string; extension: string; lossy: boolean; available: boolean; via: string };
@@ -267,6 +273,31 @@ export function StudioPage({
   const [countIn, setCountIn] = useState(() => window.localStorage.getItem("shadowroom.countin") !== "off");
   const [dragging, setDragging] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
+  /**
+   * 左侧抽屉（试凑区 / 音色浏览器）：同一时刻最多展开一个（再开另一个会把它收掉），
+   * 状态用 sessionStorage 记住——同一会话内切页/切工程回来还是原样，关标签页即忘。
+   * 「本次会话记住」是用户要求；不写 localStorage，避免把展开态固化成跨会话的默认。
+   */
+  const [leftDrawer, setLeftDrawer] = useState<"scratch" | "sounds" | null>(() => {
+    try {
+      const saved = window.sessionStorage.getItem(LEFT_DRAWER_KEY);
+      return saved === "scratch" || saved === "sounds" ? saved : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(LEFT_DRAWER_KEY, leftDrawer ?? "");
+    } catch {
+      /* 隐私模式等存不进就算了：开关本身照常工作，只是不跨页记住 */
+    }
+  }, [leftDrawer]);
+  /** 走带 ⋯ 菜单（低频动作的家）：锚点随按钮，Esc/点背景/点选项都收。 */
+  const [moreOpen, setMoreOpen] = useState<{ x: number; y: number } | null>(null);
+  /** 工程名就地编辑（第一层顶栏点名字进入；Enter/失焦提交，Esc 取消）。 */
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportKind, setExportKind] = useState<"mix" | "stems" | "midi">("mix");
   const [sampleRate, setSampleRate] = useState(44100);
@@ -1083,6 +1114,51 @@ export function StudioPage({
   const totalLabel = formatClock(project.bars * secondsPerBar);
   const positionLabel = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
   const grid = useMemo(() => Array.from({ length: project.bars }, (_, bar) => bar), [project.bars]);
+  /** 第一层身份栏的状态读数：轨道/片段数（录音时让位给计时，那是更要紧的状态）。 */
+  const clipCount = project.tracks.reduce((count, track) => count + track.clips.length, 0);
+  /** 工程名就地提交：空名不落盘（保持旧名），没改名不走撤销栈。 */
+  const commitName = () => {
+    const next = titleDraft.trim();
+    setTitleEditing(false);
+    if (next === "" || next === project.name) return;
+    onBeginEdit?.();
+    onChange((current) => ({ ...current, name: next }));
+  };
+  /**
+   * 「让管家来做」的 App 接线点（ui/studio-refresh）。本页不能 import App、也不该碰它的
+   * 会话状态，事件是唯一通道。App 侧接法（App.tsx，一行注册）：
+   *   window.addEventListener("shadowroom:butler-start", (event) => {
+   *     event.preventDefault(); // 告诉 Studio：有人接了
+   *     // 打开 butler 会话（悬浮球面板或对话页），可用 detail.projectName 预填草稿，如
+   *     // 「在工程《…》里帮我起个 demo」。
+   *   });
+   * 没人 preventDefault 时（当前 App 还没接），这里如实说没接上并指路悬浮球——
+   * 不假装已交付（按钮点了必须有真实结果）。
+   */
+  const callButler = () => {
+    // cancelable: true 是协议的一部分——没有它 preventDefault 不生效，dispatchEvent 恒返回
+    // true，App 永远没法说「这条我接了」（截图验收抓到过：监听器接了事件、页面还在报没接上）。
+    const taken = !window.dispatchEvent(
+      new CustomEvent("shadowroom:butler-start", {
+        cancelable: true,
+        detail: { from: "studio-empty", projectId: project.id, projectName: project.name, intent: "make-music" },
+      }),
+    );
+    say(
+      taken
+        ? "已交给管家——接着在悬浮球里说想要什么。"
+        : "管家直连还没接上：先点右下角悬浮球（或右侧对话栏）直接跟它说。",
+    );
+  };
+  /** ⋯ 菜单的 Esc 出口（点背景/点选项是另外两条）。 */
+  useEffect(() => {
+    if (moreOpen === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreOpen(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [moreOpen]);
 
   return (
     <div
@@ -1111,10 +1187,52 @@ export function StudioPage({
           <span>松手即导入 —— 每个文件会新建一条音轨</span>
         </div>
       )}
-      <header className="sr-studio-transport">
-        <button type="button" className="sr-btn sr-studio-back" onClick={onClose} title="回到工程列表">
-          ‹ 工程
-        </button>
+      {/* 顶栏分两层：第一层说「这是哪个工程、现在什么状态、还剩多长」，第二层是走带与
+          核心参数。以前只有一行，工程名没地方放（只剩「‹ 工程」一个返回钮），动作全挤在
+          一行里换行成灾；分层的依据是使用频率——身份看一眼，走带天天按。 */}
+      <header className="sr-studio-head">
+        <div className="sr-studio-topbar">
+          <button type="button" className="sr-btn sr-studio-back" onClick={onClose} title="回到工程列表">
+            ‹ 工程
+          </button>
+          {titleEditing ? (
+            <input
+              className="sr-input sr-studio-name-input"
+              autoFocus
+              value={titleDraft}
+              aria-label="工程名"
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onBlur={commitName}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setTitleEditing(false);
+                if (event.key === "Enter") commitName();
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="sr-studio-name"
+              title="点一下改工程名"
+              onClick={() => {
+                setTitleDraft(project.name);
+                setTitleEditing(true);
+              }}
+            >
+              {project.name}
+            </button>
+          )}
+          <span
+            className="sr-studio-meta sr-mono"
+            data-recording={recording !== null || undefined}
+            title={recording !== null ? "录音进行中" : "轨道数 · 片段数"}
+          >
+            {recording !== null ? `录音中 ${(recordingMs / 1000).toFixed(1)}s` : `${project.tracks.length} 轨 · ${clipCount} 片段`}
+          </span>
+          <span className="sr-studio-clock sr-mono" title={`工程长度 ${totalLabel} · 一首歌最长 10 分钟`}>
+            {totalLabel} / {formatClock(MAX_SONG_SECONDS)}
+          </span>
+        </div>
+        <div className="sr-studio-transport">
         <div className="sr-transport-buttons">
           <button
             type="button"
@@ -1150,22 +1268,10 @@ export function StudioPage({
             <IconRedo size={16} />
           </button>
         </div>
-        <div className="sr-transport-position sr-mono" title={`第 ${positionLabel} 小节 · 上限 10:00`}>
-          {positionLabel} · {elapsedLabel} / {totalLabel}
+        {/* 走带读数只报「现在在哪」；总时长/10 分钟上限在第一层身份栏，两处不重复。 */}
+        <div className="sr-transport-position sr-mono" title={`第 ${positionLabel} 小节 · 工程总长 ${totalLabel}`}>
+          {positionLabel} · {elapsedLabel}
         </div>
-        <button
-          type="button"
-          className="sr-btn sr-transport-playmode"
-          data-project={playMode === "project" || undefined}
-          title={
-            playMode === "content"
-              ? "播到内容末尾就停（默认）。点一下切换成播完整工程网格"
-              : "播完整工程网格（越过内容循环）。点一下切回播到内容末尾"
-          }
-          onClick={() => setPlayMode((mode) => (mode === "content" ? "project" : "content"))}
-        >
-          {playMode === "content" ? "播到内容末尾" : "播到工程末尾"}
-        </button>
         <div className="sr-transport-fields">
           <label className="sr-transport-field">
             <span className="sr-field-label sr-mono">BPM</span>
@@ -1265,34 +1371,6 @@ export function StudioPage({
             <span className="sr-rec-dot" aria-hidden="true" />
             {recording === null ? "录音" : `停止 ${(recordingMs / 1000).toFixed(1)}s`}
           </button>
-          {/* The other two ways in: reference a path, or the machine's own file dialog. */}
-          <button
-            type="button"
-            className="sr-btn sr-studio-import-more"
-            aria-label="更多导入方式"
-            aria-expanded={importOpen}
-            title="更多导入方式：粘贴路径 / 从磁盘选取"
-            onClick={() => setImportOpen((open) => !open)}
-          >
-            ⋯
-          </button>
-          <button
-            type="button"
-            className="sr-btn sr-studio-trim"
-            disabled={contentEndBars >= project.bars}
-            title={
-              contentEndBars >= project.bars
-                ? "工程长度已经和内容一致"
-                : `把工程从 ${project.bars} 小节裁到内容末尾（${Math.round(contentEndBars)} 小节）——⌘Z 可撤销`
-            }
-            onClick={() => {
-              const target = Math.max(1, Math.ceil(contentEndBars));
-              onChange((current) => ({ ...current, bars: target }));
-              say(`工程裁到 ${target} 小节（⌘Z 可撤销）`);
-            }}
-          >
-            裁剪到内容末尾
-          </button>
           <button
             type="button"
             className="sr-btn sr-studio-export"
@@ -1312,6 +1390,24 @@ export function StudioPage({
           >
             导出音频
           </button>
+          {/* 低频动作的家：粘贴路径导入 / 从磁盘选取 / 裁剪工程 / 节拍器 / 预备拍 / 播放模式。
+              以前这些全铺在走带行里（还有一颗单独的「更多导入 ⋯」），1240px 以下开始互相挤——
+              层级归拢后走带行只剩天天按的东西。 */}
+          <button
+            type="button"
+            className="sr-btn sr-studio-more"
+            aria-label="更多操作"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen !== null}
+            title="更多操作：粘贴路径导入 / 从磁盘选取 / 裁剪工程 / 节拍器 / 预备拍 / 播放模式"
+            onClick={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
+              setMoreOpen({ x: Math.max(8, box.right - 250), y: box.bottom + 6 });
+            }}
+          >
+            ⋯
+          </button>
+        </div>
         </div>
       </header>
 
@@ -1483,36 +1579,6 @@ export function StudioPage({
             从磁盘选取…
           </button>
           <span className="sr-field-label sr-mono">每个文件会新建一条同名音轨</span>
-          {/* Recording settings, kept out of the transport row so the row stays one line. */}
-          <button
-            type="button"
-            className="sr-btn sr-studio-click"
-            aria-pressed={metronomeOn}
-            data-on={metronomeOn || undefined}
-            onClick={() =>
-              setMetronomeOn((on) => {
-                /**
-                 * Switching it off has to switch it off *now*: a toggle that only affects the next
-                 * take, while the current one keeps clicking, is a switch that lies.
-                 */
-                if (on) stopClicks();
-                return !on;
-              })
-            }
-            title="节拍器：录音时按 BPM 打点（click 走音频时钟，不会被录进麦克风）"
-          >
-            ♩ 节拍器 {metronomeOn ? "开" : "关"}
-          </button>
-          <button
-            type="button"
-            className="sr-btn sr-studio-click"
-            aria-pressed={countIn}
-            data-on={countIn || undefined}
-            onClick={() => setCountIn((on) => !on)}
-            title="预备拍：按录音后先打 4 拍再开始，避免第一拍被切掉"
-          >
-            预备拍 {countIn ? "开" : "关"}
-          </button>
         </div>
       )}
 
@@ -1537,8 +1603,44 @@ export function StudioPage({
         </div>
       )}
 
-      <div className="sr-studio-body">
+      <div className="sr-studio-body" data-left-drawer={leftDrawer ?? undefined}>
+        {/*
+          左 rail：试凑区/音色浏览器的唯一入口，44px 窄条常驻。展开是覆盖式抽屉（组件内部
+          absolute），不占轨道宽度；同一时刻只展开一个，展开态在本次会话里记住（见 leftDrawer）。
+          两个按钮同时带 .sr-scratch-rail / .sr-sounds-rail 类名——e2e 脚本按这两个类名点击。
+        */}
+        <div className="sr-studio-rail">
+          <button
+            type="button"
+            className="sr-studio-rail-btn sr-scratch-rail"
+            aria-label="试凑区"
+            aria-pressed={leftDrawer === "scratch"}
+            data-on={leftDrawer === "scratch" || undefined}
+            title="试凑区：AI 给的候选先放这里循环试听，拖进轨道才进歌"
+            onClick={() => setLeftDrawer((current) => (current === "scratch" ? null : "scratch"))}
+          >
+            <span aria-hidden="true">试凑</span>
+            {(project.scratch ?? []).length > 0 && (
+              <span className="sr-studio-rail-badge sr-mono" aria-hidden="true">
+                {(project.scratch ?? []).length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            className="sr-studio-rail-btn sr-sounds-rail"
+            aria-label="音色浏览器"
+            aria-pressed={leftDrawer === "sounds"}
+            data-on={leftDrawer === "sounds" || undefined}
+            title="音色浏览器：GM 音色与 imports/ 采样——点=试听，拖到轨道=用上"
+            onClick={() => setLeftDrawer((current) => (current === "sounds" ? null : "sounds"))}
+          >
+            <span aria-hidden="true">音色</span>
+          </button>
+        </div>
         <StudioScratchPad
+          open={leftDrawer === "scratch"}
+          onOpenChange={(open) => setLeftDrawer(open ? "scratch" : null)}
           scratch={project.scratch ?? []}
           bpm={project.bpm}
           playing={playing}
@@ -1548,7 +1650,14 @@ export function StudioPage({
             onChange((current) => removeScratchClip(current, clipId));
           }}
         />
-        <StudioSoundsDrawer notePlayer={notePlayer.current} />
+        <StudioSoundsDrawer
+          open={leftDrawer === "sounds"}
+          onOpenChange={(open) => setLeftDrawer(open ? "sounds" : null)}
+          notePlayer={notePlayer.current}
+        />
+        {/* 0 轨时轨道头列整个不渲染：时间线吃满宽，不留一大块无标签的空白列；
+            有轨时它是常驻的（轨道头不能被抽屉顶掉，抽屉只盖在上面）。 */}
+        {project.tracks.length > 0 && (
         <div className="sr-studio-headers">
           <div className="sr-studio-headers-top" />
           <div className="sr-studio-headers-scroll sr-scroll">
@@ -1738,8 +1847,11 @@ export function StudioPage({
             })}
           </div>
         </div>
+        )}
 
-        <div className="sr-studio-timeline sr-scroll">
+        {/* 外层管定位（空态 hero 铺在可视区上，不随横向滚动跑），内层管滚动。 */}
+        <div className="sr-studio-timeline">
+          <div className="sr-studio-timeline-scroll sr-scroll">
           <div
             className="sr-studio-grid"
             data-sections={project.sections !== undefined && project.sections.length > 0 ? true : undefined}
@@ -1799,15 +1911,6 @@ export function StudioPage({
                 aria-hidden="true"
               />
             ))}
-            {project.tracks.length === 0 ? (
-              <div className="sr-studio-empty" role="note">
-                <p className="sr-studio-empty-title">这是一个空工程（0 轨）</p>
-                <p className="sr-studio-empty-hint">
-                  用上方「导入音频」把文件拖进来、按「录音」录一段，或让管家说一句渲染一句。
-                  音轨只从真实内容长出来，不再默认铺三条空轨（S4，2026-09-25 巡检）。
-                </p>
-              </div>
-            ) : null}
             {project.tracks.map((track, laneIndex) => (
               <div
                 key={track.id}
@@ -1944,6 +2047,64 @@ export function StudioPage({
             )}
             <div className="sr-playhead" style={{ left: playhead * barPx }} aria-hidden="true" />
           </div>
+          </div>
+          {/*
+            0 轨空态 = 创作起点，不是说明文字（S4 的旧版只是一段 hint）。居中玻璃卡报出工程名，
+            三个动作 CTA + 管家入口都能真的点：导入开文件选择器、新建音轨开加轨菜单、
+            打开音色展开左抽屉、让管家来做派 shadowroom:butler-start（接线点见 callButler）。
+            Studio 保持「快速出 demo」定位：这里不出现任何专业 DAW 概念。
+          */}
+          {project.tracks.length === 0 && (
+            <div className="sr-studio-hero" role="note">
+              <div className="sr-studio-hero-card">
+                <p className="sr-studio-hero-eyebrow sr-mono">空工程 · 0 轨</p>
+                <h2 className="sr-studio-hero-name">{project.name}</h2>
+                <p className="sr-studio-hero-hint">
+                  从哪步开始都行：导入现成音频、开一条音轨录音或写音符、挑一个音色，
+                  或者把文件直接拖进窗口。音轨只从真实内容长出来，不预铺空轨。
+                </p>
+                <div className="sr-studio-hero-actions">
+                  <button
+                    type="button"
+                    className="sr-btn sr-btn--accent"
+                    onClick={() => filePicker.current?.click()}
+                    title="选择文件（可多选）——也可以直接把文件拖进窗口"
+                  >
+                    导入音频
+                  </button>
+                  <button
+                    type="button"
+                    className="sr-btn sr-studio-addtrack"
+                    disabled={project.tracks.length >= MAX_TRACKS}
+                    aria-haspopup="menu"
+                    aria-expanded={trackMenu !== null}
+                    title={`加一条音轨（上限 ${MAX_TRACKS}）`}
+                    onClick={(event) => {
+                      const box = event.currentTarget.getBoundingClientRect();
+                      setTrackMenu({ x: box.left, y: box.bottom + 6 });
+                    }}
+                  >
+                    <IconPlus size={14} />
+                    新建音轨
+                  </button>
+                  <button
+                    type="button"
+                    className="sr-btn"
+                    title="GM 音色与 imports/ 采样——点=试听，拖到轨道=用上"
+                    onClick={() => setLeftDrawer("sounds")}
+                  >
+                    打开音色
+                  </button>
+                </div>
+                <div className="sr-studio-hero-butler">
+                  <button type="button" className="sr-btn" onClick={callButler} title="让管家（悬浮球）来搭第一版">
+                    让管家来做
+                  </button>
+                  <span>跟它说一句想要什么，它来起第一版</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         {/* Zoom rides the timeline's bottom-right corner, the way DAWs park it. */}
         <div className="sr-transport-zoom">
@@ -1998,6 +2159,123 @@ export function StudioPage({
       )}
 
       {/* Right-click actions on a clip. */}
+      {/*
+        走带的 ⋯ 菜单：低频动作的家（粘贴路径导入 / 从磁盘选取 / 裁剪工程 / 录音的节拍器与
+        预备拍 / 播放模式）。开关类项直接在菜单里显示当前状态（开/关），不用二级菜单。
+      */}
+      {moreOpen !== null && (
+        <>
+          <div className="sr-menu-backdrop" onPointerDown={() => setMoreOpen(null)} />
+          <div
+            className="sr-menu sr-more-menu"
+            style={menuStyle(moreOpen.x, moreOpen.y)}
+            role="menu"
+            aria-label="更多操作"
+          >
+            <p className="sr-menu-title sr-mono">更多操作</p>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item"
+              onClick={() => {
+                setMoreOpen(null);
+                setImportOpen(true);
+              }}
+            >
+              <span className="sr-menu-label">粘贴路径导入…</span>
+              <span className="sr-menu-hint sr-mono">直接引用磁盘上的文件，不复制进工作区</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item"
+              disabled={onPickImport === undefined}
+              onClick={() => {
+                setMoreOpen(null);
+                void pickAndImport();
+              }}
+            >
+              <span className="sr-menu-label">从磁盘选取…</span>
+              <span className="sr-menu-hint sr-mono">系统的文件对话框，可多选</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item"
+              disabled={contentEndBars >= project.bars}
+              title={
+                contentEndBars >= project.bars
+                  ? "工程长度已经和内容一致"
+                  : `把工程从 ${project.bars} 小节裁到内容末尾（${Math.round(contentEndBars)} 小节）——⌘Z 可撤销`
+              }
+              onClick={() => {
+                const target = Math.max(1, Math.ceil(contentEndBars));
+                onChange((current) => ({ ...current, bars: target }));
+                say(`工程裁到 ${target} 小节（⌘Z 可撤销）`);
+                setMoreOpen(null);
+              }}
+            >
+              <span className="sr-menu-label">裁剪到内容末尾</span>
+              <span className="sr-menu-hint sr-mono">
+                {contentEndBars >= project.bars ? "工程长度已经和内容一致" : `${project.bars} → ${Math.max(1, Math.ceil(contentEndBars))} 小节`}
+              </span>
+            </button>
+            <div className="sr-more-sep" aria-hidden="true" />
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item sr-studio-click"
+              aria-pressed={metronomeOn}
+              data-on={metronomeOn || undefined}
+              title="节拍器：录音时按 BPM 打点（click 走音频时钟，不会被录进麦克风）"
+              onClick={() =>
+                setMetronomeOn((on) => {
+                  /**
+                   * Switching it off has to switch it off *now*: a toggle that only affects the next
+                   * take, while the current one keeps clicking, is a switch that lies.
+                   */
+                  if (on) stopClicks();
+                  return !on;
+                })
+              }
+            >
+              <span className="sr-menu-label">♩ 节拍器 · {metronomeOn ? "开" : "关"}</span>
+              <span className="sr-menu-hint sr-mono">录音时按 BPM 打点</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item sr-studio-click"
+              aria-pressed={countIn}
+              data-on={countIn || undefined}
+              title="预备拍：按录音后先打 4 拍再开始，避免第一拍被切掉"
+              onClick={() => setCountIn((on) => !on)}
+            >
+              <span className="sr-menu-label">预备拍 · {countIn ? "开" : "关"}</span>
+              <span className="sr-menu-hint sr-mono">开录前先打 4 拍，第一拍不被切掉</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-menu-item sr-studio-click"
+              aria-pressed={playMode === "project"}
+              data-on={playMode === "project" || undefined}
+              title={
+                playMode === "content"
+                  ? "播到内容末尾就停（默认）。点一下切换成播完整工程网格"
+                  : "播完整工程网格（越过内容循环）。点一下切回播到内容末尾"
+              }
+              onClick={() => setPlayMode((mode) => (mode === "content" ? "project" : "content"))}
+            >
+              <span className="sr-menu-label">播放终点 · {playMode === "content" ? "内容末尾" : "工程末尾"}</span>
+              <span className="sr-menu-hint sr-mono">
+                {playMode === "content" ? "音乐播完就停（默认）" : "越过内容循环整个网格"}
+              </span>
+            </button>
+          </div>
+        </>
+      )}
+
       {/*
         "＋ 音轨" asks one question — what kind — and nothing else: an instrument's sound is the
         agent's job, so a sound picker here would be a menu of choices a beginner cannot make yet.
