@@ -135,8 +135,8 @@ try {
 await page.waitForTimeout(1500);
 await shot("dj-08-recommend");
 
-// 导入 set / 导出 m3u / AI 排序 / 新建
-for (const label of ["导入 set", "AI 排序", "导出 m3u", "新建 set"]) {
+// AI 排序 / 新建直接可见；导入与导出在确定的 More 菜单里。
+for (const label of ["AI 排序", "新建 set"]) {
   try {
     const btn = page.getByRole("button", { name: label }).first();
     const visible = await btn.count();
@@ -147,6 +147,12 @@ for (const label of ["导入 set", "AI 排序", "导出 m3u", "新建 set"]) {
     await shot("dj-09-" + label.replace(/\s/g, "-"));
   } catch (e) { note(`${label} 失败：` + e.message); }
 }
+try {
+  await page.getByRole("button", { name: "更多 Set 操作" }).click();
+  for (const name of ["导入 set", "导出 m3u"]) {
+    note(`More 菜单包含：${name} = ${await page.getByRole("menuitem", { name }).count()}`);
+  }
+} catch (e) { note("More 菜单失败：" + e.message); }
 
 // ————————————————————————— Studio 页 —————————————————————————
 await goto("studio");

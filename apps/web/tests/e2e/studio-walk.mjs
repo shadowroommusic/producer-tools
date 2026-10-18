@@ -36,7 +36,7 @@ await page.screenshot({ path: `${OUT}/01-land.png` });
 try {
   await page.getByText("新建工程").first().click({ timeout: 8000 });
   await sleep(2000);
-  const empty = await page.locator(".sr-studio-empty").count();
+  const empty = await page.locator(".sr-studio-hero").count();
   note("建工程", `空态引导可见 = ${empty > 0}`);
   if (empty === 0) gripe("建工程", "新工程没有 0 轨空态引导");
   await page.screenshot({ path: `${OUT}/02-new-project.png` });

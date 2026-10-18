@@ -154,6 +154,27 @@ export function ButlerOrb({
     setLocalDraft("");
   });
 
+  /**
+   * Empty pages can hand an intent to the global butler without importing App state. The Studio
+   * empty-state CTA dispatches this cancelable event; accepting it opens the orb composer with a
+   * concrete first prompt. If no orb is mounted (isolated component test), Studio reports the miss.
+   */
+  useEffect(() => {
+    const onButlerStart = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const detail = event.detail as { projectName?: unknown; intent?: unknown } | null;
+      event.preventDefault();
+      const projectName = typeof detail?.projectName === "string" ? detail.projectName.trim() : "";
+      setValue(projectName === "" ? "帮我先起一个 demo。" : `在 Studio 工程《${projectName}》里帮我先起一个 demo。`);
+      setExpanded(true);
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLInputElement>(".sr-orb-input .sr-input")?.focus();
+      });
+    };
+    window.addEventListener("shadowroom:butler-start", onButlerStart);
+    return () => window.removeEventListener("shadowroom:butler-start", onButlerStart);
+  }, [setValue]);
+
   const forced = (typeof window !== "undefined" ? window.localStorage.getItem("qa-orb-force") : null) as OrbMode | null;
   /**
    * 通话状态以 App 为准（外部模式）还是以球自己为准（本地模式）。

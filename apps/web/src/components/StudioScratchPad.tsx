@@ -12,6 +12,7 @@
  * rAF 逐帧等）、收起时整条不挂载。playhead 经 getPlayheadBars() 取，面板不跟 60fps 重渲染。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "../styles/studio.css";
 import {
   SCRATCH_MAX_LOOPS,
   SCRATCH_MIME,

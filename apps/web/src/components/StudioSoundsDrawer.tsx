@@ -14,6 +14,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createNotePlayer, type NotePlayer, type NoteVoice } from "../lib/synth";
+import "../styles/studio.css";
 import {
   GM_SOUNDS,
   SOUND_MIME,
