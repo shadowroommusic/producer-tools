@@ -207,6 +207,34 @@ export function presetById(id: string): ProviderPreset | undefined {
   return PROVIDER_PRESETS.find((preset) => preset.id === id);
 }
 
+/**
+ * Recognize a manually saved provider from its endpoint. This matters for stores created before
+ * `presetSource` was persisted: MiniMax still has to open in the simple API-key view and expose the
+ * connection test instead of looking like an unrelated custom endpoint.
+ */
+export function presetByBaseUrl(baseUrl: string): ProviderPreset | undefined {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  const host = url.hostname.toLowerCase();
+  const isMinimaxHost = ["minimaxi.com", "minimax.io", "minimax.cn", "minimax.chat"].some(
+    (domain) => host === domain || host.endsWith(`.${domain}`),
+  );
+  if (isMinimaxHost) return presetById("minimax");
+  const normalized = `${host}${url.pathname.replace(/\/+$/, "")}`.toLowerCase();
+  return PROVIDER_PRESETS.find((preset) => {
+    try {
+      const presetUrl = new URL(preset.baseUrl);
+      return `${presetUrl.hostname}${presetUrl.pathname.replace(/\/+$/, "")}`.toLowerCase() === normalized;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** 一行摘要：端点是事实，模型与能力数量是承诺，待核实的直说。 */
 export function describePreset(preset: ProviderPreset): string {
   const parts = [preset.baseUrl];

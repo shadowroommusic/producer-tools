@@ -12,6 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import {
   ORB_SIZE,
+  avoidProtected,
   clampToViewport,
   defaultPosition,
   loadPosition,
@@ -51,6 +52,10 @@ const PROTECTED_SELECTORS = [
   ".sr-studio-record",
   ".sr-transport-zoom button",
   ".sr-foot-version",
+  ".sr-settings-pane input",
+  ".sr-settings-pane select",
+  ".sr-settings-pane textarea",
+  ".sr-settings-pane button",
   "textarea",
   'button[title="发送"]',
 ];
@@ -108,11 +113,12 @@ export function ButlerOrb({
    */
   captionAction?: { label: string; onAction: () => void };
 }) {
-  const [position, setPosition] = useState(
-    () =>
-      loadPosition(window.localStorage) ??
-      defaultPosition({ width: window.innerWidth, height: window.innerHeight }, protectedRects()),
-  );
+  const [position, setPosition] = useState(() => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const controls = protectedRects();
+    const stored = loadPosition(window.localStorage);
+    return stored === null ? defaultPosition(viewport, controls) : avoidProtected(stored, controls, viewport);
+  });
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
   /** 本地演示通话（没有 onCallToggle 时的旧行为：只有麦克风电平，不接会话）。 */
@@ -166,6 +172,7 @@ export function ButlerOrb({
       : undefined;
   const effectiveProgress = progress ?? qaProgress;
   const active = effectiveMode !== "idle";
+  const size = active ? ACTIVE_SIZE : ORB_SIZE;
 
   // prefers-reduced-motion。
   useEffect(() => {
@@ -286,6 +293,37 @@ export function ButlerOrb({
     savePosition(window.localStorage, position);
   }, [position, dragging]);
 
+  /**
+   * SPA navigation and tab switches replace protected controls without resizing the orb. Re-check
+   * after those DOM changes so a remembered position cannot sit on top of the settings form.
+   * rAF coalesces bursts; equal positions do not write state and therefore cannot loop.
+   */
+  useEffect(() => {
+    let frame: number | null = null;
+    const revalidate = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        setPosition((current) => {
+          const viewport = { width: window.innerWidth, height: window.innerHeight };
+          const next = avoidProtected(current, protectedRects(), viewport, size);
+          return next.x === current.x && next.y === current.y ? current : next;
+        });
+      });
+    };
+    const observer = new MutationObserver(revalidate);
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", revalidate);
+    window.addEventListener("scroll", revalidate, true);
+    revalidate();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", revalidate);
+      window.removeEventListener("scroll", revalidate, true);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [size]);
+
 
   // 单 rAF：把 RMS 平滑进 level ref，交给 r3f 的 useFrame（玻璃珠渲染在 Canvas 内部循环）。
   const levelRef = useRef(0);
@@ -306,7 +344,6 @@ export function ButlerOrb({
     };
   }, [effectiveMode, voiceLevel, micLevel, externalCall]);
 
-  const size = active ? ACTIVE_SIZE : ORB_SIZE;
   /**
    * 尺寸切换时重新夹取：球从 64 长到 80（或退回）时，旧坐标是按另一个尺寸算的，
    * 会让多出来的 16px 悬在视口外（P-8 实证）。只在真的越界时 setState，避免抖动。

@@ -192,6 +192,27 @@ const MEDIA_PROTOCOLS = {
       return Buffer.from(audio, "hex");
     },
   },
+  "minimax-image": {
+    kind: "image",
+    path: "/v1/image_generation",
+    build: (input) => ({
+      model: input.model,
+      prompt: input.prompt || "a single lime green dot",
+      aspect_ratio: "1:1",
+      response_format: "url",
+      n: 1,
+      prompt_optimizer: false,
+    }),
+    pick: (payload) => {
+      const urls = Array.isArray(payload?.data?.image_urls) ? payload.data.image_urls : [];
+      const base64 = Array.isArray(payload?.data?.image_base64) ? payload.data.image_base64 : [];
+      const detail = payload?.base_resp?.status_msg;
+      if (urls.length === 0 && base64.length === 0) {
+        throw new Error(typeof detail === "string" && detail !== "" ? detail : "返回里没有图像");
+      }
+      return { count: urls.length + base64.length };
+    },
+  },
   "openai-audio-speech": {
     kind: "tts",
     path: "/audio/speech",
@@ -378,24 +399,48 @@ function resolveMediaProtocol(protocol, baseUrl, kind) {
   const name = String(protocol ?? "");
   if (table[name] !== undefined) return name;
   const host = String(baseUrl ?? "").toLowerCase();
-  if (host.includes("minimaxi") || host.includes("minimax.chat")) {
+  const isMinimaxHost = ["minimaxi.com", "minimax.io", "minimax.cn", "minimax.chat"].some(
+    (domain) => host === domain || host.includes(`.${domain}`),
+  );
+  if (isMinimaxHost) {
     if (kind === "stt") return "minimax-asr";
     if (kind === "tts") return "minimax-t2a";
     if (kind === "music") return "minimax-music";
+    if (kind === "image") return "minimax-image";
   }
   return name;
 }
 
+/**
+ * Media endpoints come in two shapes from the settings page:
+ * - preset value: `https://api.minimaxi.com`
+ * - provider value: `https://api.minimax.cn/v1`
+ *
+ * MiniMax media paths already begin with `/v1`, so appending one to the provider
+ * value creates `/v1/v1/...` and a misleading 404. Keep chat's `/v1` base intact,
+ * but remove it only for adapters whose canonical path starts at the host root.
+ */
+function mediaBaseUrl(baseUrl, path) {
+  const base = String(baseUrl ?? "").replace(/\/+$/, "");
+  if (path.startsWith("/v1/") && /\/v1$/i.test(base)) return base.slice(0, -3);
+  return base;
+}
+
 /** 调用一家供应商的媒体接口，返回音频字节与内容类型。 */
-async function callMedia(provider, protocol, input) {
+async function callMedia(provider, protocol, input, options = {}) {
   const adapter = mediaAdapter(protocol);
   const path = (adapter?.path ?? "/audio/speech").replace("{voice}", encodeURIComponent(input.voice || "default"));
   const body = adapter?.build(input) ?? { model: input.model, input: input.text, voice: input.voice, response_format: input.format };
-  const { response, credential } = await callProvider({ ...provider, protocol: provider.authProtocol ?? "openai" }, path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const { response, credential } = await callProvider(
+    { ...provider, baseUrl: mediaBaseUrl(provider.baseUrl, path), protocol: provider.authProtocol ?? "openai" },
+    path,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    options,
+  );
   if (!response.ok) throw new Error(await providerFailure(response));
   const contentType = response.headers.get("content-type") ?? "";
   let audio;
@@ -412,6 +457,59 @@ async function callMedia(provider, protocol, input) {
   }
   if (audio.length < 512) throw new Error(`音频太短（${audio.length} 字节），可能不是音频`);
   return { audio, contentType: contentType.includes("json") ? "audio/mpeg" : contentType, credential };
+}
+
+/** STT shares the live endpoint and the settings-page test; keep the wire shape in one place. */
+async function callStt(provider, protocol, input, options = {}) {
+  const adapter = STT_PROTOCOLS[protocol];
+  if (adapter === undefined) throw new Error(`未知识别协议：${protocol}`);
+  const form = new FormData();
+  for (const [key, value] of Object.entries(adapter.fields({ model: input.model, format: input.format }))) {
+    if (value !== undefined && value !== null && value !== "") form.set(key, String(value));
+  }
+  form.set(
+    "file",
+    new Blob([input.audio], { type: String(input.format ? `audio/${input.format}` : "audio/wav") }),
+    "turn.wav",
+  );
+  const { response } = await callProvider(
+    { ...provider, baseUrl: mediaBaseUrl(provider.baseUrl, adapter.path), protocol: provider.authProtocol ?? "openai" },
+    adapter.path,
+    { method: "POST", body: form },
+    { timeoutMs: 120_000, ...options },
+  );
+  if (!response.ok) throw new Error(await providerFailure(response));
+  const payload = await response.json().catch(() => ({}));
+  return adapter.pick(payload);
+}
+
+/** A tiny valid WAV is enough to authenticate and exercise an STT endpoint without sending user speech. */
+function diagnosticWav(durationMs = 320) {
+  const sampleRate = 16_000;
+  const sampleCount = Math.max(1, Math.round((sampleRate * durationMs) / 1000));
+  const dataBytes = sampleCount * 2;
+  const buffer = Buffer.alloc(44 + dataBytes);
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(36 + dataBytes, 4);
+  buffer.write("WAVE", 8, "ascii");
+  buffer.write("fmt ", 12, "ascii");
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36, "ascii");
+  buffer.writeUInt32LE(dataBytes, 40);
+  return buffer;
+}
+
+/** Chat-only providers may wrap a five-token answer in reasoning markup; the probe should show the answer. */
+function visibleModelReply(content) {
+  return String(content ?? "")
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "")
+    .trim();
 }
 
 /** 把一段音频写到 recordings/，并把真实时长量出来（WAV 读 header，其它交给 ffmpeg 探测）。 */
@@ -774,6 +872,9 @@ async function providerFailure(response) {
   if (response.status === 429) return "请求太频繁（被限流了）";
   if (response.status >= 500) return "服务商那边出错了";
   const detail = (await response.text().catch(() => "")).slice(0, 200).trim();
+  if (response.status === 410 && /music api.*no longer available/i.test(detail)) {
+    return "MiniMax 音乐 API 已对新用户关闭（HTTP 410 / 2153）；音乐请用本地合成器";
+  }
   return detail === "" ? `HTTP ${response.status}` : `HTTP ${response.status}：${detail}`;
 }
 
@@ -1540,18 +1641,26 @@ const http = createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/agent/providers/voices") {
       const body = await readJsonBody(request, 64 * 1024);
       const provider = { baseUrl: String(body.baseUrl ?? "").trim(), reference: body.credentialRef ?? null };
-      const protocol = String(body.protocolName ?? body.protocol ?? "openai");
+      const protocol = resolveMediaProtocol(
+        String(body.protocolName ?? body.protocol ?? "openai"),
+        provider.baseUrl,
+        "tts",
+      );
       if (provider.baseUrl === "") {
         json(response, 400, { error: "缺少端点" });
         return;
       }
       try {
         if (protocol === "minimax-t2a") {
-          const { response: answer } = await callProvider(provider, "/v1/get_voice", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ voice_type: "all" }),
-          });
+          const { response: answer } = await callProvider(
+            { ...provider, baseUrl: mediaBaseUrl(provider.baseUrl, "/v1/get_voice") },
+            "/v1/get_voice",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ voice_type: "all" }),
+            },
+          );
           if (!answer.ok) throw new Error(await providerFailure(answer));
           const payload = await answer.json();
           const system = Array.isArray(payload?.system_voice) ? payload.system_voice : [];
@@ -1628,21 +1737,12 @@ const http = createServer(async (request, response) => {
       }
       try {
         const audio = Buffer.from(audioBase64, "base64");
-        const form = new FormData();
-        for (const [key, value] of Object.entries(adapter.fields({ model: body.model, format: body.format }))) {
-          if (value !== undefined && value !== null && value !== "") form.set(key, String(value));
-        }
-        form.set("file", new Blob([audio], { type: String(body.format ? `audio/${body.format}` : "audio/wav") }), "turn.wav");
         const started = Date.now();
-        const { response: upstream } = await callProvider(
-          { ...provider, protocol: provider.protocol ?? "openai" },
-          adapter.path,
-          { method: "POST", body: form },
-          { timeoutMs: 120_000 },
-        );
-        if (!upstream.ok) throw new Error(await providerFailure(upstream));
-        const payload = await upstream.json().catch(() => ({}));
-        const picked = adapter.pick(payload);
+        const picked = await callStt(provider, protocolName, {
+          audio,
+          model: body.model,
+          format: body.format,
+        });
         // 不把识别文本写进日志：用户说的话属于隐私，桥日志会被翻（MiniMax #356 低危 1）。
         console.log(`[agent] stt ${protocolName} ${audio.length}B → ${[...String(picked.text ?? '')].length} 字 (${Date.now() - started}ms)`);
         json(response, 200, picked);
@@ -1751,17 +1851,22 @@ const http = createServer(async (request, response) => {
       }
       const started = Date.now();
       try {
-        const { audio, contentType } = await callMedia(provider, resolveMediaProtocol(
-          typeof body.protocolName === "string" ? body.protocolName : "custom",
-          provider.baseUrl,
-          "music",
-        ), {
-          model,
-          prompt,
-          lyrics: typeof body.lyrics === "string" ? body.lyrics : "",
-          instrumental: body.instrumental === true,
-          format: typeof body.format === "string" ? body.format : "mp3",
-        });
+        const { audio, contentType } = await callMedia(
+          provider,
+          resolveMediaProtocol(
+            typeof body.protocolName === "string" ? body.protocolName : "custom",
+            provider.baseUrl,
+            "music",
+          ),
+          {
+            model,
+            prompt,
+            lyrics: typeof body.lyrics === "string" ? body.lyrics : "",
+            instrumental: body.instrumental === true,
+            format: typeof body.format === "string" ? body.format : "mp3",
+          },
+          { timeoutMs: 180_000 },
+        );
         const saved = saveMedia(audio, String(body.name ?? prompt.slice(0, 24)) || "music", typeof body.format === "string" ? body.format : "mp3");
         console.log(`[agent] music ${model} → ${saved.name} (${(saved.duration_ms / 1000).toFixed(1)}s, ${saved.bytes} bytes, ${Date.now() - started} ms)`);
         json(response, 200, { ...saved, model, ms: Date.now() - started, contentType });
@@ -1772,8 +1877,9 @@ const http = createServer(async (request, response) => {
     }
 
     /**
-     * The smallest request that proves one role works: a 5-token chat, a two-word synthesis, a
-     * 256×256 image. Small on purpose — a test button must not spend the user's credit.
+     * The smallest request that proves one role works. Agent / TTS / STT use a deliberately tiny
+     * request; music has no separate validation endpoint, so its button is an explicit one-off
+     * generation and the UI warns that it can take time and spend credit.
      */
     if (request.method === "POST" && url.pathname === "/api/agent/providers/test") {
       const body = await readJsonBody(request, 256 * 1024);
@@ -1794,37 +1900,132 @@ const http = createServer(async (request, response) => {
           const { response: answer } = await callProvider(provider, "/chat/completions", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 5 }),
+            body: JSON.stringify({
+              model,
+              messages: [{ role: "user", content: "只回复 OK" }],
+              max_tokens: 32,
+            }),
           });
           if (!answer.ok) {
             json(response, 200, { ok: false, detail: await providerFailure(answer) });
             return;
           }
           const payload = await answer.json().catch(() => ({}));
-          const said = payload?.choices?.[0]?.message?.content ?? "";
+          const said = visibleModelReply(payload?.choices?.[0]?.message?.content);
           json(response, 200, {
-            ok: typeof said === "string" && said.trim() !== "",
-            detail: typeof said === "string" && said.trim() !== "" ? `回复：${said.trim().slice(0, 40)}` : "回复是空的",
+            ok: said !== "",
+            detail: said !== "" ? `回复：${said.slice(0, 40)}` : "连接成功，但模型只返回了思考过程",
             ms: Date.now() - started,
           });
           return;
         }
         if (capability === "tts") {
           const voice = typeof body.voice === "string" && body.voice !== "" ? body.voice : "alloy";
-          const { response: answer } = await callProvider(provider, "/audio/speech", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model, input: "测试", voice, response_format: "mp3" }),
+          const { audio } = await callMedia(
+            provider,
+            resolveMediaProtocol(provider.protocol, provider.baseUrl, "tts"),
+            { model, text: "测试", voice, format: "mp3" },
+            { timeoutMs: 60_000 },
+          );
+          json(response, 200, {
+            ok: audio.length > 1000,
+            detail: `${audio.length} 字节音频`,
+            ms: Date.now() - started,
           });
-          if (!answer.ok) {
-            json(response, 200, { ok: false, detail: await providerFailure(answer) });
+          return;
+        }
+        if (capability === "stt") {
+          const picked = await callStt(
+            provider,
+            resolveMediaProtocol(provider.protocol, provider.baseUrl, "stt"),
+            { audio: diagnosticWav(), model, format: "wav" },
+          );
+          json(response, 200, {
+            ok: typeof picked?.text === "string",
+            detail: `识别接口可用（测试音频返回 ${[...String(picked?.text ?? "")].length} 字）`,
+            ms: Date.now() - started,
+          });
+          return;
+        }
+        if (capability === "voice_clone") {
+          const protocol = resolveMediaProtocol(provider.protocol, provider.baseUrl, "tts");
+          if (protocol !== "minimax-t2a") {
+            json(response, 200, {
+              ok: false,
+              detail: "这类服务没有无副作用的 Voice Clone 测试；请在「通话与声音」里用样本验证",
+              ms: Date.now() - started,
+            });
             return;
           }
-          const bytes = (await answer.arrayBuffer()).byteLength;
-          json(response, 200, { ok: bytes > 1000, detail: `${bytes} 字节音频`, ms: Date.now() - started });
+          const { response: answer } = await callProvider(
+            { ...provider, baseUrl: mediaBaseUrl(provider.baseUrl, "/v1/get_voice") },
+            "/v1/get_voice",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ voice_type: "all" }),
+            },
+          );
+          if (!answer.ok) {
+            json(response, 200, { ok: false, detail: await providerFailure(answer), ms: Date.now() - started });
+            return;
+          }
+          const payload = await answer.json().catch(() => ({}));
+          const voices = (Array.isArray(payload?.system_voice) ? payload.system_voice.length : 0) +
+            (Array.isArray(payload?.voice_cloning) ? payload.voice_cloning.length : 0);
+          json(response, 200, {
+            ok: voices > 0,
+            detail: voices > 0 ? `音色接口可用（${voices} 个已有音色）` : "音色接口返回为空",
+            ms: Date.now() - started,
+          });
+          return;
+        }
+        if (capability === "music") {
+          const { audio } = await callMedia(
+            provider,
+            resolveMediaProtocol(provider.protocol, provider.baseUrl, "music"),
+            {
+              model,
+              prompt: "两秒测试节拍，纯音乐",
+              lyrics: "",
+              instrumental: true,
+              format: "mp3",
+            },
+            { timeoutMs: 180_000 },
+          );
+          json(response, 200, {
+            ok: audio.length > 1000,
+            detail: `${audio.length} 字节测试音频`,
+            ms: Date.now() - started,
+          });
           return;
         }
         if (capability === "image") {
+          const imageProtocol = resolveMediaProtocol(provider.protocol, provider.baseUrl, "image");
+          if (imageProtocol === "minimax-image") {
+            const adapter = MEDIA_PROTOCOLS["minimax-image"];
+            const { response: answer } = await callProvider(
+              { ...provider, baseUrl: mediaBaseUrl(provider.baseUrl, adapter.path) },
+              adapter.path,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(adapter.build({ model })),
+              },
+              { timeoutMs: 120_000 },
+            );
+            if (!answer.ok) {
+              json(response, 200, { ok: false, detail: await providerFailure(answer), ms: Date.now() - started });
+              return;
+            }
+            const made = adapter.pick(await answer.json().catch(() => ({})));
+            json(response, 200, {
+              ok: made.count > 0,
+              detail: `返回了 ${made.count} 张图`,
+              ms: Date.now() - started,
+            });
+            return;
+          }
           const { response: answer } = await callProvider(provider, "/images/generations", {
             method: "POST",
             headers: { "content-type": "application/json" },

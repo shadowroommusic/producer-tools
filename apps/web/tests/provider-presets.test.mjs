@@ -13,6 +13,7 @@ import { test } from "node:test";
 import {
   PRESET_CAPABILITY_KIND,
   PROVIDER_PRESETS,
+  presetByBaseUrl,
   presetById,
   presetProtocol,
   providerDefaultsFromPreset,
@@ -69,6 +70,15 @@ test("MiniMax：端点、模型顺序、四项能力逐项钉死", () => {
     baseUrl: "https://api.minimaxi.com",
     models: ["music-2.6", "music-cover", "music-2.6-free", "music-cover-free"],
   });
+});
+
+test("手配供应商按端点认回预设：MiniMax 国内/国际域名与旧存储都进简单路径", () => {
+  assert.equal(presetByBaseUrl("https://api.minimax.cn/v1")?.id, "minimax");
+  assert.equal(presetByBaseUrl("https://api.minimaxi.com/v1")?.id, "minimax");
+  assert.equal(presetByBaseUrl("https://api.minimax.io/v1")?.id, "minimax");
+  assert.equal(presetByBaseUrl("https://notminimax.example/v1"), undefined);
+  assert.equal(presetByBaseUrl("https://example.com/v1"), undefined);
+  assert.equal(presetByBaseUrl("not a URL"), undefined);
 });
 
 test("Xiaomi / Volcengine：能力端点与协议翻译", () => {

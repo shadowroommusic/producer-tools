@@ -8,6 +8,7 @@
  * ③ 点「高级」展开：名称=MiniMax、Base URL=api.minimaxi.com/v1、协议=chat_completions（预设默认值）。
  * ④ 「自定义」供应商仍默认全展开（没有高级开关，Base URL 直接可见）。
  * ⑤ 截图 exports/settings-f8/：settings-basic.png（基本态）+ settings-advanced.png（高级展开态）。
+ * ⑥ 旧存储里的手配 MiniMax（没有 presetSource）也按端点认回简单路径，并能直接测试连接。
  *
  * 凭证与测试请求走 route mock —— 真桥会把 fake key 写进真实凭证库（覆盖用户的 minimax key），
  * 这条只验 UI 路径与请求形状；桥的真实契约由 call-live-acceptance 等真桥验收覆盖。
@@ -191,6 +192,44 @@ try {
     "⑤ 已存在的预设供应商：重开时认得出预设（note 显示 + 基本层布局）",
     legacyNote >= 1 && legacyKeyField === 1,
     `预设 note=${legacyNote} 条，Key 密码框=${legacyKeyField} 个`,
+  );
+
+  // ⑥ 旧存储里没有 presetSource 的手配 MiniMax：按端点认回简单路径，必须能直接测试连接。
+  await page.evaluate(() => {
+    const key = "shadowroom.models.v1";
+    const current = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+    current.providers = [
+      ...(current.providers ?? []),
+      {
+        id: "minimax-manual",
+        name: "minimax",
+        baseUrl: "https://api.minimax.cn/v1",
+        credentialRef: "minimax",
+        endpointFormat: "responses",
+        enabled: true,
+        models: ["MiniMax-M3"],
+        modelProfiles: {},
+        capabilities: {},
+      },
+    ];
+    window.localStorage.setItem(key, JSON.stringify(current));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1000);
+  await page.locator('nav[aria-label="工作区"] .sr-panel-row', { hasText: "设置" }).click();
+  await page.locator(".sr-settings-nav-item", { hasText: "供应商" }).click();
+  await page.locator(".sr-provider-card", { hasText: "api.minimax.cn" }).locator("button", { hasText: "编辑" }).click();
+  await page.locator(".sr-provider-editor button", { hasText: "连接" }).first().click();
+  await page.waitForTimeout(300);
+  const manualInputs = await page.locator(".sr-provider-editor input:visible").count();
+  const manualTest = page.locator(".sr-provider-editor button", { hasText: "测试连接" });
+  const manualNote = await page
+    .locator(".sr-provider-editor p.sr-role-test.sr-mono", { hasText: "api.minimaxi.com" })
+    .count();
+  check(
+    "⑥ 无 presetSource 的旧 MiniMax 按端点识别：简单路径 + 测试按钮",
+    manualInputs === 1 && (await manualTest.count()) === 1 && manualNote >= 1,
+    `可见 input=${manualInputs} 测试按钮=${await manualTest.count()} 预设 note=${manualNote}`,
   );
 } finally {
   await browser.close();

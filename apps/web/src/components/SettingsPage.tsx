@@ -52,7 +52,7 @@ import {
   type ModelProfile,
   type ReasoningCapability,
 } from "../lib/providerModel";
-import { PROVIDER_PRESETS, presetById, providerDefaultsFromPreset } from "../lib/providerPresets";
+import { PROVIDER_PRESETS, presetByBaseUrl, presetById, providerDefaultsFromPreset } from "../lib/providerPresets";
 import { deleteCredential, listCredentials, listProviderModels, saveCredential, testRole, type CredentialInfo } from "../lib/providerApi";
 import { createSystemTTS, type VoiceInfo } from "../lib/tts";
 
@@ -713,14 +713,16 @@ function ProviderEditor({
   /**
    * 当前认的是哪家预设。编辑已有供应商时要**从 provider.presetSource 恢复**（MiniMax f8-post-audit #406 ⑤ 抓的）：
    * 写死 "" 的话，重开一个预设建的供应商时预设 note 不显示、以后要在编辑态加预设选择器也会是空选。
-   * 自定义供应商（presetSource === undefined）保持 ""——它本来就不属于任何预设。
+   * 旧存储可能没有 presetSource；此时按 Base URL 认回已知预设，真正未知的端点才保持自定义。
    */
-  const [presetId, setPresetId] = useState(() => (isNew ? "" : (provider.presetSource ?? "")));
+  const [presetId, setPresetId] = useState(() => (isNew ? "" : (provider.presetSource ?? presetByBaseUrl(provider.baseUrl)?.id ?? "")));
   /**
    * 自定义 = 全量表单直接展开（F-8 只把「预设」收进基本/高级）。编辑已有供应商时：
-   * 带 presetSource 的按预设处理（基本层起步），没带的就是手配的，照旧全展开。
+   * 带 presetSource 或端点能认回预设的按预设处理；认不出的才全展开。
    */
-  const [custom, setCustom] = useState(() => !isNew && provider.presetSource === undefined);
+  const [custom, setCustom] = useState(
+    () => !isNew && provider.presetSource === undefined && presetByBaseUrl(provider.baseUrl) === undefined,
+  );
   /** 「高级」折叠层：默认折叠且**不渲染**（首帧 0，F-8 性能红线）。 */
   const [advanced, setAdvanced] = useState(false);
   const [editingModel, setEditingModel] = useState<{ kind: CapabilityKind; model: string } | null>(null);
@@ -853,8 +855,32 @@ function ProviderEditor({
                     >
                       保存 Key
                     </button>
+                    <button
+                      type="button"
+                      className="sr-btn"
+                      disabled={basicTestModel === undefined || basicTest === "running" || (keyDraft.trim() === "" && keyMissing)}
+                      title={
+                        basicTestModel === undefined
+                          ? "先在「模型」页签加入一个主模型"
+                          : "会向服务商发一次最小的真实请求"
+                      }
+                      onClick={() => {
+                        if (basicTestModel === undefined) return;
+                        const draft = keyDraft.trim();
+                        onTestConnection(provider, draft, basicTestModel);
+                        if (draft !== "") setKeyDraft("");
+                      }}
+                    >
+                      {basicTest === "running" ? "测试中…" : "测试连接"}
+                    </button>
                   </div>
                 </label>
+                {basicTest !== undefined && basicTest !== "running" && (
+                  <p className="sr-role-test sr-mono" data-ok={basicTest.ok || undefined}>
+                    {basicTest.ok ? "✓" : "✗"} {basicTest.detail}
+                    {basicTest.ms === undefined ? "" : ` · ${basicTest.ms} ms`}
+                  </p>
+                )}
               </div>
             ) : (
               <>
@@ -1136,6 +1162,15 @@ function ModelManager({
             type="button"
             className="sr-btn"
             disabled={shown === "running"}
+            title={
+              kind === "music"
+                ? "会真实生成一小段测试音乐，可能等待数十秒并消耗额度"
+                : kind === "voice_clone"
+                  ? "只检查音色端点，不会创建新的克隆音色"
+                  : kind === "image"
+                    ? "会真实生成一张 1:1 测试图并消耗额度"
+                  : "会向服务商发一次最小的真实请求"
+            }
             onClick={() => {
               /**
                * Test the model the user is looking at: the one being edited in the 模型 tab, otherwise
