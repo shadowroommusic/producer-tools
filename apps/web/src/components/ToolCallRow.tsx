@@ -4,6 +4,7 @@
  */
 import { useState } from "react";
 import { IconChevronDown, IconChevronRight, IconTool } from "./icons";
+import { RouteIntentCard, type RouteIntent, type RouteTarget } from "./RouteIntentCard";
 
 export type ToolCall = {
   id: string;
@@ -29,7 +30,19 @@ function readable(detail: string): string {
 
 export function ToolCallRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(call.status === "error");
+  const [routeDismissed, setRouteDismissed] = useState(false);
   const Chevron = open ? IconChevronDown : IconChevronRight;
+  const route = call.name === "route_intent" && call.status === "ok" ? parseRouteFromCall(call) : null;
+
+  if (route !== null && !routeDismissed) {
+    return (
+      <RouteIntentCard
+        route={route}
+        onOpen={(next) => window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: next }))}
+        onDismiss={() => setRouteDismissed(true)}
+      />
+    );
+  }
 
   return (
     <div className="sr-call" data-state={call.status}>
@@ -55,4 +68,35 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
       {open && call.detail && <pre className="sr-call-detail sr-scroll">{readable(call.detail)}</pre>}
     </div>
   );
+}
+
+export function parseRouteFromCall(call: ToolCall): RouteIntent | null {
+  try {
+    const envelope = JSON.parse(call.detail ?? "{}") as Record<string, unknown>;
+    let result = envelope.result;
+    if (result !== null && typeof result === "object" && Array.isArray((result as { content?: unknown[] }).content)) {
+      const text = (result as { content: Array<{ text?: unknown }> }).content
+        .map((entry) => (typeof entry.text === "string" ? entry.text : ""))
+        .join("");
+      if (text !== "") result = JSON.parse(text);
+    }
+    if (typeof result === "string") result = JSON.parse(result);
+    if (result === null || typeof result !== "object") return null;
+    const row = result as Record<string, unknown>;
+    const valid = new Set<RouteTarget>(["studio", "dj", "library", "butler_direct", "ask_user"]);
+    const target = String(row.target ?? "") as RouteTarget;
+    if (!valid.has(target)) return null;
+    return {
+      target,
+      actionSummary: String(row.action_summary ?? ""),
+      confidence: typeof row.confidence === "number" ? row.confidence : 0,
+      contextSatisfied: row.context_satisfied === true,
+      missingContext: Array.isArray(row.missing_context)
+        ? row.missing_context.map((entry) => String(entry)).filter(Boolean)
+        : [],
+      routeId: call.id,
+    };
+  } catch {
+    return null;
+  }
 }

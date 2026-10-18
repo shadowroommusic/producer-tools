@@ -9,9 +9,8 @@
  *   POST /api/agent/send     → { sessionId, text } → an SSE stream of the turn's events
  *   POST /api/agent/interrupt→ { sessionId }
  *
- * One UI session maps to one Codex thread, created on the first message. Every thread is started
- * with the four ShadowRoom MCP servers injected, so the agent can drive the same tools the sidebar
- * panels call by hand.
+ * One UI session maps to one Codex thread, created on the first message. Each thread receives only
+ * the ShadowRoom MCP projection for its page scope (butler / studio / dj / library).
  *
  * Configuration (all optional):
  *   SHADOWROOM_CODEX           path to the codex binary (default: the one inside the Codex app)
@@ -150,6 +149,80 @@ function wavDurationMs(buffer) {
 const MCP_BRIDGE_URL = process.env.SHADOWROOM_MCP_URL ?? "http://127.0.0.1:8787";
 /** 适配器内部执行过的媒体工具调用（Studio 轮询它来落地轨道）。 */
 const MEDIA_EVENTS = [];
+/**
+ * Codex cannot execute the plugin calls this adapter makes on a chat-only provider's behalf. Replaying
+ * them as Responses `function_call` items makes Codex run them a second time and fail with
+ * `unsupported call`. This side channel carries the execution as an app-server-shaped tool item to the
+ * open turn without asking Codex to execute it again.
+ */
+const ADAPTER_TOOL_LISTENERS = new Set();
+let adapterToolEventId = 0;
+const OWNER_BLOCK_RE = /\[shadowroom_owner\]\s*([\s\S]*?)\s*\[\/shadowroom_owner\]/g;
+
+/** Per-turn ownership travels in the input because this Codex build ignores per-thread adapter headers. */
+function ownerBlock(owner) {
+  const safe = {
+    sessionId: owner.sessionId ?? null,
+    scope: owner.scope ?? null,
+    projectId: owner.projectId ?? null,
+    setId: owner.setId ?? null,
+  };
+  return `\n\n[shadowroom_owner]\n${JSON.stringify(safe)}\n[/shadowroom_owner]`;
+}
+
+function ownerFromInput(input) {
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const content = Array.isArray(input[index]?.content) ? input[index].content : [];
+    const text = content.map((part) => (typeof part?.text === "string" ? part.text : "")).join("");
+    const matches = [...text.matchAll(OWNER_BLOCK_RE)];
+    const last = matches.at(-1)?.[1];
+    if (last === undefined) continue;
+    try {
+      const parsed = JSON.parse(last);
+      return {
+        sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : null,
+        scope: typeof parsed.scope === "string" ? parsed.scope : null,
+        projectId: typeof parsed.projectId === "string" ? parsed.projectId : null,
+        setId: typeof parsed.setId === "string" ? parsed.setId : null,
+      };
+    } catch {
+      return { sessionId: null, scope: null, projectId: null, setId: null };
+    }
+  }
+  return { sessionId: null, scope: null, projectId: null, setId: null };
+}
+
+function stripOwnerBlocks(text) {
+  return String(text).replace(OWNER_BLOCK_RE, "").trimEnd();
+}
+
+/**
+ * Chat-only providers receive only ShadowRoom MCP namespaces. Codex's own shell, subagent, goal and
+ * IDE tools stay out of the product model schema: the adapter cannot execute them, and exposing them
+ * made page workers believe they could escape their page boundary.
+ */
+export function flattenAdapterTools(rawTools) {
+  const tools = [];
+  const nameMap = new Map();
+  for (const tool of Array.isArray(rawTools) ? rawTools : []) {
+    if (tool?.type !== "namespace" || !String(tool.name ?? "").startsWith("mcp__") || !Array.isArray(tool.tools)) continue;
+    for (const sub of tool.tools) {
+      if (sub?.type !== "function") continue;
+      const flat = `${tool.name}__${sub.name}`;
+      const serverName = String(tool.name).replace(/^mcp__/, "");
+      nameMap.set(flat, { server: serverName, tool: sub.name });
+      tools.push({
+        type: "function",
+        function: {
+          name: flat,
+          description: sub.description ?? tool.description ?? "",
+          parameters: sub.parameters ?? { type: "object", properties: {} },
+        },
+      });
+    }
+  }
+  return { tools, nameMap };
+}
 
 const MEDIA_PROTOCOLS = {
   "minimax-t2a": {
@@ -253,6 +326,58 @@ const STT_PROTOCOLS = {
   },
 };
 
+/**
+ * MiniMax-style chat providers may embed reasoning as `<think>…</think>` inside `content`. Keep the
+ * user-facing stream fast, but never let those internal tags become transcript text.
+ */
+export function createVisibleTextFilter() {
+  let inThink = false;
+  let pending = "";
+  return {
+    push(chunk) {
+      pending += String(chunk);
+      let visible = "";
+      for (;;) {
+        const lower = pending.toLowerCase();
+        if (inThink) {
+          const close = lower.indexOf("</think");
+          if (close === -1) {
+            pending = pending.slice(-7);
+            return visible;
+          }
+          const closeEnd = pending.indexOf(">", close + 7);
+          if (closeEnd === -1) {
+            pending = pending.slice(close);
+            return visible;
+          }
+          pending = pending.slice(closeEnd + 1);
+          inThink = false;
+          continue;
+        }
+        const open = lower.indexOf("<think");
+        if (open === -1) {
+          const keep = Math.min(pending.length, 5);
+          visible += pending.slice(0, pending.length - keep);
+          pending = pending.slice(-keep);
+          return visible;
+        }
+        visible += pending.slice(0, open);
+        const openEnd = pending.indexOf(">", open + 6);
+        if (openEnd === -1) {
+          pending = pending.slice(open);
+          return visible;
+        }
+        pending = pending.slice(openEnd + 1);
+        inThink = true;
+      }
+    },
+    finish() {
+      const visible = inThink ? "" : pending;
+      pending = "";
+      return visible;
+    },
+  };
+}
 
 /** 一轮 chat 请求：把文本与工具调用都收齐（文本仍然按流式解析）。 */
 export async function runChatRound({ base, headers, model, messages, tools, temperature, onTextDelta }) {
@@ -333,13 +458,26 @@ async function pluginServerId(name) {
 }
 
 /** 通过 mcp-bridge 执行一个插件工具。 */
-async function callPluginTool(target, rawArguments) {
+async function callPluginTool(target, rawArguments, owner = {}) {
   if (target === undefined) return { ok: false, text: `未知工具` };
   let args = {};
   try {
     args = JSON.parse(rawArguments === "" ? "{}" : rawArguments);
   } catch {
     return { ok: false, text: `${target.tool} 的参数不是合法 JSON` };
+  }
+  if (owner.scope && !scopeAllowsTool(owner.scope, target.server, target.tool)) {
+    const text = `当前页面无权调用 ${target.server}.${target.tool}`;
+    console.log(`[adapter] scope guard rejected ${owner.scope} → ${target.server}.${target.tool}`);
+    return { ok: false, text, args };
+  }
+  /**
+   * Async render workers deliver through a separate HTTP request. Carry the thread owner in the
+   * start_render arguments so the job can persist it and stamp its eventual media-event. Unknown
+   * fields are ignored by the other plugin tools, so this stays backwards-compatible.
+   */
+  if (target.tool === "start_render" && owner.sessionId !== null && owner.sessionId !== undefined) {
+    args._shadowroom = owner;
   }
   try {
     const response = await fetch(`${MCP_BRIDGE_URL}/api/call`, {
@@ -376,8 +514,56 @@ function noteMediaEvent(entry) {
    * 截断过的 preview 只够人看，不够落盘。args 同理：regenerate_part 的吸收靠参数里的 clip_id。
    */
   const id = (MEDIA_EVENTS[MEDIA_EVENTS.length - 1]?.id ?? 0) + 1;
-  MEDIA_EVENTS.push({ id, at: Date.now(), server: entry.server, tool: entry.tool, ok: entry.ok, text: entry.resultText ?? "", args: entry.args ?? {} });
+  MEDIA_EVENTS.push({
+    id,
+    at: Date.now(),
+    sessionId: entry.sessionId ?? null,
+    scope: entry.scope ?? null,
+    projectId: entry.projectId ?? null,
+    setId: entry.setId ?? null,
+    server: entry.server,
+    tool: entry.tool,
+    ok: entry.ok,
+    text: entry.resultText ?? "",
+    args: entry.args ?? {},
+  });
   if (MEDIA_EVENTS.length > 50) MEDIA_EVENTS.shift();
+}
+
+/** Adapter-side invocation converted to the item shape Codex uses for MCP tools. */
+export function adapterToolEventToItem(event) {
+  return {
+    type: "mcpToolCall",
+    id: event.callId,
+    server: event.server,
+    tool: event.tool,
+    status: event.phase === "completed" ? (event.ok ? "completed" : "failed") : "inProgress",
+    arguments: event.arguments,
+    ...(event.phase === "completed"
+      ? { result: { content: [{ type: "text", text: event.text ?? "" }] } }
+      : {}),
+    ...(event.phase === "completed" && !event.ok ? { error: { message: event.text ?? "调用失败" } } : {}),
+    ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+  };
+}
+
+/** Thread-local subscription; adapter and Agent share this process, so the turn receives it live. */
+export function subscribeAdapterToolEvents(sessionId, scope, listener) {
+  const wrapped = (event) => {
+    if (event.sessionId !== sessionId || event.scope !== scope) return;
+    listener({
+      type: "item",
+      phase: event.phase,
+      item: adapterToolEventToItem(event),
+    });
+  };
+  ADAPTER_TOOL_LISTENERS.add(wrapped);
+  return () => ADAPTER_TOOL_LISTENERS.delete(wrapped);
+}
+
+function noteAdapterToolEvent(entry) {
+  const event = { id: ++adapterToolEventId, at: Date.now(), ...entry };
+  for (const listener of ADAPTER_TOOL_LISTENERS) listener(event);
 }
 
 /** 这条能力用哪个适配器（没有就按「裸字节」处理，兼容最简单的自建服务）。 */
@@ -551,6 +737,16 @@ export async function startChatAdapter(provider, credential) {
       response.writeHead(code, { "content-type": type });
       response.end(body);
     };
+    const header = (name) => {
+      const value = request.headers[name];
+      return typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
+    };
+    const headerOwner = {
+      sessionId: header("x-shadowroom-session-id") || null,
+      scope: header("x-shadowroom-scope") || null,
+      projectId: header("x-shadowroom-project-id") || null,
+      setId: header("x-shadowroom-set-id") || null,
+    };
     try {
       if (request.method === "GET" && request.url === "/v1/models") {
         const answer = await fetch(`${base}/models`, { headers });
@@ -582,6 +778,13 @@ export async function startChatAdapter(provider, credential) {
       if (sample !== undefined) console.log(`[adapter] raw mcp tool: ${JSON.stringify(sample).slice(0, 1200)}`);
       /** Responses `input` items → chat messages. */
       const input = Array.isArray(body.input) ? body.input : [];
+      const embeddedOwner = ownerFromInput(input);
+      const eventOwner = {
+        sessionId: headerOwner.sessionId ?? embeddedOwner.sessionId,
+        scope: headerOwner.scope ?? embeddedOwner.scope,
+        projectId: headerOwner.projectId ?? embeddedOwner.projectId,
+        setId: headerOwner.setId ?? embeddedOwner.setId,
+      };
       const messages = [];
       if (typeof body.instructions === "string" && body.instructions !== "") messages.push({ role: "system", content: body.instructions });
       for (const item of input) {
@@ -590,7 +793,7 @@ export async function startChatAdapter(provider, credential) {
           continue;
         }
         const content = Array.isArray(item?.content) ? item.content : [];
-        const text = content.map((part) => part?.text ?? "").join("");
+        const text = stripOwnerBlocks(content.map((part) => part?.text ?? "").join(""));
         if (item?.type === "function_call") {
           messages.push({ role: "assistant", content: null, tool_calls: [{ id: item.call_id ?? item.id, type: "function", function: { name: item.name, arguments: item.arguments ?? "{}" } }] });
           continue;
@@ -605,41 +808,13 @@ export async function startChatAdapter(provider, credential) {
        * （`protocol/src/tool_name.rs` 的 `Display`），所以这里把命名空间展开成具体工具，
        * 名字写成 `mcp__服务器__工具`。
        */
-      const flattened = [];
-      /** 拼名 → Codex 期望的 (namespace, name)：回传调用时必须拆回去（见下面的 function_call）。 */
-      const nameMap = new Map();
-      for (const tool of Array.isArray(body.tools) ? body.tools : []) {
-        if (tool?.type === "function") {
-          flattened.push({
-            type: "function",
-            function: { name: tool.name, description: tool.description ?? "", parameters: tool.parameters ?? { type: "object", properties: {} } },
-          });
-          continue;
-        }
-        if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
-          for (const sub of tool.tools) {
-            if (sub?.type !== "function") continue;
-            const flat = `${tool.name}__${sub.name}`;
-            /**
-             * 这个 Codex 对「命名空间工具」的 router 不认来自 chat 模型的任何调用形状（拼名、拆成
-             * namespace+name、裸名都试过，一律 `unsupported call`）。所以对 chat-only 供应商，
-             * 适配器**自己执行**这些插件工具：通过 mcp-bridge 的 `/api/call`，把结果作为 tool 消息
-             * 喂回模型，Codex 那边只看到一个普通回答。
-             */
-            const serverName = String(tool.name).replace(/^mcp__/, "");
-            nameMap.set(flat, { server: serverName, tool: sub.name });
-            flattened.push({
-              type: "function",
-              function: {
-                name: flat,
-                description: sub.description ?? tool.description ?? "",
-                parameters: sub.parameters ?? { type: "object", properties: {} },
-              },
-            });
-          }
-        }
-      }
-      const tools = flattened;
+      /**
+       * This Codex cannot route namespaced plugin calls returned by a chat model, so the adapter runs
+       * them itself and feeds the result back as a normal tool message. Only MCP namespaces enter this
+       * table; built-in shell/subagent tools are deliberately filtered out.
+       */
+      const { tools, nameMap } = flattenAdapterTools(body.tools);
+      console.log(`[adapter] scoped plugin tools=${tools.length}: ${tools.map((tool) => tool.function.name).join(", ")}`);
       /**
        * 工具循环：模型要工具 → 我们执行 → 结果喂回去 → 直到它给出最终回答。
        *
@@ -662,18 +837,13 @@ export async function startChatAdapter(provider, credential) {
       emit("response.created", { response: { id, model: body.model ?? "", status: "in_progress", output: [] } });
 
       /**
-       * 首句延迟（P1-4）的正确解法，按 DeepSeek 的协议规则：
-       *
-       * 一个 response 里 message 永远是 output_index=0、function_call 从 1 递增。模型一旦开始
-       * 说话（「好，正在做」），立刻以 message 事件流给 Codex——用户几秒内听见第一句，适配器
-       * 继续在后台跑工具循环。message 流完后**先 output_item.done 收掉它**，再开始 function_call
-       * 的 added/delta/done；`response.completed` 的 output 必须**完整带上全部 item**——
-       * Codex 用终态对象做最终校验，流式事件发了但终态缺 function_call 的那版就是败在这。
+       * One message item stays open across all adapter-side tool rounds. Closing it before the next
+       * round caused `OutputTextDelta without active item`. Plugin calls are reported through the side
+       * channel; they are not emitted as Responses function calls because the adapter already ran them.
        */
       let messageOpened = false;
       let messageClosed = false;
       let messageText = "";
-      const calls = new Map();
       const openMessage = () => {
         if (messageOpened) return;
         messageOpened = true;
@@ -689,6 +859,7 @@ export async function startChatAdapter(provider, credential) {
       };
 
       for (; round < 8; round += 1) {
+        const visibleText = createVisibleTextFilter();
         const outcome = await runChatRound({
           base,
           headers,
@@ -697,19 +868,24 @@ export async function startChatAdapter(provider, credential) {
           tools,
           temperature: body.temperature,
           // 每轮的文本增量：第一轮直接透传给用户（首句）；后续轮的文本也照发（工具间的话）。
-          onTextDelta: (delta, full) => {
+          onTextDelta: (delta) => {
+            const visibleDelta = visibleText.push(delta);
+            if (visibleDelta === "") return;
             openMessage();
-            messageText = full;
-            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta });
+            messageText += visibleDelta;
+            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: visibleDelta });
           },
         });
+        const visibleTail = visibleText.finish();
+        if (visibleTail !== "") {
+          openMessage();
+          messageText += visibleTail;
+          emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: visibleTail });
+        }
         if (outcome.toolCalls.length === 0) {
           finalText = outcome.text;
           break;
         }
-        // 模型这轮说了话又要工具：先把 message 收干净（done），再发 function_call——
-        // 这就是「message 与 function_call 共存于一个 response」的次序。
-        closeMessage(outcome.text);
         const assistantToolMessage = {
           role: "assistant",
           // 关键：content 保留模型原文（不能写 null）——chat 供应商把纯文本+null 工具调用
@@ -722,13 +898,30 @@ export async function startChatAdapter(provider, credential) {
         for (const call of outcome.toolCalls) {
           const target = nameMap.get(call.name);
           const callItem = { id: call.id ?? `call-${round}-${functionOutputIndex}`, type: "function_call", call_id: call.id ?? `call-${round}-${functionOutputIndex}`, name: call.name, arguments: call.arguments, status: "in_progress" };
-          emit("response.output_item.added", { output_index: functionOutputIndex, item: callItem });
-          const result = await callPluginTool(target, call.arguments);
+          const startedAt = Date.now();
+          const adapterCallId = `adapter-${eventOwner.sessionId ?? "local"}-${callItem.id}`;
+          noteAdapterToolEvent({
+            ...eventOwner,
+            phase: "started",
+            callId: adapterCallId,
+            server: target?.server ?? "unknown",
+            tool: target?.tool ?? call.name,
+            arguments: call.arguments,
+            ok: true,
+          });
+          const result = await callPluginTool(target, call.arguments, eventOwner);
           executed.push({ name: call.name, ...(target ?? {}), ok: result.ok, resultText: result.text, args: result.args });
-          emit("response.function_call_arguments.delta", { item_id: callItem.id, output_index: functionOutputIndex, delta: call.arguments });
-          emit("response.function_call_arguments.done", { item_id: callItem.id, output_index: functionOutputIndex, arguments: call.arguments });
-          emit("response.output_item.done", { output_index: functionOutputIndex, item: { ...callItem, status: "completed" } });
-          calls.set(callItem.id, { id: callItem.id, name: call.name, arguments: call.arguments, namespace: undefined });
+          noteAdapterToolEvent({
+            ...eventOwner,
+            phase: "completed",
+            callId: adapterCallId,
+            server: target?.server ?? "unknown",
+            tool: target?.tool ?? call.name,
+            arguments: call.arguments,
+            ok: result.ok,
+            text: result.text,
+            durationMs: Date.now() - startedAt,
+          });
           messagesForRound = [
             ...messagesForRound,
             { role: "tool", tool_call_id: callItem.call_id, content: result.text },
@@ -736,18 +929,12 @@ export async function startChatAdapter(provider, credential) {
           functionOutputIndex += 1;
         }
       }
-      if (finalText === "" && executed.length > 0) finalText = messageText || "（工具执行完了，但模型没有给出总结。）";
-      for (const entry of executed) noteMediaEvent(entry);
+      if (messageText !== "") finalText = messageText;
+      if (finalText === "" && executed.length > 0) finalText = "（工具执行完了，但模型没有给出总结。）";
+      for (const entry of executed) noteMediaEvent({ ...entry, ...eventOwner });
       let text = finalText;
       console.log(`[adapter] → done · rounds=${round + 1} · tools=${executed.length} · text=${JSON.stringify(text.slice(0, 40))}`);
 
-      /**
-       * The completed payload must carry the turn's `output` items — including the function calls.
-       *
-       * Without them Codex had nothing to execute: the model asked for a tool, never got a result, and
-       * asked again (measured: six rounds of MiniMax-M3 curling the bridge by hand instead of calling
-       * `detect_tempo`).
-       */
       // 终态兜底：循环结束后 message 还没关（模型最后一轮直接给完整回答、没有工具）就在这里收。
       if (messageOpened && !messageClosed) {
         closeMessage(text);
@@ -759,21 +946,10 @@ export async function startChatAdapter(provider, credential) {
       if (messageOpened) {
         output.push({ id: "msg-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
       }
-      for (const [, call] of calls) {
-        output.push({
-          id: call.id,
-          type: "function_call",
-          call_id: call.id,
-          name: call.name,
-          ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
-          arguments: call.arguments,
-          status: "completed",
-        });
-      }
       emit("response.completed", {
         response: { id, model: body.model ?? "", status: "completed", output, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
       });
-      console.log(`[adapter] → done · text=${JSON.stringify(text.slice(0, 40))} · calls=${calls.size}`);
+      console.log(`[adapter] → done · text=${JSON.stringify(text.slice(0, 40))} · calls=${executed.length}`);
       console.log(`[adapter] 首句 emit 于 ${firstTextAt === null ? "?" : firstTextAt - adapterT0}ms`);
       console.log(`[adapter] SSE 序: ${sseLog.join(" → ")}`);
       console.log(`[adapter] completed.output items: ${output.map((item) => item.type).join(", ")}`);
@@ -926,6 +1102,63 @@ const PLUGIN_REPOS = [
 ];
 
 /**
+ * A page worker gets the domain tools it can actually operate; it does not get the whole toolbox.
+ * Hidden tools are removed from the model schema and checked again at execution time. `null` means
+ * the whole server is intentionally part of that page scope.
+ */
+export const SCOPE_TOOL_ALLOWLIST = {
+  butler: {
+    steward: ["situation_report", "recent_events", "focus_change", "report_done", "route_intent"],
+  },
+  studio: {
+    "shadow-music-generator": [
+      "submit_generation",
+      "run_job",
+      "job_status",
+      "render_part",
+      "render_song",
+      "start_render",
+      "cancel_render",
+      "mix_arrangement",
+      "export_stems",
+      "export_midi",
+      "arrange",
+      "regenerate_part",
+      "render_section",
+      "transform_notes",
+      "list_export_formats",
+      "clip_modulate",
+    ],
+    "stem-splitter": ["separate_stems", "stem_job_status", "stem_job_cancel", "stem_backends", "stem_install_backend"],
+    "soundfont-renderer": ["list_instruments", "render_notes", "render_midi"],
+    "audio-analysis-dedupe": ["analyze_file", "hum_to_midi", "groove_to_pattern", "hum_to_drums", "detect_tempo", "detect_key"],
+    library: ["list_tracks", "track_detail", "crate_list"],
+  },
+  dj: {
+    "set-planner": ["plan_set", "suggest_next", "order_set"],
+    "audio-analysis-dedupe": ["analyze_file", "detect_tempo", "detect_key", "suggest_cues"],
+    library: ["list_tracks", "track_detail", "crate_list", "set_list", "set_detail", "stats"],
+  },
+  library: {
+    library: null,
+    "audio-analysis-dedupe": null,
+    ShadowMusicGrabber: null,
+    "stem-splitter": ["stem_backends", "stem_job_status"],
+  },
+};
+
+/** Runtime mirror of the model-facing allow-list. The schema hides tools; this stops leaked calls. */
+export function scopeAllowsTool(scope, server, tool) {
+  const allow = SCOPE_TOOL_ALLOWLIST[scope];
+  if (allow === undefined) return false;
+  const normalized = String(server).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const key = Object.keys(allow).find((candidate) => candidate.toLowerCase().replace(/[^a-z0-9]/g, "") === normalized);
+  if (key === undefined) return false;
+  const tools = allow[key];
+  return tools === null || tools.includes(tool);
+}
+
+/**
  * House rules for every thread. The workbench is voice-first, so the agent has to know that a spoken
  * turn arrives with a recording and what to do with a hummed melody.
  */
@@ -959,6 +1192,43 @@ const DEVELOPER_INSTRUCTIONS = [
   "回答尽量短、口语化，因为会被朗读出来；需要执行的操作直接调用工具，不要只描述。",
 ].join("\n");
 
+const SCOPE_INSTRUCTIONS = {
+  butler:
+    "你是全局管家，不是 Studio、DJ 或曲库 worker。你只负责跨页面状态、路由建议和账本查询；当前 MVP 不直接执行领域写操作。只要用户提出可能属于 Studio、DJ 或曲库的请求，先调用 steward.route_intent，target 选择 studio/dj/library/butler_direct/ask_user，并给出 action_summary、confidence 和 context={workspace, projectId, setId}（[ui_context] 里有的字段原样带上）。路由结果交给前端确认，不要假装已经执行。",
+  studio:
+    "你是当前 Studio 页面专属 worker。你只处理当前打开的工程；不要回答或修改 DJ Set、曲库全局管理。每条工程消息都带 projectId/revision，切换工程后以最新 context 为准。其它页面请求让用户回管家或去对应页面。",
+  dj:
+    "你是 DJ 页面专属 worker。你只处理当前 Set：选曲、排序、BPM/Camelot 关系和 set 计时。不要生成歌曲、分轨或修改曲库元数据；这些属于 Studio 或曲库 worker。",
+  library:
+    "你是曲目库页面专属 worker。你只处理入库、元数据、分类 crate、查重和库分析。不要生成音乐、编排 DJ Set 或修改 Studio 工程；这些属于其它页面。",
+};
+
+/**
+ * Each page gets only the house rules for tools it can actually see. The Studio playbook is large and
+ * mentions generator/splitter/soundfont repeatedly; appending it to DJ or Library made those workers
+ * ask for tools that their schema deliberately hides.
+ */
+const DJ_INSTRUCTIONS = [
+  "你运行在 Shadow Producers 的 DJ 页面。当前 Set 的数据在 [dj_set_context] 里，以它为准。",
+  "选曲、推荐下一首和 AI 排序用 set-planner；读曲目详情或 crate 用 library；分析与 cue 建议用 audio-analysis-dedupe。",
+  "不要生成歌曲、分轨、修改曲库元数据，也不要尝试调用 Rekordbox/Serato 转换工具；需要这些时让用户去对应页面。",
+  "回答短、口语化，因为可能被朗读；执行动作时直接调用工具，不要只描述。",
+].join("\n");
+
+const LIBRARY_INSTRUCTIONS = [
+  "你运行在 Shadow Producers 的曲目库页面。当前筛选、选中曲目和库状态在 [library_context] 里，以它为准。",
+  "入库、元数据、分类 crate、查重和库分析用 library；音频分析用 audio-analysis-dedupe；下载与转码用 ShadowMusicGrabber；分轨后端状态用 stem-splitter。",
+  "不要生成音乐、编排 DJ Set 或修改 Studio 工程；需要这些时让用户去对应页面。",
+  "回答短、可执行；危险操作先说明影响再调用。",
+].join("\n");
+
+export function developerInstructionsFor(scope) {
+  if (scope === "butler") return SCOPE_INSTRUCTIONS.butler;
+  if (scope === "dj") return `${DJ_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.dj}`;
+  if (scope === "library") return `${LIBRARY_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.library}`;
+  return `${DEVELOPER_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.studio}`;
+}
+
 function mcpServers() {
   const servers = {};
   for (const repo of PLUGIN_REPOS) {
@@ -975,6 +1245,26 @@ function mcpServers() {
     };
   }
   return servers;
+}
+
+/**
+ * Thread-local MCP projection. The bridge's process has every plugin, but a thread only sees the
+ * servers/tools in its scope. `enabled:false` also protects against profile-level servers leaking
+ * back in through config merging.
+ */
+export function scopedMcpServers(scope) {
+  const allow = SCOPE_TOOL_ALLOWLIST[scope] ?? SCOPE_TOOL_ALLOWLIST.butler;
+  const all = mcpServers();
+  const out = {};
+  for (const [repo, server] of Object.entries(all)) {
+    if (!(repo in allow)) {
+      out[repo] = { ...server, enabled: false };
+      continue;
+    }
+    const tools = allow[repo];
+    out[repo] = tools === null ? { ...server } : { ...server, enabled_tools: tools };
+  }
+  return out;
 }
 
 /** One `codex app-server` child, plus the session → thread map. */
@@ -1280,7 +1570,7 @@ class Agent {
   }
 
   /** The Codex thread behind a UI session, created on first use. */
-  async threadFor(sessionId, provider = null) {
+  async threadFor(sessionId, provider = null, scope = "butler", eventContext = {}) {
     const known = this.threads.get(sessionId);
     if (known !== undefined) return known;
     await this.start();
@@ -1293,24 +1583,35 @@ class Agent {
      * builds the config per thread, so the secret never lands in a config file, and switching keys does
      * not require restarting the Codex process. Codex's own docs call this the programmatic path.
      */
-    const config = { mcp_servers: mcpServers() };
+    const safeScope = Object.hasOwn(SCOPE_TOOL_ALLOWLIST, scope) ? scope : "butler";
+    const config = { mcp_servers: scopedMcpServers(safeScope) };
     const params = {
       cwd: AGENT_CWD,
       sandbox: SANDBOX,
       approvalPolicy: APPROVAL,
-      developerInstructions: DEVELOPER_INSTRUCTIONS,
+      developerInstructions: developerInstructionsFor(safeScope),
       config,
     };
     if (provider !== null && provider.baseUrl && provider.model) {
       const key = provider.credentialRef ? resolveCredential(provider.credentialRef)?.value ?? "" : "";
       const id = `shadowroom-${String(provider.id ?? "custom").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+      const eventHeaders = {
+        "x-shadowroom-session-id": sessionId,
+        "x-shadowroom-scope": safeScope,
+        ...(typeof eventContext.projectId === "string" && eventContext.projectId !== ""
+          ? { "x-shadowroom-project-id": eventContext.projectId }
+          : {}),
+        ...(typeof eventContext.setId === "string" && eventContext.setId !== ""
+          ? { "x-shadowroom-set-id": eventContext.setId }
+          : {}),
+      };
       const entry = {
         name: provider.label ?? id,
         base_url: provider.baseUrl,
         // Our providers are OpenAI-compatible endpoints; `chat` is the wire every one of them speaks.
         wire_api: provider.wireApi === "responses" ? "responses" : "chat",
         ...(key === "" ? {} : { experimental_bearer_token: key }),
-        ...(provider.headers === undefined ? {} : { http_headers: provider.headers }),
+        http_headers: { ...(provider.headers ?? {}), ...eventHeaders },
       };
       /**
        * Both shapes: the app-server's config overrides are applied by *path* (its own tests write
@@ -1337,7 +1638,14 @@ class Agent {
    * @returns the Codex turn id.
    */
   async send(sessionId, text, onEvent, options = {}) {
-    const threadId = await this.threadFor(sessionId, options.provider ?? null);
+    const safeScope = Object.hasOwn(SCOPE_TOOL_ALLOWLIST, options.scope ?? "") ? options.scope : "butler";
+    const threadId = await this.threadFor(
+      sessionId,
+      options.provider ?? null,
+      safeScope,
+      options.eventContext ?? {},
+    );
+    const unsubscribeAdapter = subscribeAdapterToolEvents(sessionId, safeScope, onEvent);
     const listener = (message) => {
       const { method, params } = message;
       if (method === "item/agentMessage/delta") {
@@ -1353,6 +1661,7 @@ class Agent {
         return;
       }
       if (method === "turn/completed") {
+        unsubscribeAdapter();
         onEvent({ type: "done", turn: params.turn });
         return;
       }
@@ -1380,21 +1689,37 @@ class Agent {
     try {
       const started = await this.request("turn/start", {
         threadId,
-        input: [{ type: "text", text, text_elements: [] }, ...(options.input ?? [])],
+        input: [
+          {
+            type: "text",
+            text:
+              text +
+              ownerBlock({
+                sessionId,
+                scope: safeScope,
+                projectId: options.eventContext?.projectId,
+                setId: options.eventContext?.setId,
+              }),
+            text_elements: [],
+          },
+          ...(options.input ?? []),
+        ],
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
       });
       const turnId = started?.turn?.id;
       // The turn runs asynchronously; the SSE stream stays open until turn/completed arrives.
       onEvent({ type: "turn", threadId, turnId });
-      return { threadId, turnId, listener, listeners };
+      return { threadId, turnId, listener, listeners, cleanup: unsubscribeAdapter };
     } catch (error) {
       listeners.delete(listener);
+      unsubscribeAdapter();
       throw error;
     }
   }
 
-  release(threadId, listener, listeners) {
+  release(threadId, listener, listeners, cleanup = () => undefined) {
+    cleanup();
     listeners.delete(listener);
     if (listeners.size === 0) this.listeners.delete(threadId);
   }
@@ -1813,6 +2138,10 @@ const http = createServer(async (request, response) => {
       const event = {
         id,
         at: Date.now(),
+        sessionId: typeof body.sessionId === "string" ? body.sessionId : null,
+        scope: typeof body.scope === "string" ? body.scope : null,
+        projectId: typeof body.projectId === "string" ? body.projectId : null,
+        setId: typeof body.setId === "string" ? body.setId : null,
         server: String(body.server ?? "unknown"),
         tool: String(body.tool ?? "unknown"),
         ok: body.ok !== false,
@@ -2313,7 +2642,7 @@ const http = createServer(async (request, response) => {
         if (closed) return;
         closed = true;
         clearTimeout(guard);
-        if (handle !== null) agent.release(handle.threadId, handle.listener, handle.listeners);
+        if (handle !== null) agent.release(handle.threadId, handle.listener, handle.listeners, handle.cleanup);
         response.end();
       };
       const guard = setTimeout(() => {
@@ -2330,6 +2659,14 @@ const http = createServer(async (request, response) => {
             if (event.type === "done" || event.type === "error") finish();
           },
           {
+            scope:
+              body.scope === "studio" || body.scope === "dj" || body.scope === "library"
+                ? body.scope
+                : "butler",
+            eventContext: {
+              ...(typeof body.projectId === "string" && body.projectId !== "" ? { projectId: body.projectId } : {}),
+              ...(typeof body.setId === "string" && body.setId !== "" ? { setId: body.setId } : {}),
+            },
             model: typeof body.model === "string" && body.model !== "" ? body.model : undefined,
             provider:
               body.provider !== null && typeof body.provider === "object" && typeof body.provider.baseUrl === "string"

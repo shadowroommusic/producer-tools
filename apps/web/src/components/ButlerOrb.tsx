@@ -5,8 +5,8 @@
  * （listening 动画 + 波形，麦克风经 lib/mic.ts 共享流），再点一下 / Esc 挂断回静态；
  * 面板**没有标题、没有听话开关**——只有一行输入 + 发送 + 一条细把手；文字说明只进 hover tooltip。
  *
- * 架构（用户强调）：干活的不是球——球只是管家/调度：它把话交给**当前工作区**的 agent 会话，
- * 工具执行、落轨、导出都是那条会话在做；球负责「知道全局 + 派活 + 汇报」。
+ * 架构（用户强调）：干活的不是球——球只是全局管家/调度。无论当前在哪一页，它都写 butler 会话；
+ * 页面 dock 才写该页 worker。球负责「知道全局 + 路由 + 汇报」，领域执行由用户确认后进入 worker。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";

@@ -6,7 +6,7 @@
 import type { ToolCall } from "../components/ToolCallRow";
 
 export type ChatMessage =
-  | { id: string; role: "user"; text: string; at: number }
+  | { id: string; role: "user"; text: string; at: number; scope?: MessageScope }
   | { id: string; role: "assistant"; text: string; at: number; streaming?: boolean }
   | { id: string; role: "reasoning"; text: string; at: number; streaming?: boolean }
   | { id: string; role: "usage"; text: string; at: number }
@@ -17,13 +17,37 @@ export type Session = {
   id: string;
   title: string;
   createdAt: number;
+  lastActiveAt: number;
+  /** The only objects that own history. A page worker is deliberately not split per project yet. */
+  kind: SessionKind;
+  scope: SessionScope;
   messages: ChatMessage[];
   calls: ToolCall[];
 };
 
+export type SessionKind = "butler" | "studio" | "dj" | "library";
+export type WorkerSessionKind = Exclude<SessionKind, "butler">;
+
+export type SessionScope = {
+  workspaceId: SessionKind;
+};
+
+/** Per-message attribution. This is not the thread boundary; changing it never changes history. */
+export type MessageScope = {
+  workspaceId: SessionKind;
+  /** Human label captured at send time, so history stays readable after renames. */
+  label?: string;
+  projectId?: string;
+  setId?: string;
+  revision?: string;
+};
+
 export type SessionStore = {
   sessions: Session[];
-  activeId?: string;
+  /** Sidebar and `/conversation` only ever select butler topics. */
+  activeButlerId?: string;
+  /** Studio / DJ / library each have exactly one endpoint worker. */
+  activeWorkerIds?: Partial<Record<WorkerSessionKind, string>>;
 };
 
 const STORAGE_KEY = "shadowroom.sessions.v1";
@@ -33,9 +57,29 @@ const newId = (): string =>
     ? crypto.randomUUID()
     : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-/** A fresh, empty session (the hero state). */
-export function createSession(): Session {
-  return { id: newId(), title: "新会话", createdAt: Date.now(), messages: [], calls: [] };
+const KIND_TITLES: Record<SessionKind, string> = {
+  butler: "新对话",
+  studio: "Studio 助手",
+  dj: "DJ 助手",
+  library: "曲目库助手",
+};
+
+const isKind = (value: unknown): value is SessionKind =>
+  value === "butler" || value === "studio" || value === "dj" || value === "library";
+
+/** A fresh endpoint session. Butler topics are user-created; worker sessions are page-owned. */
+export function createSession(kind: SessionKind = "butler"): Session {
+  const now = Date.now();
+  return {
+    id: newId(),
+    title: KIND_TITLES[kind],
+    createdAt: now,
+    lastActiveAt: now,
+    kind,
+    scope: { workspaceId: kind },
+    messages: [],
+    calls: [],
+  };
 }
 
 /** Load the store, tolerating anything unreadable in localStorage. */
@@ -43,12 +87,55 @@ export function loadSessions(): SessionStore {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw === null) return { sessions: [] };
-    const parsed = JSON.parse(raw) as SessionStore;
+    const parsed = JSON.parse(raw) as SessionStore & { activeId?: string };
     if (!Array.isArray(parsed.sessions)) return { sessions: [] };
-    return { sessions: parsed.sessions, activeId: parsed.activeId };
+    const sessions = parsed.sessions.map((entry) => {
+      const rawEntry = entry as Session & { activeId?: string };
+      const kind = isKind(rawEntry.kind) ? rawEntry.kind : "butler";
+      return {
+        ...entry,
+        kind,
+        scope: rawEntry.scope?.workspaceId === kind ? rawEntry.scope : { workspaceId: kind },
+        lastActiveAt:
+          typeof rawEntry.lastActiveAt === "number" && Number.isFinite(rawEntry.lastActiveAt)
+            ? rawEntry.lastActiveAt
+            : rawEntry.createdAt,
+      };
+    });
+    const legacyActive = sessions.find((entry) => entry.id === parsed.activeId);
+    const activeButlerId =
+      parsed.activeButlerId ??
+      (legacyActive?.kind === "butler" ? legacyActive.id : sessions.find((entry) => entry.kind === "butler")?.id);
+    const activeWorkerIds = { ...(parsed.activeWorkerIds ?? {}) };
+    if (legacyActive !== undefined && legacyActive.kind !== "butler") {
+      activeWorkerIds[legacyActive.kind] = legacyActive.id;
+    }
+    return {
+      sessions,
+      ...(activeButlerId === undefined ? {} : { activeButlerId }),
+      ...(Object.keys(activeWorkerIds).length === 0 ? {} : { activeWorkerIds }),
+    };
   } catch {
     return { sessions: [] };
   }
+}
+
+/** Read the one session owned by a scope. */
+export function sessionForKind(store: SessionStore, kind: SessionKind): Session | undefined {
+  const id = kind === "butler" ? store.activeButlerId : store.activeWorkerIds?.[kind];
+  return store.sessions.find((entry) => entry.id === id && entry.kind === kind);
+}
+
+/** Add a session and select it in its own scope without creating a second source of truth. */
+export function selectSession(store: SessionStore, session: Session): SessionStore {
+  const exists = store.sessions.some((entry) => entry.id === session.id);
+  return {
+    ...store,
+    sessions: exists ? store.sessions.map((entry) => (entry.id === session.id ? session : entry)) : [session, ...store.sessions],
+    ...(session.kind === "butler"
+      ? { activeButlerId: session.id }
+      : { activeWorkerIds: { ...(store.activeWorkerIds ?? {}), [session.kind]: session.id } }),
+  };
 }
 
 /** Persist the store; a full quota simply means this browser keeps the session in memory only. */

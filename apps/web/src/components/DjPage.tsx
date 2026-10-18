@@ -16,6 +16,7 @@ import { callTool } from "../lib/mcp";
 import { Player, type DeckSnapshot } from "../lib/dj-deck";
 import { formatPlanDuration, plannerTrackPayload } from "../lib/dj-plan";
 import { zhBpmSource, zhCueNote, zhCueReason } from "../lib/dj-cue-zh";
+import type { DjAgentContext } from "../lib/agent-context";
 
 type LibraryTrack = {
   id: number;
@@ -61,6 +62,7 @@ type SuggestionRow = {
 };
 
 type Draft = {
+  id: string;
   name: string;
   trackIds: number[];
   overlapMs: number;
@@ -132,6 +134,7 @@ const DRAG_ROW = "application/x-shadowroom-setrow";
 const DRAFT_KEY = "shadowroom.setdraft";
 const DEFAULT_OVERLAP_MS = 16_000;
 const CUE_COLORS = ["#f43f5e", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#6366f1"];
+const newSetId = (): string => `set-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
 function mmss(seconds: number): string {
   const safe = Math.max(0, seconds);
@@ -216,6 +219,7 @@ function readDraft(): Draft {
     if (raw !== null) {
       const parsed = JSON.parse(raw) as Partial<Draft>;
       return {
+        id: typeof parsed.id === "string" && parsed.id !== "" ? parsed.id : newSetId(),
         name: typeof parsed.name === "string" ? parsed.name : "未命名 set",
         trackIds: Array.isArray(parsed.trackIds) ? parsed.trackIds.filter((id) => typeof id === "number") : [],
         overlapMs:
@@ -227,7 +231,7 @@ function readDraft(): Draft {
   } catch {
     // corrupted draft = empty draft; the page must always come up
   }
-  return { name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS };
+  return { id: newSetId(), name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS };
 }
 
 const emptySnapshot = (): DeckSnapshot => ({
@@ -238,7 +242,7 @@ const emptySnapshot = (): DeckSnapshot => ({
   volume: 1,
 });
 
-export function DjPage() {
+export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgentContext) => void }) {
   const changeRef = useRef<(snapshot: DeckSnapshot) => void>(() => {});
   const [player] = useState(
     () =>
@@ -292,6 +296,25 @@ export function DjPage() {
       // storage may be full or blocked; the set keeps working in memory
     }
   }, [draft]);
+
+  useEffect(() => {
+    onContextChange?.({
+      id: draft.id,
+      name: draft.name,
+      trackCount: draft.trackIds.length,
+      overlapMs: draft.overlapMs,
+      tracks: draft.trackIds.map((trackId) => {
+        const detail = details[trackId];
+        return {
+          trackId,
+          title: detail?.title ?? `Track ${trackId}`,
+          bpm: detail?.bpm ?? null,
+          key: detail?.camelot ?? detail?.key ?? null,
+          durationMs: detail?.duration_ms ?? null,
+        };
+      }),
+    });
+  }, [details, draft, onContextChange]);
 
   /** One detail per track, shared by the board, the player strip and the cue editor. */
   const ensureDetail = useCallback(
@@ -368,7 +391,7 @@ export function DjPage() {
 
   const newSet = useCallback(() => {
     setUndoOrder(null);
-    setDraft({ name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS });
+    setDraft({ id: newSetId(), name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS });
     setSuggestions([]);
     say(null);
   }, [say]);
@@ -402,7 +425,7 @@ export function DjPage() {
         setUndoOrder(null);
         setEditing(null);
         setAiCue(null);
-        setDraft({ name: detail.name, trackIds: matched, overlapMs: DEFAULT_OVERLAP_MS });
+        setDraft({ id: `imported-${detail.id}`, name: detail.name, trackIds: matched, overlapMs: DEFAULT_OVERLAP_MS });
         setSetChoices(null);
         say(
           skipped > 0

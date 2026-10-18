@@ -10,16 +10,25 @@ import { IconCollapse, IconExpand } from "./icons";
 
 export function DockPanel({
   chat,
+  label = "对话",
+  scope,
   onClose,
 }: {
   /** The transcript plus the composer. */
   chat: ReactNode;
+  /** The conversation's scope in user-facing language, e.g. 管家对话 / 工程对话. */
+  label?: string;
+  /** Short object identity below the label; changing pages must make this obvious. */
+  scope?: string;
   onClose: () => void;
 }) {
   return (
     <section className="sr-dock" aria-label="对话">
       <header className="sr-dock-head">
-        <span className="sr-dock-label">对话</span>
+        <span className="sr-dock-title">
+          <span className="sr-dock-label">{label}</span>
+          {scope !== undefined && <span className="sr-dock-scope sr-mono">{scope}</span>}
+        </span>
         <div className="sr-dock-actions">
           <button
             type="button"

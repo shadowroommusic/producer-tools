@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fileUrl } from "../lib/studio.ts";
 import "../styles/library.css";
+import type { LibraryAgentContext } from "../lib/agent-context";
 import {
   EMPTY_FILTERS,
   analyzeMissing,
@@ -81,7 +82,7 @@ function useDebounced<T>(value: T, ms: number): T {
   return debounced;
 }
 
-export function LibraryPage() {
+export function LibraryPage({ onContextChange }: { onContextChange?: (context: LibraryAgentContext) => void }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [tracks, setTracks] = useState<TrackRow[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -161,6 +162,31 @@ export function LibraryPage() {
   useEffect(() => {
     void reloadTracks();
   }, [reloadTracks]);
+
+  useEffect(() => {
+    const selectedRow = selectedId === null ? undefined : tracks?.find((track) => track.id === selectedId);
+    onContextChange?.({
+      total: stats?.tracks ?? tracks?.length ?? 0,
+      visible: tracks?.length ?? 0,
+      filters: {
+        query: form.query,
+        bpmMin: form.bpmMin,
+        bpmMax: form.bpmMax,
+        camelot: form.camelot,
+        tag: form.tag,
+      },
+      selected:
+        selectedId === null
+          ? null
+          : {
+              id: selectedId,
+              title: detail?.title ?? selectedRow?.title ?? `Track ${selectedId}`,
+              artist: detail?.artist ?? selectedRow?.artist ?? null,
+              bpm: detail?.bpm ?? selectedRow?.bpm ?? null,
+              key: detail?.camelot ?? detail?.key ?? selectedRow?.camelot ?? selectedRow?.key ?? null,
+            },
+    });
+  }, [detail, form, onContextChange, selectedId, stats, tracks]);
 
   // 看板第一次打开才读偏好与 set 列表（学习是写操作，绝不在「看一下」时自动跑）。
   useEffect(() => {

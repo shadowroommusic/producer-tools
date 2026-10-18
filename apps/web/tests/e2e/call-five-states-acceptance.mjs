@@ -244,7 +244,7 @@ try {
     await page.context().close();
   }
 
-  // ======================= ⑤ 挂断清闹钟（四条退出路径之①/②） =======================
+  // ======================= ⑤ 挂断清闹钟（球/Esc 是全局出口） =======================
   {
     stub = { kind: "empty" };
     const page = await freshPage();
@@ -252,7 +252,7 @@ try {
     await page.goto(BASE, { waitUntil: "domcontentloaded" });
     await page.locator(".sr-orb-ball").waitFor({ timeout: 20000 });
     await startCallAndReach(page, "unclear");
-    await page.locator(".sr-voicebar-end").click();
+    await page.keyboard.press("Escape");
     const armed = await page.evaluate(() => window.__callProbe?.unclearArmed() ?? null);
     const idleNow = (await mode(page)) === "idle";
     await page.waitForTimeout(3000);
@@ -262,7 +262,7 @@ try {
       caption: document.querySelector("[data-call-caption]")?.textContent ?? "",
     }));
     check(
-      "⑤ unclear 里「结束通话」→ 闹钟立刻清、3s 后不偷跑、提示不残留",
+      "⑤ unclear 里按 Esc 挂断 → 闹钟立刻清、3s 后不偷跑、提示不残留",
       armed === false && idleNow && late.mode === "idle" && late.armed === false && late.caption.trim() === "",
       `挂断瞬间闹钟=${armed} 球=${idleNow ? "idle" : "非 idle"}；3s 后 mode=${late.mode} 闹钟=${late.armed} 字幕=「${late.caption.trim()}」`,
     );

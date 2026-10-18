@@ -29,6 +29,11 @@ export function Transcript({
         if (message.role === "user") {
           return (
             <div key={message.id} className="sr-msg-user">
+              {message.scope !== undefined && message.scope.workspaceId !== "butler" && (
+                <span className="sr-bubble-scope sr-mono">
+                  {message.scope.label ?? message.scope.workspaceId}
+                </span>
+              )}
               <div className="sr-bubble">{message.text}</div>
             </div>
           );

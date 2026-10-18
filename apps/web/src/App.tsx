@@ -34,7 +34,9 @@ import {
 import { StudioProjects, summarize } from "./components/StudioProjects";
 import { Transcript } from "./components/Transcript";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
-import type { ToolCall } from "./components/ToolCallRow";
+import { parseRouteFromCall, type ToolCall } from "./components/ToolCallRow";
+import type { DjAgentContext, LibraryAgentContext } from "./lib/agent-context";
+import { RouteIntentCard, type RouteIntent } from "./components/RouteIntentCard";
 import {
   answerApproval,
   fetchAgentHealth,
@@ -133,8 +135,12 @@ import {
   timeAgo,
   titleFrom,
   capSession,
+  sessionForKind,
+  selectSession,
   type ChatMessage,
+  type MessageScope,
   type Session,
+  type SessionKind,
   type SessionStore,
 } from "./lib/sessions";
 import { AppFrame } from "./shell/AppFrame";
@@ -153,6 +159,35 @@ const PLUGINS: Array<{ id: string; server: string; label: string; repo: string }
 ];
 
 type Bridge = "connecting" | "online" | "offline";
+type MainView = "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "dj" | "library" | "settings";
+type DockableView = "workbench" | "studio" | "dj" | "library";
+type DockState = Record<DockableView, boolean>;
+
+const DOCKABLE_VIEWS: readonly DockableView[] = ["workbench", "studio", "dj", "library"];
+const DOCK_STATE_KEY = "shadowroom.dock.by-view.v1";
+const EMPTY_DOCKS: DockState = { workbench: false, studio: false, dj: false, library: false };
+
+function dockView(view: MainView): DockableView | undefined {
+  return DOCKABLE_VIEWS.includes(view as DockableView) ? (view as DockableView) : undefined;
+}
+
+function sessionKindForView(view: MainView): SessionKind {
+  return view === "studio" ? "studio" : view === "dj" ? "dj" : view === "library" ? "library" : "butler";
+}
+
+function loadDockState(): DockState {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DOCK_STATE_KEY) ?? "{}") as Partial<DockState>;
+    return {
+      workbench: parsed.workbench === true,
+      studio: parsed.studio === true,
+      dj: parsed.dj === true,
+      library: parsed.library === true,
+    };
+  } catch {
+    return { ...EMPTY_DOCKS };
+  }
+}
 
 export function App() {
   const [servers, setServers] = useState<ServerInfo[]>([]);
@@ -160,24 +195,13 @@ export function App() {
   const [workspaces, setWorkspaces] = useState("");
   const [bridge, setBridge] = useState<Bridge>("connecting");
   const [activePlugin, setActivePlugin] = useState("set-planner");
-  /**
-   * The dock is the conversation next to the work. It stays open on the work pages (工作台, Studio,
-   * the plugin pages) and folds away on the conversation page, where the transcript already owns the
-   * main column — the one place the same chat would otherwise be drawn twice. The choice sticks.
-   */
-  const [dockOpen, setDockOpen] = useState(
-    () => window.localStorage.getItem("shadowroom.dock") !== "closed",
-  );
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
-  const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("标准");
   const [agent, setAgent] = useState<AgentHealth | null>(null);
   const [running, setRunning] = useState(false);
   const [controller, setController] = useState<AbortController | null>(null);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
-  const [mainView, setMainView] = useState<
-    "workbench" | "conversation" | "plugins" | "plugin" | "studio" | "dj" | "library" | "settings"
-  >(
+  const [mainView, setMainView] = useState<MainView>(
     () =>
       (window.localStorage.getItem("shadowroom.view") as
         | "workbench"
@@ -186,8 +210,40 @@ export function App() {
         | "plugin"
         | "studio"
         | "dj"
+        | "library"
         | "settings"
-        | null) ?? "workbench",
+            | null) ?? "workbench",
+  );
+  /**
+   * Dock visibility belongs to a page, never to a global "last open" switch. Entering Studio or DJ
+   * must not steal screen space from the work surface; opening it once on that page is remembered.
+   */
+  const [dockByView, setDockByView] = useState<DockState>(loadDockState);
+  /**
+   * Typing belongs to the conversation that owns it. The persistent orb always writes to the butler,
+   * even while Studio/DJ/Library is open; the page dock writes only to that page's worker.
+   */
+  const [drafts, setDrafts] = useState<Record<SessionKind, string>>({
+    butler: "",
+    studio: "",
+    dj: "",
+    library: "",
+  });
+  const draftKind = sessionKindForView(mainView);
+  const draft = drafts[draftKind];
+  const setDraftFor = useCallback((kind: SessionKind, next: string) => {
+    setDrafts((current) => ({ ...current, [kind]: next }));
+  }, []);
+  const setDraft = useCallback((next: string) => setDraftFor(draftKind, next), [draftKind, setDraftFor]);
+  const setButlerDraft = useCallback((next: string) => setDraftFor("butler", next), [setDraftFor]);
+  const currentDockView = dockView(mainView);
+  const dockOpen = currentDockView === undefined ? false : dockByView[currentDockView];
+  const setDockOpen = useCallback(
+    (open: boolean) => {
+      const view = dockView(mainView);
+      if (view !== undefined) setDockByView((current) => ({ ...current, [view]: open }));
+    },
+    [mainView],
   );
   /**
    * Where the sidebar thinks you are is **derived**, not stored.
@@ -223,6 +279,10 @@ export function App() {
   }, [mainView]);
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
+  const [djContext, setDjContext] = useState<DjAgentContext | null>(null);
+  const [libraryContext, setLibraryContext] = useState<LibraryAgentContext | null>(null);
+  const [pendingRoute, setPendingRoute] = useState<RouteIntent | null>(null);
+  const [routeSuggestion, setRouteSuggestion] = useState<RouteIntent | null>(null);
   /**
    * Undo/redo, **per project**: each project keeps its own past/future, so switching projects never
    * mixes histories (the rule every editor follows, and the one this app got wrong until now).
@@ -445,7 +505,9 @@ export function App() {
     () => window.localStorage.getItem("shadowroom.model") ?? undefined,
   );
 
-  const session = store.sessions.find((entry) => entry.id === store.activeId);
+  const sessionKind = sessionKindForView(mainView);
+  const session = sessionForKind(store, sessionKind);
+  const butlerSession = sessionForKind(store, "butler");
 
   useEffect(() => {
     saveSessions(store);
@@ -487,8 +549,8 @@ export function App() {
   // Come back to the same page after a reload.
   useEffect(() => {
     window.localStorage.setItem("shadowroom.view", mainView);
-    window.localStorage.setItem("shadowroom.dock", dockOpen ? "open" : "closed");
-  }, [dockOpen, mainView]);
+    window.localStorage.setItem(DOCK_STATE_KEY, JSON.stringify(dockByView));
+  }, [dockByView, mainView]);
 
   // Reopen whatever project was open last, so a reload lands where the work was.
   useEffect(() => {
@@ -561,23 +623,46 @@ export function App() {
   /** Apply an update to the active session, creating one when the hero is still empty. */
   const withActiveSession = useCallback((update: (session: Session) => Session) => {
     setStore((current) => {
-      const existing = current.sessions.find((entry) => entry.id === current.activeId);
-      const target = existing ?? createSession();
+      const kind = sessionKindForView(mainView);
+      const existing = sessionForKind(current, kind);
+      const target = existing ?? createSession(kind);
       const next = update(target);
-      const known = existing !== undefined;
-      return {
-        sessions: known
-          ? current.sessions.map((entry) => (entry.id === next.id ? next : entry))
-          : [next, ...current.sessions],
-        activeId: next.id,
-      };
+      return selectSession(current, { ...next, lastActiveAt: Date.now() });
+    });
+  }, [mainView]);
+
+  const startSession = useCallback(() => {
+    setStore((current) => selectSession(current, createSession("butler")));
+  }, []);
+
+  /** Page workers are hidden from the sidebar but exist independently of butler topics. */
+  const ensureWorkerSession = useCallback((kind: Exclude<SessionKind, "butler">) => {
+    setStore((current) => {
+      if (sessionForKind(current, kind) !== undefined) return current;
+      return selectSession(current, createSession(kind));
     });
   }, []);
 
-  const startSession = useCallback(() => {
-    const fresh = createSession();
-    setStore((current) => ({ sessions: [fresh, ...current.sessions], activeId: fresh.id }));
-  }, []);
+  useEffect(() => {
+    const kind = sessionKindForView(mainView);
+    if (kind !== "butler") ensureWorkerSession(kind);
+  }, [ensureWorkerSession, mainView]);
+
+  useEffect(() => {
+    const onRoute = (event: Event) => {
+      const route = (event as CustomEvent<RouteIntent>).detail;
+      if (route === undefined) return;
+      if (route.target === "studio" || route.target === "dj" || route.target === "library") {
+        ensureWorkerSession(route.target);
+        setMainView(route.target);
+        setDockByView((current) => ({ ...current, [route.target]: true }));
+        setDraftFor(route.target, route.actionSummary);
+        setPendingRoute(route);
+      }
+    };
+    window.addEventListener("shadowroom:route-intent", onRoute);
+    return () => window.removeEventListener("shadowroom:route-intent", onRoute);
+  }, [ensureWorkerSession, setDraftFor]);
 
   /** Append a message to one session inside the store. */
   const patchSession = useCallback((store_: SessionStore, id: string, patch: (session: Session) => Session) => {
@@ -593,28 +678,63 @@ export function App() {
      * Async because the turn may first have to point the Codex core at the chosen provider (a core
      * restart, ~1s). Everything below is unchanged — the awaits are only around that switch.
      */
-    async (override?: string, options: { mentions?: Mention[] } = {}) => {
-    const text = (override ?? draft).trim();
+    async (override?: string, options: { mentions?: Mention[]; kind?: SessionKind } = {}) => {
+    const kind = options.kind ?? sessionKindForView(mainView);
+    const text = (override ?? drafts[kind]).trim();
     if (text === "" || running) return;
-    setDraft("");
+    setDraftFor(kind, "");
     const at = Date.now();
     const assistantId = `a-${at}`;
     const mentions = options.mentions ?? attachments;
     if (options.mentions === undefined) setAttachments([]);
 
-    // The session id has to be known synchronously, so a hero submit creates the session first.
-    const known = store.sessions.find((entry) => entry.id === store.activeId);
-    const sessionId = known?.id ?? createSession().id;
+    // Each page owns one endpoint thread: butler topics never impersonate Studio/DJ/library.
+    const known = sessionForKind(store, kind);
+    const fresh = known === undefined ? createSession(kind) : undefined;
+    const sessionId = known?.id ?? fresh?.id ?? createSession(kind).id;
     if (known === undefined) {
-      const fresh: Session = { id: sessionId, title: titleFrom(text), createdAt: at, messages: [], calls: [] };
-      setStore((current) => ({ sessions: [fresh, ...current.sessions], activeId: fresh.id }));
+      const base = fresh ?? createSession(kind);
+      const created: Session = {
+        ...base,
+        title: kind === "butler" ? titleFrom(text) : base.title,
+      };
+      setStore((current) => selectSession(current, created));
     }
 
+    const scopeProject =
+      kind === "studio" && openProjectId !== undefined
+        ? projects.find((project) => project.id === openProjectId)
+        : undefined;
+    const messageScope: MessageScope = {
+      workspaceId: kind,
+      ...(kind === "studio" && scopeProject !== undefined
+        ? { label: `Studio · ${scopeProject.name}` }
+        : kind === "dj" && djContext !== null
+          ? { label: `DJ · ${djContext.name}` }
+          : kind === "library"
+            ? { label: "Library · 曲目库" }
+            : {}),
+      ...(scopeProject === undefined
+        ? {}
+        : { projectId: scopeProject.id, revision: structureRevision(scopeProject) }),
+      ...(kind === "dj" && djContext !== null
+        ? {
+            setId: djContext.id,
+            revision: `${djContext.trackCount}:${djContext.tracks.map((track) => track.trackId).join(",")}`,
+          }
+        : {}),
+      ...(kind === "library" && libraryContext !== null
+        ? {
+            revision: `${libraryContext.total}:${libraryContext.visible}:${JSON.stringify(libraryContext.filters)}`,
+          }
+        : {}),
+    };
     setStore((current) =>
       patchSession(current, sessionId, (session) => ({
         ...session,
         title: session.messages.length === 0 ? titleFrom(text) : session.title,
-        messages: [...session.messages, { id: `u-${at}`, role: "user", text, at }],
+        lastActiveAt: at,
+        messages: [...session.messages, { id: `u-${at}`, role: "user", text, at, scope: messageScope }],
       })),
     );
 
@@ -676,7 +796,8 @@ export function App() {
      * it is looking at. The clip cannot be read from the agent's side — the app owns that state — so
      * it travels with the message, together with the revision the edit must match.
      */
-    const openProject = projects.find((project) => project.id === openProjectId);
+    const openProject =
+      kind === "studio" ? projects.find((project) => project.id === openProjectId) : undefined;
     /**
      * 工程随每条消息一起过去 —— **音频文件在智能体那边读不到，只有前端知道**。
      *
@@ -712,6 +833,58 @@ export function App() {
             "[/arrangement_context]",
             "（上面就是当前工程的全部内容：导出整首用 mix_arrangement（tracks 结构 {name, gain(0-1), clips:[{path, start(小节), bars}]}）、导出分轨用 export_stems、导出 MIDI 用 export_midi；只改一条轨用 regenerate_part（render_spec 原样传、clip_id 必填）；改结构用 arrange（bars/sections/tracks 原样传、operations 写操作、revision 回传，别自己算位置）。）",
           ];
+    const djSetContext =
+      kind === "dj" && djContext !== null
+        ? [
+            "",
+            "[dj_set_context]",
+            `set_id: ${djContext.id}`,
+            `name: ${djContext.name}`,
+            `track_count: ${djContext.trackCount}`,
+            `overlap_ms: ${djContext.overlapMs}`,
+            `tracks: ${JSON.stringify(djContext.tracks)}`,
+            "[/dj_set_context]",
+            "（这是 DJ 页当前 Set 的真实状态。只处理选曲、排序、BPM/Camelot 关系和 set 计时；不要修改曲库字段，也不要生成歌曲或分轨。）",
+          ]
+        : [];
+    const libraryPageContext =
+      kind === "library" && libraryContext !== null
+        ? [
+            "",
+            "[library_context]",
+            `total_tracks: ${libraryContext.total}`,
+            `visible_tracks: ${libraryContext.visible}`,
+            `filters: ${JSON.stringify(libraryContext.filters)}`,
+            `selected_track: ${JSON.stringify(libraryContext.selected)}`,
+            "[/library_context]",
+            "（这是曲目库页当前的筛选与选中对象。只处理入库、元数据、分类、查重和分析；不要生成音乐或编排 DJ Set。）",
+          ]
+        : [];
+    const butlerUiContext =
+      kind === "butler"
+        ? [
+            "",
+            "[ui_context]",
+            `current_view: ${mainView}`,
+            `open_project_id: ${openProjectId ?? ""}`,
+            `dj_set_id: ${djContext?.id ?? ""}`,
+            `library_tracks: ${libraryContext?.total ?? ""}`,
+            "[/ui_context]",
+            "（只用于理解用户当前在哪；不要假装已经执行其它页面的领域操作。）",
+          ]
+        : [];
+    const routeContext =
+      pendingRoute !== null && kind === pendingRoute.target
+        ? [
+            "",
+            "[butler_route]",
+            `route_id: ${pendingRoute.routeId}`,
+            `target: ${pendingRoute.target}`,
+            `instruction: ${pendingRoute.actionSummary}`,
+            "[/butler_route]",
+            "（这是用户在管家确认卡上刚刚确认的页内请求。按 instruction 执行；不要把它当成 worker 自己新发起的话题。）",
+          ]
+        : [];
     /**
      * Point the core at the provider this choice belongs to (or back at the built-in one) before the
      * turn is sent. Without this the turn went out with the custom *model name* but the built-in
@@ -750,11 +923,11 @@ export function App() {
     /**
      * 管家简报：跟工程上下文一样，随每条消息走 —— 它是"我刚在别的页面做了什么"的唯一来源。
      */
-    const brief = await butlerBrief();
+    const brief = kind === "butler" ? await butlerBrief() : "";
     const briefContext = brief === "" ? [] : [brief];
     const outgoing =
-      noteContext === null
-        ? [text, ...briefContext, ...arrangementContext].join("\n")
+      kind !== "studio" || noteContext === null
+        ? [text, ...briefContext, ...butlerUiContext, ...arrangementContext, ...djSetContext, ...libraryPageContext, ...routeContext].join("\n")
         : [
             text,
             "",
@@ -774,12 +947,31 @@ export function App() {
             "（这一段是用户在 Studio 里选中的片段：改音符用 transform_notes；想让这一轨的声音变一点就调 regenerate_part，把上面的 render_spec 原样放进 part、clip_id 必填、patch 只动要改的那几个键。注意：没有 notes 的片段是音频（导入的文件、分轨结果），它没有可编辑的音符——transform_notes 打过去会被拒绝，这种情况应该先用 stem-splitter 分轨，或在乐器轨/鼓轨上操作。）",
             ...arrangementContext,
             ...briefContext,
+            ...butlerUiContext,
+            ...djSetContext,
+            ...libraryPageContext,
+            ...routeContext,
           ].join("\n");
+
+    if (routeContext.length > 0) setPendingRoute(null);
 
     void sendTurn(
       sessionId,
       outgoing,
       (event) => {
+        if (event.type === "done") {
+          if (kind !== "butler") {
+            void callTool("steward", "report_done", {
+              type: "worker.turn",
+              actor: `${kind}:worker`,
+              object_id: messageScope.projectId ?? messageScope.setId ?? undefined,
+              outcome: /completed/i.test(String(event.turn?.status ?? "completed")) ? "ok" : "failed",
+              metrics: { turns: 1 },
+              injectable: true,
+            }).catch(() => undefined);
+          }
+          return;
+        }
         if (event.type === "delta") {
           appendDelta(event.text);
           return;
@@ -821,6 +1013,10 @@ export function App() {
           }
           const call = toolCallFromItem(event.item, event.phase);
           if (call === null) return;
+          if (kind === "butler" && event.phase === "completed" && call.name === "route_intent") {
+            const route = parseRouteFromCall(call);
+            if (route !== null) setRouteSuggestion(route);
+          }
           if (call.name === "regenerate_part") {
             // A render can be over in a fifth of a second, and a badge that flickers is worse than
             // none: hold it for at least 700 ms so the user sees that the track was rebuilt.
@@ -921,10 +1117,18 @@ export function App() {
                   return agentModelChoices(modelSettings).find((choice) => choice.provider.id === providerId && choice.model === model);
                 })()
               : undefined;
-          if (custom === undefined) return { model: modelId, mentions };
+          const scopeOptions = {
+            scope: kind,
+            eventContext: {
+              ...(messageScope.projectId === undefined ? {} : { projectId: messageScope.projectId }),
+              ...(messageScope.setId === undefined ? {} : { setId: messageScope.setId }),
+            },
+          };
+          if (custom === undefined) return { model: modelId, mentions, ...scopeOptions };
           return {
             model: custom.model,
             mentions,
+            ...scopeOptions,
             provider: {
               id: custom.provider.id,
               label: custom.provider.name,
@@ -972,14 +1176,14 @@ export function App() {
         }
       });
     },
-    [agent, attachments, draft, modelId, modelSettings, noteContext, patchSession, running, store.activeId, store.sessions],
+    [agent, attachments, djContext, drafts, libraryContext, mainView, modelId, modelSettings, noteContext, openProjectId, patchSession, pendingRoute, projects, running, setDraftFor, store],
   );
 
   const stop = useCallback(() => {
-    if (store.activeId === undefined) return;
+    if (session === undefined) return;
     controller?.abort();
-    void interruptTurn(store.activeId);
-  }, [controller, store.activeId]);
+    void interruptTurn(session.id);
+  }, [controller, session]);
 
   /** Answer one approval and record the decision in the transcript. */
   const decide = useCallback(
@@ -992,7 +1196,7 @@ export function App() {
         .catch(() => undefined)
         .finally(() => {
           setApprovals((current) => current.filter((entry) => entry.approvalId !== approval.approvalId));
-          const sessionId = approval.sessionId ?? store.activeId;
+          const sessionId = approval.sessionId ?? session?.id;
           if (sessionId === undefined) return;
           setStore((current) =>
             patchSession(current, sessionId, (session) => ({
@@ -1011,11 +1215,11 @@ export function App() {
           );
         });
     },
-    [patchSession, store.activeId],
+    [patchSession, session],
   );
 
   const pendingForSession = approvals.filter(
-    (approval) => approval.sessionId === undefined || approval.sessionId === store.activeId,
+    (approval) => approval.sessionId === undefined || approval.sessionId === session?.id,
   );
 
   /**
@@ -1219,7 +1423,7 @@ export function App() {
     const path = wav === null ? null : await saveRecording(wav, "voice");
     const mentions: Mention[] =
       path === null ? [] : [{ name: path.split("/").pop() ?? "voice.wav", path, label: "这段语音" }];
-    submitRef.current(text, { mentions });
+    submitRef.current(text, { mentions, kind: "butler" });
     /**
      * 回合交出去了，下一回从空白开始。流式路径由 listen() 复位；回合制（桥式 STT）没有
      * 那个会话，必须在这里收尾，否则第二句话会和第一句拼在一起发出去。
@@ -1282,7 +1486,7 @@ export function App() {
         currentTTS().cancel();
         const rescued = capture.current?.takeWavSince(sinceMs) ?? null;
         controller?.abort();
-        if (store.activeId !== undefined) void interruptTurn(store.activeId);
+        if (session !== undefined) void interruptTurn(session.id);
         const heard = interruptRef.current.trim();
         interruptRef.current = "";
         heardRef.current = heard === "" ? heardRef.current : heard === heardRef.current ? heard : `${heard} ${heardRef.current}`.trim();
@@ -1321,7 +1525,7 @@ export function App() {
           partialRef.current = "";
           setVoicePartial("");
           turnRef.current?.reset();
-          submitRef.current(text);
+          submitRef.current(text, { kind: "butler" });
         })();
       },
     });
@@ -1395,11 +1599,12 @@ export function App() {
       .filter((part) => part !== "")
       .join(" ");
     hangUp();
-    if (fragment !== "") setDraft(fragment);
+    if (sessionKindForView(mainView) !== "butler") setMainView("conversation");
+    if (fragment !== "") setDraftFor("butler", fragment);
     window.requestAnimationFrame(() => {
       document.querySelector<HTMLTextAreaElement>(".sr-composer-input")?.focus();
     });
-  }, [hangUp]);
+  }, [hangUp, mainView, setDraftFor]);
 
   /**
    * 验收钩子（生产不触发，形状照抄 StudioSoundsDrawer 的 __soundsProbe）：
@@ -1545,7 +1750,7 @@ export function App() {
   const selected = plugins.find((plugin) => plugin.repo === activePlugin) ?? plugins[2];
   const active = plugins.find((plugin) => plugin.repo === activePlugin);
 
-  const summaries: SessionSummary[] = store.sessions.map((entry) => ({
+  const summaries: SessionSummary[] = store.sessions.filter((entry) => entry.kind === "butler").map((entry) => ({
     id: entry.id,
     title: entry.title,
     meta: `${entry.messages.filter((message) => message.role !== "notice").length} 条 · ${timeAgo(entry.createdAt)}`,
@@ -1978,7 +2183,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [openProjectId, mainView]);
+  }, [openProjectId, mainView, session?.id]);
   useEffect(() => {
     // 启动条件与「模型回合」解耦（P0 最后一公里）：异步 start_render 的完成事件在回合结束后
     // 才被 worker 推进来，那时 running 早就 false 了——按 running 门控轮询，事件永远没人取。
@@ -1987,7 +2192,19 @@ export function App() {
     const take = async () => {
       try {
         const answer = (await fetch(`/api/agent/media-events?since=${mediaCursor.current}`).then((response) => response.json())) as {
-          events?: Array<{ id: number; at?: number; server: string; tool: string; ok: boolean; text: string; args?: Record<string, unknown> }>;
+          events?: Array<{
+            id: number;
+            at?: number;
+            sessionId?: string | null;
+            scope?: string | null;
+            projectId?: string | null;
+            setId?: string | null;
+            server: string;
+            tool: string;
+            ok: boolean;
+            text: string;
+            args?: Record<string, unknown>;
+          }>;
           next?: number;
         };
         if (cancelled || answer.events === undefined) return;
@@ -1998,6 +2215,19 @@ export function App() {
         }
         for (const event of answer.events) {
           mediaCursor.current = Math.max(mediaCursor.current, event.id);
+          /**
+           * Ownership is authoritative when the producer supplied it. Old events without a
+           * sessionId still use the timestamp fallback below, so pre-migration logs remain safe.
+           */
+          if (event.sessionId !== undefined && event.sessionId !== null && event.sessionId !== session?.id) continue;
+          if (
+            event.projectId !== undefined &&
+            event.projectId !== null &&
+            openProjectId !== undefined &&
+            event.projectId !== openProjectId
+          ) {
+            continue;
+          }
           // 作用域（P0 回归第二道闸）：只吸收**本工程本次打开之后**发生的事件。历史/别处的
           // 事件跳过吸收但照常推进游标——不推进会每轮重试同一批（实测把旧轨倒进新工程）。
           const eventAt = (event as { at?: number }).at ?? 0;
@@ -2026,7 +2256,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [running, openProjectId]);
+  }, [running, openProjectId, session?.id]);
 
   const absorbToolResult = useCallback(
     (call: ToolCall) => {
@@ -2237,6 +2467,24 @@ export function App() {
    */
   const viewShowsDock = mainView === "workbench" || mainView === "studio" || mainView === "dj" || mainView === "library";
   const chatInDock = dockOpen && viewShowsDock;
+  const dockLabel =
+    mainView === "studio"
+      ? "工程对话"
+      : mainView === "dj"
+        ? "Set 对话"
+        : mainView === "library"
+          ? "曲库对话"
+          : "管家对话";
+  const dockScope =
+    mainView === "studio"
+      ? openProject === undefined
+        ? "Studio · 未打开工程"
+        : `Studio · ${openProject.name}`
+      : mainView === "dj"
+        ? `DJ · ${djContext?.name ?? "当前 Set"}`
+        : mainView === "library"
+          ? `Library · ${libraryContext?.total ?? "—"} 首`
+          : "Butler · 全局";
   /** Bounce the arrangement through the generator plugin and record the call in the transcript. */
   const exportArrangement = useCallback(
     async (spec: Record<string, unknown>) => {
@@ -2761,9 +3009,11 @@ export function App() {
           plugins={plugins}
           activeWorkspace={workspace}
           showPlugins={mainView === "plugins"}
+          onHome={() => setMainView("workbench")}
           onSelectWorkspace={(next) => {
-            // The work pages keep the conversation beside them; the conversation page is the
-            // conversation, so the dock folds away there.
+            if (next === "studio") ensureWorkerSession("studio");
+            else if (next === "dj") ensureWorkerSession("dj");
+            else if (next === "library") ensureWorkerSession("library");
             setMainView(
               next === "studio"
                 ? "studio"
@@ -2775,16 +3025,16 @@ export function App() {
                     ? "settings"
                     : "workbench",
             );
-            setDockOpen(true);
           }}
           onShowPlugins={() => {
             setMainView("plugins");
-            setDockOpen(true);
           }}
           sessions={summaries}
-          activeSessionId={store.activeId}
+          activeSessionId={butlerSession?.id}
           onSelectSession={(id) => {
-            setStore((current) => ({ ...current, activeId: id }));
+            const selected = store.sessions.find((entry) => entry.id === id);
+            if (selected === undefined) return;
+            setStore((current) => selectSession(current, selected));
             setMainView("conversation");
             setDockOpen(false);
           }}
@@ -2803,19 +3053,29 @@ export function App() {
             sessions={summaries}
             plugins={plugins}
             onOpenProject={(id) => {
+              ensureWorkerSession("studio");
               setOpenProjectId(id);
               rememberOpenProject(id);
               setMainView("studio");
             }}
             onOpenSession={(id) => {
-              setStore((current) => ({ ...current, activeId: id }));
+              const selected = store.sessions.find((entry) => entry.id === id);
+              if (selected === undefined) return;
+              setStore((current) => selectSession(current, selected));
               setMainView("conversation");
               setDockOpen(false);
             }}
             onOpenPlugins={() => setMainView("plugins")}
-            onOpenLibrary={() => setMainView("library")}
-            onOpenDj={() => setMainView("dj")}
+            onOpenLibrary={() => {
+              ensureWorkerSession("library");
+              setMainView("library");
+            }}
+            onOpenDj={() => {
+              ensureWorkerSession("dj");
+              setMainView("dj");
+            }}
             onCreateProject={() => {
+              ensureWorkerSession("studio");
               const created = defaultProject();
               setProjects((current) => [created, ...current]);
               setOpenProjectId(created.id);
@@ -2843,9 +3103,9 @@ export function App() {
           ) : mainView === "settings" ? (
             <SettingsPage settings={modelSettings} onChange={setModelSettings} />
           ) : mainView === "dj" ? (
-            <DjPage />
+            <DjPage onContextChange={setDjContext} />
           ) : mainView === "library" ? (
-            <LibraryPage />
+            <LibraryPage onContextChange={setLibraryContext} />
           ) : mainView === "studio" ? (
           openProject === undefined ? (
             <StudioProjects
@@ -2947,19 +3207,33 @@ export function App() {
       }
       dock={
         <DockPanel
+          label={dockLabel}
+          scope={dockScope}
           chat={conversationPane({ variant: "dock", composer: composerFor("和智能体说点什么…") })}
           onClose={() => setDockOpen(false)}
         />
       }
       />
+      {routeSuggestion !== null && sessionKindForView(mainView) !== "butler" && (
+        <div className="sr-route-toast" role="status" aria-live="polite">
+          <RouteIntentCard
+            route={routeSuggestion}
+            onOpen={(route) => {
+              setRouteSuggestion(null);
+              window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: route }));
+            }}
+            onDismiss={() => setRouteSuggestion(null)}
+          />
+        </div>
+      )}
       {/*
-        管家球：常驻整个 app（不属于任何页面）。给它 draft/onDraftChange/onSubmit 这三个 prop，
-        球里那行输入就和右侧对话栏走的是**同一条会话**；running 让它在智能体干活时显示进度刻度。
+        管家球：常驻整个 app（不属于任何页面）。它在任何页面都写 butler 线程；页面 dock 才写页面
+        worker。两条草稿也分开发，避免在 Studio 里打开球时把管家话术带进工程线程。
       */}
       <ButlerOrb
-        draft={draft}
-        onDraftChange={setDraft}
-        onSubmit={() => void submit()}
+        draft={drafts.butler}
+        onDraftChange={setButlerDraft}
+        onSubmit={() => void submit(drafts.butler, { kind: "butler" })}
         running={running}
         voiceMode={voiceMode}
         voiceState={voiceState}

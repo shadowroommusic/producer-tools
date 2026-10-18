@@ -673,10 +673,139 @@
 
 .sr-dock-label {
   overflow: hidden;
+  display: block;
   font-size: var(--sr-text-14);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sr-dock-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.sr-dock-scope {
+  overflow: hidden;
+  color: var(--sr-label-caption);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Butler route handoff: a scope decision is visible and user-confirmed, never hidden in prose. */
+.sr-route-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgb(217 255 61 / 16%);
+  border-radius: 13px;
+  background:
+    radial-gradient(300px 140px at 0 0, rgb(217 255 61 / 8%), transparent 72%),
+    rgb(10 17 12 / 84%);
+}
+
+.sr-route-kicker {
+  grid-column: 1 / -1;
+  color: var(--sr-accent);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.sr-route-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-route-title,
+.sr-route-summary,
+.sr-route-missing {
+  margin: 0;
+}
+
+.sr-route-title {
+  color: var(--sr-label-primary);
+  font-size: var(--sr-text-13);
+  font-weight: 600;
+}
+
+.sr-route-title strong {
+  color: var(--sr-accent);
+  font-weight: 650;
+}
+
+.sr-route-summary {
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-12);
+  line-height: 18px;
+}
+
+.sr-route-missing {
+  color: var(--sr-warn);
+  font-size: 10px;
+}
+
+.sr-route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+[data-theme="light"] .sr-route-card {
+  background:
+    radial-gradient(300px 140px at 0 0, rgb(217 255 61 / 18%), transparent 72%),
+    rgb(255 255 255 / 82%);
+  border-color: rgb(117 147 0 / 24%);
+}
+
+/* The butler can be used from any page; its confirmation cannot live only in a hidden transcript. */
+.sr-route-toast {
+  position: fixed;
+  z-index: 70;
+  bottom: 20px;
+  left: 50%;
+  width: min(520px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  filter: drop-shadow(0 18px 38px rgb(0 0 0 / 42%));
+  animation: sr-route-toast-in 180ms ease-out both;
+}
+
+.sr-route-toast .sr-route-card {
+  border-color: rgb(217 255 61 / 32%);
+  background:
+    radial-gradient(420px 180px at 0 0, rgb(217 255 61 / 13%), transparent 72%),
+    rgb(8 15 11 / 94%);
+  backdrop-filter: blur(18px);
+}
+
+[data-theme="light"] .sr-route-toast .sr-route-card {
+  border-color: rgb(117 147 0 / 38%);
+  background:
+    radial-gradient(420px 180px at 0 0, rgb(217 255 61 / 26%), transparent 72%),
+    rgb(255 255 255 / 94%);
+}
+
+@keyframes sr-route-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-route-toast {
+    animation: none;
+  }
 }
 
 .sr-dock-actions {
@@ -3875,6 +4004,8 @@
 /* 展开的小面板：锚在球上方（跟球高走 +12px 缝），毛玻璃 + 1px 描边 + 圆角 16，开合 180ms（scale 0.96→1 + 淡入）。 */
 .sr-orb-panel {
   position: absolute;
+  /* The fixed orb container is click-through; the expanded controls must explicitly opt back in. */
+  pointer-events: auto;
   right: 0;
   bottom: calc(var(--sr-orb-size, 64px) + 12px);
   width: 320px;
@@ -5816,7 +5947,7 @@
   overflow-y: auto;
 }
 
-@container (max-width: 680px) {
+@container (max-width: 860px) {
   .sr-home-hero {
     grid-template-columns: 1fr;
     /* The page body is an intrinsic grid; an overflow-hidden hero contributes a zero min size.
@@ -5837,7 +5968,7 @@
   }
 }
 
-@container (max-width: 620px) {
+@container (max-width: 760px) {
   .sr-dj-main {
     flex: none;
     grid-template-columns: 1fr;

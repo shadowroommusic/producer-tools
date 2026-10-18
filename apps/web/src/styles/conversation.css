@@ -168,6 +168,17 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  gap: 4px;
+}
+
+.sr-bubble-scope {
+  max-width: min(calc(var(--sr-content-width) * 0.7), 82%);
+  overflow: hidden;
+  color: var(--sr-label-caption);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sr-bubble {

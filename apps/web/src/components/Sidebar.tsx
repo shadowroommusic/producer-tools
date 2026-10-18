@@ -73,6 +73,7 @@ export function Sidebar({
   plugins,
   activeWorkspace,
   showPlugins,
+  onHome,
   onSelectWorkspace,
   onShowPlugins,
   sessions,
@@ -85,6 +86,7 @@ export function Sidebar({
   plugins: PluginEntry[];
   activeWorkspace: WorkspaceId;
   showPlugins: boolean;
+  onHome: () => void;
   onSelectWorkspace: (workspace: WorkspaceId) => void;
   onShowPlugins: () => void;
   sessions: SessionSummary[];
@@ -106,7 +108,7 @@ export function Sidebar({
     >
       <div className="sr-sidebar-logorow">
         {!collapsed && (
-          <button type="button" className="sr-brand" onClick={onNewSession} title="新建会话">
+          <button type="button" className="sr-brand" onClick={onHome} title="回到工作台">
             <span className="sr-brand-mark">
               <BrandMark height={26} strokeWidth={5} />
             </span>
@@ -131,9 +133,9 @@ export function Sidebar({
         </button>
       </div>
 
-      <button type="button" className="sr-new-session" onClick={onNewSession} aria-label="新建会话">
+      <button type="button" className="sr-new-session" onClick={onNewSession} aria-label="新对话">
         <IconNewSession size={collapsed ? 18 : 14} />
-        {!collapsed && <span className="sr-new-session-label">新建会话</span>}
+        {!collapsed && <span className="sr-new-session-label">新对话</span>}
       </button>
 
       <nav className="sr-panel-list" aria-label="工作区">

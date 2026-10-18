@@ -37,7 +37,7 @@ export type AgentEvent =
   | { type: "item"; phase: string; item: AgentItem }
   | { type: "usage"; turnId?: string; usage: TokenUsage }
   | { type: "approval"; approvalId: string; sessionId?: string; kind: string; title: string; detail?: string }
-  | { type: "done"; turn?: unknown }
+  | { type: "done"; turn?: { status?: string } }
   | { type: "error"; message: string };
 
 /** Token accounting for one turn (`thread/tokenUsage/updated`). */
@@ -114,6 +114,10 @@ export async function sendTurn(
     model?: string;
     effort?: string;
     mentions?: Mention[];
+    /** The single endpoint worker this turn belongs to. The bridge uses it for tool scoping/thread creation. */
+    scope?: "butler" | "studio" | "dj" | "library";
+    /** Object attribution carried into model turns and adapter-side media events. */
+    eventContext?: { projectId?: string; setId?: string };
     /** Run this turn on a provider the user configured in Settings instead of the built-in one. */
     provider?: { id: string; label: string; baseUrl: string; credentialRef: string | null; endpointFormat: string };
   } = {},
@@ -127,6 +131,9 @@ export async function sendTurn(
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.effort === undefined ? {} : { effort: options.effort }),
       ...(options.provider === undefined ? {} : { provider: options.provider }),
+      ...(options.scope === undefined ? {} : { scope: options.scope }),
+      ...(options.eventContext?.projectId === undefined ? {} : { projectId: options.eventContext.projectId }),
+      ...(options.eventContext?.setId === undefined ? {} : { setId: options.eventContext.setId }),
       ...(options.mentions === undefined || options.mentions.length === 0
         ? {}
         : { mentions: options.mentions.map(({ name, path }) => ({ name, path })) }),

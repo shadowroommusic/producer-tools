@@ -37,29 +37,36 @@ Details that matter:
 - **Config.** `SHADOWROOM_HOME` (default `~/Documents/ShadowRoom`) holds the plugin checkouts;
   `SHADOWROOM_PYTHON` (default `python3`) and `SHADOWROOM_BRIDGE_HOST`/`_PORT` (default
   `127.0.0.1:8787`) round it out.
-- **Registry.** The four servers are listed in `REGISTRY` with the ids the UI uses
-  (`converter`, `analysis`, `planner`, `generator`). Adding a plugin means adding one entry.
+- **Registry.** The nine servers are listed in `REGISTRY` with the ids the UI uses
+  (`converter`, `analysis`, `planner`, `generator`, `splitter`, `soundfont`, `steward`, `library`,
+  `grabber`). Adding a plugin means adding one registry entry and its scope projection.
 
 ## The UI ↔ agent boundary
 
 Sessions live in `apps/web/src/lib/sessions.ts` and are persisted under `shadowroom.sessions.v1`:
 
 ```ts
-type Session = { id, title, createdAt, messages: ChatMessage[], calls: ToolCall[] }
+type SessionKind = "butler" | "studio" | "dj" | "library";
+type Session = { id, kind, scope: { workspaceId }, title, createdAt, lastActiveAt, messages: ChatMessage[], calls: ToolCall[] }
+type SessionStore = { sessions, activeButlerId?, activeWorkerIds? }
 type ChatMessage =
-  | { role: "user"; text }
+  | { role: "user"; text; scope?: { workspaceId, label?, projectId?, setId?, revision? } }
   | { role: "assistant"; text }
   | { role: "notice"; title; text }   // dim status row, e.g. 内核未接入
   | { role: "tool"; callId }          // rendered from `calls`, so one row drives both views
 ```
 
-- A session is titled from its first user message and listed in the sidebar with a relative time.
+- The sidebar and `/conversation` show **butler topics only**. “新对话” creates a butler topic; it
+  never creates a second Studio/DJ/library worker.
+- Studio, DJ and library each own exactly one hidden worker session. A page worker is not split per
+  project/Set yet; the current object travels as explicit message scope and context instead.
+- The floating orb always submits to butler, from every page. A page dock submits only to that page's
+  worker. Their drafts are separate, so a sentence typed in Studio cannot leak into the butler panel.
 - **A tool a panel runs is written twice**: into `calls` (the 轨迹 tab) and into `messages` as a
   `tool` row, so it also appears in the transcript where the request was made — the same place the
   Codex core will write its own steps.
-- `App.tsx` only ever updates the active session (`withActiveSession`), creating one on the fly when
-  the hero is still empty. When the Codex `app-server` core lands it writes the same two arrays; no
-  layout code has to move.
+- `App.tsx` updates the session for the selected scope (`butler` / page worker), creating it on the
+  fly when empty. Switching pages never changes the butler's selected topic.
 
 ## The agent bridge (`tools/agent-bridge.mjs`)
 
@@ -69,7 +76,7 @@ stdio (one JSON object per line). The browser gets three endpoints:
 | Endpoint | Body | Returns |
 | --- | --- | --- |
 | `GET /api/agent/health` | — | `ok`, `model`, `userAgent`, `cwd`, `sandbox`, `approval`, injected `plugins` |
-| `POST /api/agent/send` | `{ sessionId, text }` | an SSE stream of the turn: `turn`, `item`, `delta`, `reasoning`, `done`, `error` |
+| `POST /api/agent/send` | `{ sessionId, text, scope, projectId?, setId? }` | an SSE stream of the turn: `turn`, `item`, `delta`, `reasoning`, `done`, `error` |
 | `POST /api/agent/interrupt` | `{ sessionId }` | `{ ok: true }` after `turn/interrupt` |
 
 What was measured and matters:
@@ -82,10 +89,23 @@ What was measured and matters:
   `item/started|completed|updated` (tool rows: `mcpToolCall` items carry `server`, `tool`, `status`,
   `arguments`, `result`, `error`, `durationMs`; `commandExecution` items carry the shell command),
   and `turn/completed`. Reasoning deltas are forwarded but not rendered yet.
-- **Plugins.** Every thread is started with the four ShadowRoom MCP servers injected through the
-  `config` override, each with `default_tools_approval_mode: "approve"`. Without that flag an MCP
-  call fails under `approvalPolicy: "never"` with *"MCP tool call requires approval, but approval
-  policy is never"* — measured, then fixed by the flag rather than by loosening the sandbox.
+- **Plugins and scopes.** All nine servers exist in the bridge, but every thread is projected through
+  `SCOPE_TOOL_ALLOWLIST`: butler sees only steward; Studio sees generator/soundfont/splitter/analysis
+  plus a read-only library slice; DJ sees planner/analysis plus read-only library; library sees
+  library/analysis/grabber plus splitter status. DJ intentionally has no converter, Studio no
+  converter/planner, library no generator. The same allow-list is enforced again at execution time
+  (`scopeAllowsTool`), not merely hidden from the model schema.
+- **Chat-provider adapter.** Codex cannot route namespaced plugin calls produced by a chat model.
+  The loopback adapter executes those MCP calls itself, returns the result to the model, and sends a
+  thread-scoped `mcpToolCall` item to the UI side channel. It does **not** replay a Responses
+  `function_call` (doing so made Codex execute a second time and answer `unsupported call`). The
+  chat model receives only `mcp__*` namespaces; Codex's shell, subagent, goal and MCP-resource tools
+  are filtered out of this adapter schema. MiniMax-style `<think>…</think>` blocks are removed by a
+  streaming filter, including tags split across deltas, so internal reasoning never becomes the
+  user-visible message.
+- **Ownership.** A turn carries a hidden `[shadowroom_owner]` JSON envelope. The adapter strips it
+  before the provider sees the conversation, then uses it to stamp tool/media events with
+  `sessionId`, `scope`, `projectId` and `setId`.
 - **Permissions.** Threads start with `sandbox: workspace-write` and `approvalPolicy: never` in
   `SHADOWROOM_AGENT_CWD` (default `~/Documents/ShadowRoom`), which is narrower than the user's own
   global config.
@@ -111,20 +131,20 @@ What was measured and matters:
 
 | Key | Owner | Contents |
 | --- | --- | --- |
-| `shadowroom.sessions.v1` | `lib/sessions.ts` | every session: title, messages, tool calls, active id |
+| `shadowroom.sessions.v1` | `lib/sessions.ts` | butler topics + three page workers; active butler id and per-page worker ids |
 | `shadowroom.chat.width` | `components/Conversation.tsx` | dragged transcript width in px (absent = adaptive clamp) |
 | `shadowroom.converter.paths` | `components/ConverterPanel.tsx` | Rekordbox database/dir and Serato database paths |
 | `shadowroom.model` | `App.tsx` | the model picked in the composer |
 | `shadowroom.studio.v1` | `lib/studio.ts` | the Studio project: tracks, clips, tempo, key, bars |
 | `shadowroom.studio.projects.v1` | `lib/studio.ts` | every Studio project |
 | `shadowroom.studio.open` | `lib/studio.ts` | which project was open last |
-| `shadowroom.view`, `shadowroom.workspace` | `App.tsx` | the page and workspace a reload should land on (workbench / conversation / plugins / plugin / studio) |
-| `shadowroom.dock` | `App.tsx` | whether the conversation dock was left open (`open` / `closed`) |
+| `shadowroom.view` | `App.tsx` | the page a reload should land on (workbench / conversation / plugins / plugin / studio / dj / library / settings) |
+| `shadowroom.dock.by-view.v1` | `App.tsx` | dock open/closed independently for workbench / studio / dj / library |
 
 ## Where things live in the UI
 
 - **Sidebar** — workspaces (工作台 / 曲目库 / Studio / DJ / 设置), one **插件** entry that opens the
-  plugins page, then **对话**: the sessions. Plugins are deliberately not a permanent sidebar list.
+  plugins page, then **对话**: butler topics only. Page workers never appear as extra sidebar rows.
 - **Composer** — the generic agent shape: an attach menu (**+**) for a file/folder path or a plugin
   (which becomes a context chip and a `mention` input item), mode chips, a **model picker** on the
   right, and the send/stop circle. No plugin picker here.
@@ -133,12 +153,10 @@ What was measured and matters:
 - **Pages** — 工作台 (`WorkbenchHome`: recent projects, recent conversations, the plugins entry — the
   landing page), the plugins page (`PluginsPage`), and a plugin's panel (`PluginPanelPage`). Picking
   a plugin card opens its panel as a page in the centre column.
-- **Dock** — the conversation only: the shared `Transcript` plus the composer (the main column's
-  composer is hidden while it is open, so there is only ever one input). Collapsed it becomes a 44px
-  rail whose single button opens it again (it pulses while a turn runs) — a column of its own, never a
-  floating button over the transport. It is open on the work pages and closed on the conversation
-  page, because there the transcript already owns the centre column; the state is remembered, and
-  navigating between the two applies that rule again.
+- **Dock** — the current page's worker conversation plus its composer. Studio / DJ / library are
+  collapsed on first visit; each page remembers its own state. Collapsed it becomes a 44px rail.
+  A global butler route suggestion appears as a temporary route card on the current page; confirming
+  it is what opens the target page's dock and fills that worker's draft.
 - **Plugin panels** are pages in the centre column (`PluginPanelPage`), opened from the plugins page.
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the
