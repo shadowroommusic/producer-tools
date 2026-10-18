@@ -20,6 +20,10 @@ export type { OrbVisualMode } from "../lib/orb-states.ts";
 const TAU = Math.PI * 2;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+const smoothstep = (value: number): number => {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * (3 - 2 * t);
+};
 
 const SPIN_SECONDS: Record<OrbVisualMode, number> = {
   idle: 17,
@@ -65,6 +69,7 @@ export function GlassSphere({
     "--orb-rim-size": `${rim}px`,
     "--orb-rim-inner-size": `${Math.max(1, rim * 0.52)}px`,
     "--orb-progress": progressValue ?? 0.35,
+    "--orb-progress-turn": `${(progressValue ?? 0.35) * 1}turn`,
   } as CSSProperties;
 
   useEffect(() => {
@@ -92,6 +97,7 @@ export function GlassSphere({
       frame = requestAnimationFrame(draw);
       const t = FINITE(now / 1000, 0);
       const { mode: m, level: rawLevel, still } = state.current;
+      const motionTime = still ? 0 : t;
       const target = ORB_STATES[m] ?? ORB_STATES.idle;
       const k = 0.11;
       current.hueA = lerpHue(current.hueA, target.hueA, k);
@@ -128,19 +134,62 @@ export function GlassSphere({
         ctx.fillRect(cx - plasmaR, cy - plasmaR, plasmaR * 2, plasmaR * 2);
       }
 
-      // Fine energy dust: deterministic positions keep the motion stable, while state changes alter
-      // orbit speed, density and direction without introducing random flicker.
-      const count = m === "offline" ? 8 : m === "thinking" ? 40 : m === "speaking" ? 30 : 24;
+      /**
+       * Speaking is a material morph, not a second animation pasted on top. Every mote has a stable
+       * orbital home and a stable lane on a horizontal waveform; `current.ripple` smoothly blends
+       * between the two. The result reads as the same organism changing form instead of a waveform
+       * appearing over unrelated particles.
+       */
+      const voiceBlend = m === "speaking" ? smoothstep(current.ripple) : 0;
+      const waveYAt = (nx: number, layer: number) => {
+        const envelope = Math.pow(Math.max(0, Math.sin(nx * Math.PI)), 0.72);
+        const primary = Math.sin(nx * TAU * 1.35 + motionTime * 3.4) * 0.62;
+        const detail = Math.sin(nx * TAU * 3.1 - motionTime * 2.05 + layer * 0.8) * 0.38;
+        return cy + (primary + detail) * plasmaR * 0.23 * envelope + layer * 0.55;
+      };
+
+      if (voiceBlend > 0.02) {
+        for (const layer of [-1, 1]) {
+          ctx.beginPath();
+          for (let step = 0; step <= 56; step += 1) {
+            const nx = step / 56;
+            const x = cx + (nx - 0.5) * plasmaR * 1.72;
+            const y = waveYAt(nx, layer);
+            if (step === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = `hsla(${layer < 0 ? current.hueA : current.hueB}, 100%, 76%, ${voiceBlend * 0.34})`;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+      }
+
+      const count = m === "offline" ? 8 : m === "thinking" ? 40 : m === "speaking" ? 42 : 24;
       for (let i = 0; i < count; i += 1) {
         const seed = i * 0.61803398875;
-        const radius = plasmaR * (0.16 + ((i * 37) % 67) / 100);
+        const radius =
+          plasmaR *
+          (0.16 + ((i * 37) % 67) / 100) *
+          (m === "listening" ? 1 + smoothedLevel * 0.08 : 1);
         const direction = i % 3 === 0 ? -1 : 1;
         const angle = seed * TAU + (still ? 0 : t * (0.055 + current.drift * direction));
-        const x = cx + Math.cos(angle) * radius;
-        const y = cy + Math.sin(angle) * radius * (0.78 + ((i * 11) % 9) / 50);
+        const orbitX = cx + Math.cos(angle) * radius;
+        const orbitY = cy + Math.sin(angle) * radius * (0.78 + ((i * 11) % 9) / 50);
+        const lane = (i + 0.5) / count;
+        const waveX = cx + (lane - 0.5) * plasmaR * 1.72 + (((i * 7) % 5) - 2) * 0.16;
+        const waveY = waveYAt(lane, i % 2 === 0 ? -1 : 1);
+        const x = lerp(orbitX, waveX, voiceBlend);
+        const y = lerp(orbitY, waveY, voiceBlend);
         const sparkle = still ? 0.65 : 0.42 + Math.sin(t * 1.7 + seed * 8) * 0.3;
-        const dot = 0.55 + ((i * 13) % 7) / 10;
-        ctx.fillStyle = `hsla(${lerpHue(current.hueA, current.hueB, (i % 9) / 8)}, 100%, ${72 + (i % 3) * 4}%, ${Math.max(0.06, sparkle * current.rimAlpha)})`;
+        const dot = (0.55 + ((i * 13) % 7) / 10) * (1 + voiceBlend * 0.16);
+        const hue = lerpHue(current.hueA, current.hueB, voiceBlend > 0.25 ? lane : (i % 9) / 8);
+        if (voiceBlend > 0.36 && i % 5 === 0) {
+          ctx.fillStyle = `hsla(${hue}, 100%, 68%, ${voiceBlend * 0.12})`;
+          ctx.beginPath();
+          ctx.arc(x, y, dot * 3.2, 0, TAU);
+          ctx.fill();
+        }
+        ctx.fillStyle = `hsla(${hue}, 100%, ${72 + (i % 3) * 4}%, ${Math.max(0.06, sparkle * current.rimAlpha)})`;
         ctx.beginPath();
         ctx.arc(x, y, dot, 0, TAU);
         ctx.fill();
@@ -158,7 +207,7 @@ export function GlassSphere({
         ctx.translate(cx, cy);
         for (let i = 0; i < ticks; i += 1) {
           const angle = (i / ticks) * TAU;
-          const wave = Math.abs(Math.sin(angle * 3 + t * 2.1)) * smoothedLevel;
+          const wave = Math.abs(Math.sin(angle * 3 + motionTime * 2.1)) * smoothedLevel;
           const inner = plasmaR * 0.93;
           const outer = inner + 0.8 + wave * size * 0.055;
           ctx.beginPath();
@@ -171,30 +220,10 @@ export function GlassSphere({
         ctx.translate(-cx, -cy);
       }
 
-      if (m === "speaking") {
-        // A small, centered voiceprint rather than rings: rings fought the hero rim and made the
-        // entire circle look out of focus.
-        const bars = 21;
-        const width = size * 0.34;
-        ctx.lineCap = "round";
-        const waveTime = still ? 0 : t;
-        for (let i = 0; i < bars; i += 1) {
-          const x = cx - width / 2 + (i / (bars - 1)) * width;
-          const envelope = 1 - Math.abs(i - (bars - 1) / 2) / ((bars - 1) / 2);
-          const amp = (0.6 + Math.abs(Math.sin(waveTime * 3.2 + i * 0.73)) * 3.5) * envelope;
-          ctx.strokeStyle = `hsla(${lerpHue(current.hueA, current.hueB, i / (bars - 1))}, 100%, 76%, .82)`;
-          ctx.lineWidth = 1.15;
-          ctx.beginPath();
-          ctx.moveTo(x, cy - amp);
-          ctx.lineTo(x, cy + amp);
-          ctx.stroke();
-        }
-      }
-
       if (m === "thinking") {
         ctx.translate(cx, cy);
         for (let i = 0; i < 2; i += 1) {
-          const spin = (still ? 0 : t * (0.52 + i * 0.17) * (i === 0 ? 1 : -1));
+          const spin = motionTime * (0.52 + i * 0.17) * (i === 0 ? 1 : -1);
           ctx.save();
           ctx.rotate(spin);
           ctx.strokeStyle = `hsla(${i === 0 ? current.hueB : current.hueA}, 100%, 79%, ${0.25 + current.swirl * 0.3})`;
@@ -250,6 +279,10 @@ export function GlassSphere({
           }}
         />
       </svg>
+      <span
+        className={`sr-orb-progress-spark${progressValue === undefined ? " sr-orb-progress-spark--chase" : ""}`}
+        aria-hidden="true"
+      />
     </div>
   );
 }

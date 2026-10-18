@@ -1,5 +1,5 @@
 /**
- * 悬浮球 v6 收尾验收（题面 8 条，PASS/FAIL 逐条打印，可重复跑）：
+ * 悬浮球 v6 收尾验收（题面 9 条，PASS/FAIL 逐条打印，可重复跑）：
  * ① 球可见且无「管家」文字（含展开面板的 placeholder/aria-label/title）
  * ② 全文档无「听话」按钮/开关
  * ③ 点球进入通话态（data-mode 变化）④ 再点/Esc 回 idle
@@ -8,6 +8,7 @@
  * ⑦ 球外点击穿透（被球容器盖住的下层按钮仍能收到 click，含容器四角 elementFromPoint）
  * ⑧ 五态截图两两像素差超阈值（qa-orb-force 强制态、qa-orb-progress 钉进度；
  *    同尺寸 128×128 PNG，完整包住 112px 通话态球，两两 mean-abs-diff ≥ 8/255）
+ * ⑨ 说话态中心粒子确实聚合成动态声波：亮色粒子数有下限，两帧中心区域存在可见变化。
  *
  * 前置：5173 dev server（本脚本自己的分支起在 5174 时用 ORB_E2E_BASE=http://localhost:5174 覆盖）。
  * 五态截图落 exports/agent-bench-2026-10/orb-v5/zcode/。用法：node tests/e2e/orb-v5-acceptance.mjs
@@ -312,6 +313,54 @@ const dragOrbTo = async (targetX, targetY) => {
   const min = pairs.reduce((acc, [, , d]) => Math.min(acc, d), Infinity);
   check("⑧ 五态截图两两像素差 ≥ 8/255", min >= DIFF_THRESHOLD, `最小 mean-abs-diff=${min.toFixed(2)}/255；${pairs.map(([a, b, d]) => `${a}-${b}:${d.toFixed(1)}`).join(" ")}`);
   console.log(`      五态截图：${SHOTS}/state-{${MODES.join(",")}}.png`);
+}
+
+// ⑨ 说话态中心粒子声波：只截球心，避开外圈、字幕和页面内容。
+{
+  await page.evaluate(() => {
+    localStorage.setItem("qa-orb-force", "speaking");
+    localStorage.removeItem("qa-orb-progress");
+  });
+  await page.goto(BASE, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".sr-orb-ball canvas", { timeout: 20000 });
+  await page.waitForTimeout(1100);
+  const b = await ball.boundingBox();
+  const clip = { x: b.x + b.width / 2 - 38, y: b.y + b.height / 2 - 24, width: 76, height: 48 };
+  const first = (await page.screenshot({ clip })).toString("base64");
+  await page.waitForTimeout(360);
+  const second = (await page.screenshot({ clip })).toString("base64");
+  const wave = await page.evaluate(async ({ first, second }) => {
+    const load = (base64) =>
+      new Promise((resolve) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.src = `data:image/png;base64,${base64}`;
+      });
+    const [a, b] = await Promise.all([load(first), load(second)]);
+    const canvas = document.createElement("canvas");
+    canvas.width = 76;
+    canvas.height = 48;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const read = (image) => {
+      ctx.clearRect(0, 0, 76, 48);
+      ctx.drawImage(image, 0, 0, 76, 48);
+      return ctx.getImageData(0, 0, 76, 48).data;
+    };
+    const pa = read(a);
+    const pb = read(b);
+    let lit = 0;
+    let motion = 0;
+    for (let i = 0; i < pa.length; i += 4) {
+      if (pa[i + 1] > 135 && pa[i + 1] > pa[i] * 1.14) lit += 1;
+      motion += Math.abs(pa[i] - pb[i]) + Math.abs(pa[i + 1] - pb[i + 1]) + Math.abs(pa[i + 2] - pb[i + 2]);
+    }
+    return { lit, motionMean: motion / (pa.length / 4) / 3 };
+  }, { first, second });
+  check(
+    "⑨ 说话态粒子聚合成动态声波",
+    wave.lit >= 18 && wave.motionMean >= 0.4,
+    `中心亮粒子 ${wave.lit}px，两帧平均变化 ${wave.motionMean.toFixed(2)}/255`,
+  );
 }
 
 await browser.close();
