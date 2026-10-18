@@ -32,3 +32,12 @@ export type LibraryAgentContext = {
     key: string | null;
   } | null;
 };
+
+/** A tool result may update Studio only if its originating project is still the one on screen. */
+export function toolResultBelongsToOpenProject(
+  kind: string,
+  turnProjectId: string | undefined,
+  currentProjectId: string | undefined,
+): boolean {
+  return kind !== "studio" || turnProjectId === undefined || turnProjectId === currentProjectId;
+}

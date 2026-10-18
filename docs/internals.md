@@ -105,7 +105,9 @@ What was measured and matters:
   user-visible message.
 - **Ownership.** A turn carries a hidden `[shadowroom_owner]` JSON envelope. The adapter strips it
   before the provider sees the conversation, then uses it to stamp tool/media events with
-  `sessionId`, `scope`, `projectId` and `setId`.
+  `sessionId`, `scope`, `projectId` and `setId`. Studio absorption also checks that the turn's
+  project is still the open project; switching projects mid-turn keeps the card but refuses to write
+  into the new project.
 - **Permissions.** Threads start with `sandbox: workspace-write` and `approvalPolicy: never` in
   `SHADOWROOM_AGENT_CWD` (default `~/Documents/ShadowRoom`), which is narrower than the user's own
   global config.

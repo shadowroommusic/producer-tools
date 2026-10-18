@@ -6,6 +6,7 @@ import {
   selectSession,
   sessionForKind,
 } from "../src/lib/sessions.ts";
+import { toolResultBelongsToOpenProject } from "../src/lib/agent-context.ts";
 
 const memoryStorage = () => {
   const map = new Map();
@@ -71,4 +72,10 @@ test("new worker sessions have user-facing fixed names and isolated scopes", () 
   assert.equal(createSession("studio").title, "Studio 助手");
   assert.equal(createSession("dj").title, "DJ 助手");
   assert.equal(createSession("library").title, "曲目库助手");
+});
+
+test("a Studio tool result cannot land after the user switches projects", () => {
+  assert.equal(toolResultBelongsToOpenProject("studio", "p-a", "p-a"), true);
+  assert.equal(toolResultBelongsToOpenProject("studio", "p-a", "p-b"), false);
+  assert.equal(toolResultBelongsToOpenProject("dj", "p-a", "p-b"), true);
 });

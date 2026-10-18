@@ -35,7 +35,11 @@ import { StudioProjects, summarize } from "./components/StudioProjects";
 import { Transcript } from "./components/Transcript";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
 import { parseRouteFromCall, type ToolCall } from "./components/ToolCallRow";
-import type { DjAgentContext, LibraryAgentContext } from "./lib/agent-context";
+import {
+  toolResultBelongsToOpenProject,
+  type DjAgentContext,
+  type LibraryAgentContext,
+} from "./lib/agent-context";
 import { RouteIntentCard, type RouteIntent } from "./components/RouteIntentCard";
 import {
   answerApproval,
@@ -390,6 +394,8 @@ export function App() {
    */
   const projectsRef = useRef<StudioProject[]>(projects);
   projectsRef.current = projects;
+  const openProjectIdRef = useRef(openProjectId);
+  openProjectIdRef.current = openProjectId;
   /** Absorption goes through a ref: `submit` is created before the absorber exists. */
   const absorbRef = useRef<(call: ToolCall) => void>(() => undefined);
   const beginCallRef = useRef<(call: ToolCall) => void>(() => undefined);
@@ -1036,7 +1042,12 @@ export function App() {
               }
             }
           }
-          if (event.phase === "completed") absorbRef.current(call);
+          const ownsCurrentProject = toolResultBelongsToOpenProject(
+            kind,
+            scopeProject?.id,
+            openProjectIdRef.current,
+          );
+          if (event.phase === "completed" && ownsCurrentProject) absorbRef.current(call);
           setStore((current) =>
             patchSession(current, sessionId, (session) => {
               const known_ = session.calls.some((entry) => entry.id === call.id);
