@@ -83,6 +83,7 @@ const dj = await page.evaluate(() => {
     dock,
     composer,
     overlapLabel: document.querySelector(".sr-dj-topbar .sr-dj-overlap")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    overlapInput: document.querySelector(".sr-dj-topbar .sr-dj-overlap input")?.value ?? "",
     heroOverlap: [...document.querySelectorAll(".sr-dj-hero-meta > span")].at(-1)?.textContent?.replace(/\s+/g, " ").trim() ?? "",
   };
 });
@@ -92,9 +93,12 @@ check(
   `直接子项 ${dj.children.length} 个，交叠 ${JSON.stringify(dj.overlaps)}，横向溢出 ${dj.rootOverflow}/${dj.mainOverflow}px`,
 );
 check(
-  "② 接歌重叠写明含义",
-  dj.overlapLabel.startsWith("接歌重叠") && dj.overlapLabel.includes("0 秒") && dj.heroOverlap.includes("0s"),
-  `顶栏=${JSON.stringify(dj.overlapLabel)}，概览=${JSON.stringify(dj.heroOverlap)}`,
+  "② 默认重叠与实际重叠分开显示",
+  dj.overlapLabel.startsWith("默认重叠") &&
+    dj.overlapInput === "16" &&
+    dj.heroOverlap.includes("0s") &&
+    dj.heroOverlap.includes("实际重叠"),
+  `控件=${JSON.stringify(dj.overlapLabel)} / ${dj.overlapInput}，概览=${JSON.stringify(dj.heroOverlap)}`,
 );
 check(
   "③ 右侧输入框始终贴底",
@@ -105,6 +109,59 @@ check(
   `dock ${JSON.stringify(dj.dock)} / composer ${JSON.stringify(dj.composer)}`,
 );
 await page.screenshot({ path: `${SHOTS}/dj-with-dock.png` });
+
+const firstLibraryRow = page.locator(".sr-dj-library .sr-dj-row").filter({
+  has: page.getByRole("button", { name: /加入 set / }),
+}).first();
+await firstLibraryRow.hover();
+await firstLibraryRow.getByRole("button", { name: /加入 set / }).click();
+await page.waitForFunction(() => document.querySelectorAll(".sr-dj-suggest-row").length >= 1, null, {
+  timeout: 15000,
+});
+const setContinuation = await page.evaluate(() => {
+  const box = (el) => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+  };
+  const suggestions = [...document.querySelectorAll(".sr-dj-suggest-row")].map((row) => {
+    const reasons = row.querySelector(".sr-dj-reasons");
+    return {
+      ...box(row),
+      reasonsHeight: reasons === null ? 0 : reasons.getBoundingClientRect().height,
+      reasonsScrollHeight: reasons?.scrollHeight ?? 0,
+    };
+  });
+  const drop = document.querySelector(".sr-dj-next-drop");
+  const heroActual = [...document.querySelectorAll(".sr-dj-hero-meta > span")].at(-1)?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  return {
+    suggestions,
+    suggestionOverflow: (() => {
+      const strip = document.querySelector(".sr-dj-suggest-strip");
+      return strip === null ? -1 : strip.scrollWidth - strip.clientWidth;
+    })(),
+    drop: drop === null ? null : box(drop),
+    heroActual,
+    boardRows: document.querySelectorAll(".sr-dj-board .sr-dj-row").length,
+  };
+});
+check(
+  "④ 一首歌时仍显示实际 0 重叠，并为下一首提供明确落点",
+  setContinuation.boardRows === 1 &&
+    setContinuation.heroActual.includes("0s") &&
+    setContinuation.drop !== null &&
+    setContinuation.drop.height >= 100,
+  JSON.stringify({ heroActual: setContinuation.heroActual, drop: setContinuation.drop, rows: setContinuation.boardRows }),
+);
+check(
+  "⑤ 推荐卡不再被固定高度压扁",
+  setContinuation.suggestions.length >= 1 &&
+    setContinuation.suggestionOverflow <= 1 &&
+    setContinuation.suggestions.every(
+      (row) => row.height >= 80 && row.reasonsHeight >= 16 && row.reasonsHeight <= 37,
+    ),
+  JSON.stringify(setContinuation.suggestions),
+);
+await page.screenshot({ path: `${SHOTS}/dj-one-track.png` });
 
 const orb = await page.evaluate(() => {
   const ball = document.querySelector(".sr-orb-ball")?.getBoundingClientRect();
@@ -119,7 +176,7 @@ const orb = await page.evaluate(() => {
   };
 });
 check(
-  "④ 粒子球足够可见并使用酸绿/冰青主题",
+  "⑥ 粒子球足够可见并使用酸绿/冰青主题",
   orb.width >= 80 && orb.height >= 80 && orb.canvas && orb.hueA === "74" && orb.hueB === "174",
   JSON.stringify(orb),
 );
@@ -157,7 +214,7 @@ const picker = await page.evaluate(() => ({
   })(),
 }));
 check(
-  "⑤ 曲目库可直接选择文件夹并回填路径",
+  "⑦ 曲目库可直接选择文件夹并回填路径",
   picker.value === "/Users/lazora/Music/Test Library" &&
     picker.note.includes("文件夹已选择") &&
     picker.panelOverflow <= 1,
@@ -165,7 +222,34 @@ check(
 );
 await page.screenshot({ path: `${SHOTS}/library-picker.png` });
 
-check("⑥ 零 Console error / pageerror", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+await page.setViewportSize({ width: 1474, height: 1080 });
+await page.getByRole("button", { name: "DJ", exact: true }).click();
+await page.getByRole("button", { name: "收起对话" }).click();
+await page.waitForSelector(".sr-dj-suggest-row", { timeout: 15000 });
+const wide = await page.evaluate(() => {
+  const top = [...document.querySelectorAll(".sr-dj-topbar > *")].map((element) => {
+    const rect = element.getBoundingClientRect();
+    return { cls: String(element.className), x: rect.x, right: rect.right, width: rect.width };
+  });
+  const suggestions = document.querySelector(".sr-dj-suggest-strip");
+  const root = document.querySelector(".sr-dj");
+  return {
+    top,
+    suggestionOverflow: suggestions === null ? -1 : suggestions.scrollWidth - suggestions.clientWidth,
+    pageOverflow: root === null ? -1 : root.scrollWidth - root.clientWidth,
+  };
+});
+check(
+  "⑧ 1474px 宽屏顶栏与推荐条无横向错位",
+  wide.top.length === 4 &&
+    wide.top.every((item, index) => index === 0 || item.x >= wide.top[index - 1].right) &&
+    wide.suggestionOverflow <= 1 &&
+    wide.pageOverflow <= 1,
+  JSON.stringify(wide),
+);
+await page.screenshot({ path: `${SHOTS}/dj-wide-one-track.png` });
+
+check("⑨ 零 Console error / pageerror", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 await browser.close();
 const failed = results.filter((ok) => !ok).length;
 console.log(`\n${results.length - failed}/${results.length} ${failed === 0 ? "PASS" : "FAIL"}`);

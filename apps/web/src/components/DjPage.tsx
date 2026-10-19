@@ -812,8 +812,8 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
             总长
           </span>
           <span>
-            <strong>{draft.trackIds.length === 0 ? 0 : Math.round(draft.overlapMs / 1000)}s</strong>
-            接歌重叠
+            <strong>{plan === null ? 0 : Math.round(plan.summary.overlap_saved_ms / 1000)}s</strong>
+            实际重叠
           </span>
         </div>
       </header>
@@ -827,33 +827,25 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
             onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
           />
         </div>
-        {draft.trackIds.length === 0 ? (
-          // D6（2026-09-25 巡检）：空 set 时 16 秒的读数像是"已经有重叠"——空场显示 0 秒，
-          // 草稿里的默认值保留，加歌后自动恢复。
-          <span className="sr-dj-overlap" title="相邻两首交叉播放的默认时长；加入曲目后生效">
-            接歌重叠 <span className="sr-input sr-input--num sr-input--static">0</span> 秒
-          </span>
-        ) : (
-          <label className="sr-dj-overlap" title="相邻两首交叉播放的默认时长；0 表示不重叠">
-            接歌重叠
-            <input
-              className="sr-input sr-input--num"
-              type="number"
-              min={0}
-              max={120}
-              step={1}
-              value={Math.round(draft.overlapMs / 1000)}
-              aria-label="默认 overlap（秒）"
-              onChange={(event) => {
-                const seconds = Number(event.target.value);
-                if (Number.isFinite(seconds) && seconds >= 0) {
-                  setDraft((current) => ({ ...current, overlapMs: Math.round(seconds * 1000) }));
-                }
-              }}
-            />
-            秒
-          </label>
-        )}
+        <label className="sr-dj-overlap" title="相邻两首交叉播放的默认时长；正式时长显示在上方「实际重叠」">
+          默认重叠
+          <input
+            className="sr-input sr-input--num"
+            type="number"
+            min={0}
+            max={120}
+            step={1}
+            value={Math.round(draft.overlapMs / 1000)}
+            aria-label="默认 overlap（秒）"
+            onChange={(event) => {
+              const seconds = Number(event.target.value);
+              if (Number.isFinite(seconds) && seconds >= 0) {
+                setDraft((current) => ({ ...current, overlapMs: Math.round(seconds * 1000) }));
+              }
+            }}
+          />
+          秒
+        </label>
         {plan !== null ? (
           <span className="sr-dj-timing">
             段 {formatPlanDuration(plan.summary.sum_of_segments_ms)} · 省 {formatPlanDuration(plan.summary.overlap_saved_ms)} · 总{" "}
@@ -1372,7 +1364,15 @@ function SetBoard(props: {
         })}
         {props.trackIds.length === 0 ? (
           <p className="sr-dj-empty">从左边把歌拖进来（或点「加入」），拖动可排序</p>
-        ) : null}
+        ) : (
+          <div className="sr-dj-next-drop">
+            <span className="sr-dj-next-drop-mark" aria-hidden="true">＋</span>
+            <span className="sr-dj-next-drop-copy">
+              <strong>继续接下一首</strong>
+              <small>从左侧推荐或曲目库拖到这里；当前列表会自动给出匹配理由。</small>
+            </span>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1451,22 +1451,26 @@ function LibraryBrowser(props: {
               onDragStart={(event) => event.dataTransfer.setData(DRAG_TRACK, String(item.id))}
               onClick={() => props.onOpen(item.id)}
             >
-              <span className="sr-dj-badge sr-dj-badge-pick">推荐</span>
-              <span className="sr-dj-row-title">{item.title}</span>
-              {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
-              {item.key ? <span className="sr-chip">{item.key}</span> : null}
-              <span className="sr-dj-score" title={`推荐分 ${Math.round(item.score * 100)} / 100`}>匹配 {Math.round(item.score * 100)}</span>
-              <button
-                type="button"
-                className="sr-page-action"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  props.onAdd(item.id);
-                }}
-              >
-                加入
-              </button>
-              <div className="sr-dj-reasons">
+              <div className="sr-dj-suggest-main">
+                <span className="sr-dj-badge sr-dj-badge-pick">推荐</span>
+                <span className="sr-dj-row-title">{item.title}</span>
+                <button
+                  type="button"
+                  className="sr-page-action"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onAdd(item.id);
+                  }}
+                >
+                  加入
+                </button>
+              </div>
+              <div className="sr-dj-suggest-meta">
+                {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
+                {item.key ? <span className="sr-chip">{item.key}</span> : null}
+                <span className="sr-dj-score" title={`推荐分 ${Math.round(item.score * 100)} / 100`}>匹配 {Math.round(item.score * 100)}</span>
+              </div>
+              <div className="sr-dj-reasons" title={item.reasons.join("\n")}>
                 {item.reasons.map((reason, index) => (
                   <span key={index} className="sr-dj-reason">{reason}</span>
                 ))}
