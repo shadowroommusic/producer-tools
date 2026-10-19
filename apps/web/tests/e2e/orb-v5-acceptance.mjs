@@ -130,7 +130,7 @@ const dragOrbTo = async (targetX, targetY) => {
         );
   const backingRatio = canvas.css > 0 ? canvas.backing / canvas.css : 0;
   /**
-   * At the 12px bottom-right snap point, growing 72→112 must pull the centre inward by 20px on each
+   * At the 12px bottom-right snap point, growing 84→124 must pull the centre inward by 20px on each
    * axis; preserving both centre and the 12px viewport gap is geometrically impossible. The contract
    * is therefore "small constrained shift + still fully inside", not an arbitrary <=12px.
    */
@@ -141,11 +141,11 @@ const dragOrbTo = async (targetX, targetY) => {
     afterState.rect.x + afterState.rect.w <= 1429 &&
     afterState.rect.y + afterState.rect.h <= 889;
   check(
-    "③ 点球进入通话态：72→112px、高清背板、中心不跳走",
+    "③ 点球进入通话态：84→124px、高清背板、中心不跳走",
     before === "idle" &&
       after === "listening" &&
-      beforeState?.rect.w === 72 &&
-      afterState?.rect.w === 112 &&
+      beforeState?.rect.w === 84 &&
+      afterState?.rect.w === 124 &&
       backingRatio >= 2.5 &&
       centerDelta <= 30 &&
       fullyInside,

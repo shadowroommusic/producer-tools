@@ -113,7 +113,7 @@ export function GlassSphere({
       const r = size / 2;
       const cx = r;
       const cy = r;
-      const plasmaR = r * 0.47;
+      const plasmaR = r * 0.51;
       ctx.clearRect(0, 0, size, size);
 
       // Three independently moving plasma lobes. They stay inside a circular clip so the hero rim
@@ -128,8 +128,8 @@ export function GlassSphere({
         const x = cx + Math.cos(phase) * plasmaR * (0.2 + i * 0.07);
         const y = cy + Math.sin(phase * 1.23) * plasmaR * (0.17 + i * 0.055);
         const glow = ctx.createRadialGradient(x, y, 0, x, y, plasmaR * (0.62 + current.glow * 0.3));
-        glow.addColorStop(0, `hsla(${i === 1 ? current.hueB : current.hueA}, 100%, 70%, ${0.14 + current.glow * 0.08})`);
-        glow.addColorStop(0.55, `hsla(${i === 1 ? current.hueB : current.hueA}, 95%, 58%, 0.065)`);
+        glow.addColorStop(0, `hsla(${i === 1 ? current.hueB : current.hueA}, 100%, 76%, ${0.28 + current.glow * 0.14})`);
+        glow.addColorStop(0.55, `hsla(${i === 1 ? current.hueB : current.hueA}, 100%, 64%, 0.14)`);
         glow.addColorStop(1, `hsla(${current.hueB}, 95%, 55%, 0)`);
         ctx.fillStyle = glow;
         ctx.fillRect(cx - plasmaR, cy - plasmaR, plasmaR * 2, plasmaR * 2);
@@ -142,8 +142,8 @@ export function GlassSphere({
         cy,
         plasmaR * 0.92,
       );
-      core.addColorStop(0, `hsla(${current.hueA}, 100%, 82%, ${0.15 + current.glow * 0.11})`);
-      core.addColorStop(0.3, `hsla(${current.hueB}, 100%, 66%, ${0.055 + current.glow * 0.05})`);
+      core.addColorStop(0, `hsla(${current.hueA}, 100%, 90%, ${0.4 + current.glow * 0.2})`);
+      core.addColorStop(0.3, `hsla(${current.hueB}, 100%, 72%, ${0.16 + current.glow * 0.1})`);
       core.addColorStop(1, `hsla(${current.hueB}, 100%, 55%, 0)`);
       ctx.fillStyle = core;
       ctx.fillRect(cx - plasmaR, cy - plasmaR, plasmaR * 2, plasmaR * 2);
@@ -182,14 +182,16 @@ export function GlassSphere({
         m === "offline"
           ? 10
           : m === "thinking"
-            ? 64
+            ? 88
             : m === "listening"
-              ? 56
+              ? 76
               : m === "speaking"
-                ? 52
+                ? 74
                 : m === "working"
-                  ? 54
-                  : 42;
+                  ? 78
+                  : m === "idle"
+                    ? 72
+                    : 76;
       for (let i = 0; i < count; i += 1) {
         const seed = i * 0.61803398875;
         const depth = ((i * 17) % 31) / 30;
@@ -211,14 +213,14 @@ export function GlassSphere({
         const waveY = waveYAt(lane, i % 2 === 0 ? -1 : 1);
         const x = lerp(orbitX, waveX, voiceBlend);
         const y = lerp(orbitY, waveY, voiceBlend);
-        const sparkle = still ? 0.65 : 0.42 + Math.sin(t * 1.7 + seed * 8) * 0.3;
-        const dot = (0.42 + depth * 0.62 + ((i * 13) % 7) / 20) * (1 + voiceBlend * 0.16);
+        const sparkle = still ? 0.82 : 0.72 + Math.sin(t * 1.7 + seed * 8) * 0.2;
+        const dot = (0.82 + depth * 1.05 + ((i * 13) % 7) / 24) * (1 + voiceBlend * 0.16);
         const hue = lerpHue(current.hueA, current.hueB, voiceBlend > 0.25 ? lane : (i % 9) / 8);
         if (!still && voiceBlend < 0.2 && i % 2 === 0) {
           const tx = lerp(trailX, waveX, voiceBlend);
           const ty = lerp(trailY, waveY, voiceBlend);
-          ctx.strokeStyle = `hsla(${hue}, 100%, 72%, ${0.05 + depth * 0.07})`;
-          ctx.lineWidth = Math.max(0.45, dot * 0.5);
+          ctx.strokeStyle = `hsla(${hue}, 100%, 76%, ${0.08 + depth * 0.1})`;
+          ctx.lineWidth = Math.max(0.55, dot * 0.42);
           ctx.beginPath();
           ctx.moveTo(tx, ty);
           ctx.lineTo(x, y);
@@ -230,14 +232,14 @@ export function GlassSphere({
           ctx.arc(x, y, dot * 3.2, 0, TAU);
           ctx.fill();
         }
-        ctx.fillStyle = `hsla(${hue}, 100%, ${72 + (i % 3) * 4}%, ${Math.max(0.06, sparkle * current.rimAlpha)})`;
+        ctx.fillStyle = `hsla(${hue}, 100%, ${78 + (i % 3) * 4}%, ${Math.max(0.2, Math.min(1, (0.3 + sparkle * 0.58) * current.rimAlpha))})`;
         ctx.beginPath();
         ctx.arc(x, y, dot, 0, TAU);
         ctx.fill();
         if (i % 7 === 0) {
-          ctx.fillStyle = "rgba(255,255,255,.52)";
+          ctx.fillStyle = "rgba(255,255,255,.82)";
           ctx.beginPath();
-          ctx.arc(x, y, dot * 0.38, 0, TAU);
+          ctx.arc(x, y, dot * 0.5, 0, TAU);
           ctx.fill();
         }
       }

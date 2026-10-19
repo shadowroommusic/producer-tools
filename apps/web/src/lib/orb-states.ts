@@ -35,24 +35,23 @@ export function callOrbMode(state: CallState): OrbVisualMode {
   }
 }
 
-/** 五态参数表：drift 单位 turns/s；rimWidth 相对球半径；ripple/swirl/breathe 是强度开关。
- *  终验口径（orb-v5-acceptance ⑧）：五态同尺寸截图两两 mean-abs-diff ≥ 8/255——所以色相族
- *  按态错开（闲=钢蓝窄带 / 听=靛→紫宽亮边 / 说=青绿 / 思=紫→品红快追边 / 干=蓝底+酸绿弧），
- *  边宽与亮度也拉开梯度，不靠「同一族颜色只调亮度」糊弄。 */
+/** 七态参数表：drift 单位 turns/s；rimWidth 相对球半径；ripple/swirl/breathe 是强度开关。
+ *  色相全部回到产品界面的酸绿 / 冰青谱系；靠色相位置、边亮与运动区分状态，不再出现与
+ *  深黑酸绿界面脱节的蓝色玻璃球。琥珀与灰色只保留给「没听清」「断线」两种异常态。 */
 export const ORB_STATES: Record<
   OrbVisualMode,
   { hueA: number; hueB: number; drift: number; rimAlpha: number; rimWidth: number; glow: number; breathe: number; wobble: number; ripple: number; swirl: number }
 > = {
-  idle: { hueA: 205, hueB: 235, drift: 0.02, rimAlpha: 0.5, rimWidth: 0.08, glow: 0.45, breathe: 0.035, wobble: 0.02, ripple: 0, swirl: 0 },
-  listening: { hueA: 228, hueB: 300, drift: 0.06, rimAlpha: 0.96, rimWidth: 0.18, glow: 0.8, breathe: 0, wobble: 0.03, ripple: 0, swirl: 0 },
-  speaking: { hueA: 140, hueB: 190, drift: 0.05, rimAlpha: 0.94, rimWidth: 0.14, glow: 0.82, breathe: 0, wobble: 0.03, ripple: 1, swirl: 0 },
-  thinking: { hueA: 272, hueB: 332, drift: 0.72, rimAlpha: 0.95, rimWidth: 0.1, glow: 0.85, breathe: 0, wobble: 0.02, ripple: 0, swirl: 1 },
+  idle: { hueA: 74, hueB: 174, drift: 0.02, rimAlpha: 0.72, rimWidth: 0.08, glow: 0.62, breathe: 0.035, wobble: 0.02, ripple: 0, swirl: 0 },
+  listening: { hueA: 68, hueB: 190, drift: 0.06, rimAlpha: 0.98, rimWidth: 0.18, glow: 0.9, breathe: 0, wobble: 0.03, ripple: 0, swirl: 0 },
+  speaking: { hueA: 92, hueB: 164, drift: 0.05, rimAlpha: 0.96, rimWidth: 0.14, glow: 0.9, breathe: 0, wobble: 0.03, ripple: 1, swirl: 0 },
+  thinking: { hueA: 52, hueB: 182, drift: 0.72, rimAlpha: 0.9, rimWidth: 0.1, glow: 0.88, breathe: 0, wobble: 0.02, ripple: 0, swirl: 1 },
   /**
    * 干活：drift 0.08 → 0.16（MiniMax #393 ④ 缺口 b）。原来 listening(0.06) 与 working(0.08)
    * 在运动五通道上只差 0.02 漂移——肉眼几乎分不开、全靠颜色，色盲用户就分不出来。翻倍后
    * 与在听拉开 0.10（≥0.02 幅度线），且仍在「追边最快的是 thinking 0.55」之下，通道分工不乱。
    */
-  working: { hueA: 210, hueB: 262, drift: 0.16, rimAlpha: 0.6, rimWidth: 0.1, glow: 0.55, breathe: 0, wobble: 0.025, ripple: 0, swirl: 0 },
+  working: { hueA: 76, hueB: 204, drift: 0.16, rimAlpha: 0.8, rimWidth: 0.1, glow: 0.76, breathe: 0, wobble: 0.025, ripple: 0, swirl: 0 },
   /**
    * 没听清：琥珀慢闪 + 明显横向晃动（wobble 全场最高、drift 慢），一眼区别于 listening 的呼吸。
    * 它是「请你再说一次」的邀请，不是错误——所以不熄灭、不红。
@@ -62,7 +61,7 @@ export const ORB_STATES: Record<
    * 断线：灰、静止——drift/breathe/wobble/swirl/ripple 全 0、glow 与 rimAlpha 压到最低。
    * 运动规则是「什么都不动」，与其余六态在任何一帧都看得出区别。
    */
-  offline: { hueA: 210, hueB: 210, drift: 0, rimAlpha: 0.22, rimWidth: 0.06, glow: 0.12, breathe: 0, wobble: 0, ripple: 0, swirl: 0 },
+  offline: { hueA: 80, hueB: 80, drift: 0, rimAlpha: 0.26, rimWidth: 0.06, glow: 0.14, breathe: 0, wobble: 0, ripple: 0, swirl: 0 },
 };
 
 /** 色相沿最短路径插值（350°→10° 走 +20° 而不是 -340°）。 */

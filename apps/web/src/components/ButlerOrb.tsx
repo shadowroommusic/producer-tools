@@ -29,10 +29,10 @@ import { GlassSphere } from "./OrbGlass";
 export type OrbMode = OrbVisualMode;
 
 /**
- * 尺寸：v6 把主体从容器角落撑满，闲置 72px、通话 112px。再小会牺牲玻璃边缘和语音刻度的清晰度；
+ * 尺寸：v6 把主体从容器角落撑满，闲置 84px、通话 124px。再小会牺牲能量核心和语音刻度的清晰度；
  * 再大会重新压住 Studio/DJ 的主要内容。位置逻辑仍负责夹取和避让控件。
  */
-const ACTIVE_SIZE = 112;
+const ACTIVE_SIZE = 124;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 

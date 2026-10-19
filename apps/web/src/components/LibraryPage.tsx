@@ -95,6 +95,7 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
   const [scanPath, setScanPath] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [pickingFolder, setPickingFolder] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   /** 右键菜单（二期全量）：root（动作）/ rename（内联改名）/ crates（加入分类库）三态。 */
@@ -316,6 +317,31 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
       if (seq === scanSeq.current) setScanning(false);
     }
   }, [scanPath, scanning, refreshStats, reloadTracks, refreshDetail]);
+
+  const pickScanFolder = useCallback(async () => {
+    if (scanning || pickingFolder) return;
+    setPickingFolder(true);
+    try {
+      const response = await fetch("/api/agent/pick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "folder" }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { paths?: unknown; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      const picked = Array.isArray(payload.paths) && typeof payload.paths[0] === "string" ? payload.paths[0] : "";
+      if (picked === "") {
+        setScanNote("没有选择文件夹，路径保持不变。");
+        return;
+      }
+      setScanPath(picked);
+      setScanNote("文件夹已选择，点「扫描文件夹」开始入库。");
+    } catch (cause) {
+      setScanNote(`选择文件夹失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setPickingFolder(false);
+    }
+  }, [pickingFolder, scanning]);
 
   const onLearn = useCallback(async () => {
     if (busy !== null) return;
@@ -660,14 +686,23 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
           <input
             className="sr-input sr-lib-scanpath"
             value={scanPath}
-            placeholder="文件夹路径，例如 ~/Music/tech-house"
+            placeholder="选择音乐文件夹，或直接粘贴路径"
             aria-label="要扫描的文件夹路径"
             onChange={(event) => setScanPath(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") void onScan();
             }}
           />
-          <button type="button" className="sr-btn sr-btn--accent" disabled={scanPath.trim() === "" || scanning} onClick={() => void onScan()}>
+          <button
+            type="button"
+            className="sr-btn sr-lib-browse"
+            disabled={scanning || pickingFolder}
+            aria-label="选择要扫描的文件夹"
+            onClick={() => void pickScanFolder()}
+          >
+            {pickingFolder ? "正在打开…" : "选择文件夹…"}
+          </button>
+          <button type="button" className="sr-btn sr-btn--accent sr-lib-scan" disabled={scanPath.trim() === "" || scanning} onClick={() => void onScan()}>
             {scanning ? "扫描中…" : "扫描文件夹"}
           </button>
           <span className="sr-lib-scanprogress" data-slot="scan-progress" aria-live="polite">

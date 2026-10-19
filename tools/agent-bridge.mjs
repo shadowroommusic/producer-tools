@@ -26,6 +26,7 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { buildPickScript } from "./pick-script.mjs";
 
 const HOST = process.env.SHADOWROOM_AGENT_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.SHADOWROOM_AGENT_PORT ?? 8788);
@@ -2480,9 +2481,9 @@ const http = createServer(async (request, response) => {
     }
 
     /**
-     * A native "choose file…" dialog, for people who would rather reference a file in place (a DJ
-     * library, a sample folder) than have it copied. macOS only; the UI falls back to the drag/drop
-     * flow when this answers with an error.
+     * Native file/folder chooser. The studio references audio in place, and the library needs the
+     * folder path itself before it can scan. Both stay behind one narrow endpoint so the web layer
+     * never has to invent shell paths or expose a general filesystem picker.
      */
     if (request.method === "POST" && url.pathname === "/api/agent/pick") {
       if (process.platform !== "darwin") {
@@ -2490,18 +2491,7 @@ const http = createServer(async (request, response) => {
         return;
       }
       const body = await readJsonBody(request, 64 * 1024);
-      const multiple = body.multiple === true;
-      const prompt = multiple ? "选择音频文件（可多选）" : "选择音频文件";
-      const script = [
-        `set theFiles to choose file with prompt "${prompt}" of type {"public.audio", "public.midi-audio"}${multiple ? " with multiple selections allowed" : ""}`,
-        "if class of theFiles is not list then set theFiles to {theFiles}",
-        "set thePaths to {}",
-        "repeat with theFile in theFiles",
-        "set end of thePaths to POSIX path of theFile",
-        "end repeat",
-        "set AppleScript's text item delimiters to linefeed",
-        "return thePaths as text",
-      ].join("\n");
+      const { script, folderMode } = buildPickScript(body);
       const picked = await new Promise((resolve) => {
         const child = spawn("/usr/bin/osascript", ["-e", script], { stdio: ["ignore", "pipe", "pipe"] });
         let out = "";
@@ -2521,7 +2511,11 @@ const http = createServer(async (request, response) => {
         if (cancelled) {
           json(response, 200, { paths: [] });
         } else {
-          json(response, 500, { error: String(picked.err).trim() || "文件对话框打不开（试试拖拽或文件选择器）" });
+          json(response, 500, {
+            error:
+              String(picked.err).trim() ||
+              (folderMode ? "文件夹选择器打不开，请重试" : "文件对话框打不开（试试拖拽或文件选择器）"),
+          });
         }
         return;
       }

@@ -7,7 +7,7 @@
  * `shadowroom.orb.position`。
  */
 
-export const ORB_SIZE = 72;
+export const ORB_SIZE = 84;
 export const POSITION_KEY = "shadowroom.orb.position";
 
 /** 视口与受保护矩形的离屏形状（DOMRect 的字段子集即可）。 */

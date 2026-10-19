@@ -408,11 +408,15 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
   }, []);
 
   const newSet = useCallback(() => {
+    if (draft.name === "未命名 set" && draft.trackIds.length === 0 && draft.overlapMs === DEFAULT_OVERLAP_MS) {
+      say("当前已经是新的空 set。");
+      return;
+    }
     setUndoOrder(null);
     setDraft({ id: newSetId(), name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS });
     setSuggestions([]);
-    say(null);
-  }, [say]);
+    say("已新建空 set。");
+  }, [draft.name, draft.trackIds.length, draft.overlapMs, say]);
 
   // ------------------------------------------------ import an existing set / export the draft as m3u
   /** Toggle the picker; the list is fetched fresh every time it opens. */
@@ -808,8 +812,8 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
             总长
           </span>
           <span>
-            <strong>{plan === null ? Math.round(draft.overlapMs / 1000) : Math.round(draft.overlapMs / 1000)}s</strong>
-            overlap
+            <strong>{draft.trackIds.length === 0 ? 0 : Math.round(draft.overlapMs / 1000)}s</strong>
+            接歌重叠
           </span>
         </div>
       </header>
@@ -826,12 +830,12 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
         {draft.trackIds.length === 0 ? (
           // D6（2026-09-25 巡检）：空 set 时 16 秒的读数像是"已经有重叠"——空场显示 0 秒，
           // 草稿里的默认值保留，加歌后自动恢复。
-          <span className="sr-dj-overlap" title="加入曲目后按下面的默认值生效">
-            overlap <span className="sr-input sr-input--num sr-input--static">0</span> 秒
+          <span className="sr-dj-overlap" title="相邻两首交叉播放的默认时长；加入曲目后生效">
+            接歌重叠 <span className="sr-input sr-input--num sr-input--static">0</span> 秒
           </span>
         ) : (
-          <label className="sr-dj-overlap" title="相邻两首的默认重叠时长（v1 全局一个值，逐首覆盖留后）">
-            overlap
+          <label className="sr-dj-overlap" title="相邻两首交叉播放的默认时长；0 表示不重叠">
+            接歌重叠
             <input
               className="sr-input sr-input--num"
               type="number"

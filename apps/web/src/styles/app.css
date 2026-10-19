@@ -833,6 +833,27 @@
   min-height: 0;
 }
 
+.sr-conversation-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.sr-conversation-pane > .sr-transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sr-conversation-pane--dock > .sr-transcript {
+  padding: 14px 16px;
+}
+
+.sr-conversation-pane > .sr-dock-composer {
+  flex: none;
+}
+
 .sr-dock-chat .sr-transcript {
   display: flex;
   flex: 1;

@@ -15,24 +15,25 @@
 .sr-orb-visual::before {
   content: "";
   position: absolute;
-  inset: 8%;
+  inset: 3%;
   z-index: 1;
   border-radius:
     48% 52% 45% 55% /
     54% 44% 56% 46%;
   background:
-    radial-gradient(circle at 35% 34%, hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.28), transparent 30%),
-    radial-gradient(circle at 68% 62%, hsl(calc(var(--orb-hue-b) * 1deg) 100% 66% / 0.24), transparent 36%),
+    radial-gradient(circle at 38% 34%, hsl(calc(var(--orb-hue-a) * 1deg) 100% 78% / 0.62), transparent 34%),
+    radial-gradient(circle at 68% 62%, hsl(calc(var(--orb-hue-b) * 1deg) 100% 70% / 0.5), transparent 42%),
+    radial-gradient(circle at 50% 50%, hsl(calc(var(--orb-hue-a) * 1deg) 100% 82% / 0.32), transparent 56%),
     conic-gradient(
       from 25deg,
-      hsl(calc(var(--orb-hue-a) * 1deg) 100% 66% / 0.08),
-      hsl(calc(var(--orb-hue-b) * 1deg) 100% 70% / 0.3),
-      hsl(calc(var(--orb-hue-a) * 1deg + 70deg) 100% 72% / 0.12),
-      hsl(calc(var(--orb-hue-a) * 1deg) 100% 66% / 0.08)
+      hsl(calc(var(--orb-hue-a) * 1deg) 100% 70% / 0.18),
+      hsl(calc(var(--orb-hue-b) * 1deg) 100% 76% / 0.46),
+      hsl(calc(var(--orb-hue-a) * 1deg + 28deg) 100% 78% / 0.34),
+      hsl(calc(var(--orb-hue-a) * 1deg) 100% 70% / 0.18)
     );
-  filter: blur(9px) saturate(1.25);
+  filter: blur(8px) saturate(1.38);
   mix-blend-mode: screen;
-  opacity: calc(0.52 + var(--orb-glow) * 0.22);
+  opacity: calc(0.78 + var(--orb-glow) * 0.16);
   animation: sr-energy-morph 9s ease-in-out infinite alternate;
 }
 
@@ -44,21 +45,28 @@
   border-radius:
     52% 48% 56% 44% /
     43% 55% 45% 57%;
-  border: 1px solid hsl(calc(var(--orb-hue-a) * 1deg) 100% 74% / 0.16);
-  filter: blur(1.8px);
+  border: 1px solid hsl(calc(var(--orb-hue-a) * 1deg) 100% 78% / 0.48);
+  filter: blur(1.2px);
   box-shadow:
-    0 0 10px hsl(calc(var(--orb-hue-a) * 1deg) 100% 66% / 0.2),
-    0 0 28px hsl(calc(var(--orb-hue-b) * 1deg) 100% 60% / 0.12);
-  opacity: calc(0.24 + var(--orb-glow) * 0.24);
+    0 0 10px hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.48),
+    0 0 30px hsl(calc(var(--orb-hue-b) * 1deg) 100% 66% / 0.3);
+  opacity: calc(0.5 + var(--orb-glow) * 0.26);
   animation: sr-energy-halo 7s ease-in-out infinite alternate;
   pointer-events: none;
 }
 
 .sr-orb-shell {
-  inset: 7%;
+  inset: 4%;
   border: 0;
   background:
-    radial-gradient(circle at 50% 48%, rgb(3 8 6 / 44%) 0 18%, rgb(4 10 7 / 28%) 48%, transparent 76%);
+    radial-gradient(
+      circle at 50% 48%,
+      hsl(calc(var(--orb-hue-a) * 1deg) 100% 82% / 0.1) 0 15%,
+      hsl(calc(var(--orb-hue-b) * 1deg) 92% 64% / 0.12) 28%,
+      rgb(3 9 6 / 0.66) 48%,
+      rgb(3 8 5 / 0.24) 68%,
+      transparent 82%
+    );
   box-shadow: none;
   backdrop-filter: none;
 }
@@ -69,14 +77,15 @@
 }
 
 .sr-orb-plasma {
-  inset: 3%;
+  inset: 1%;
   overflow: visible;
   border-radius: 50%;
   filter:
-    saturate(1.18)
-    drop-shadow(0 0 8px hsl(calc(var(--orb-hue-b) * 1deg) 100% 64% / 0.38));
-  -webkit-mask-image: radial-gradient(circle, #000 0 54%, rgb(0 0 0 / 0.92) 66%, transparent 94%);
-  mask-image: radial-gradient(circle, #000 0 54%, rgb(0 0 0 / 0.92) 66%, transparent 94%);
+    saturate(1.32)
+    brightness(1.2)
+    drop-shadow(0 0 10px hsl(calc(var(--orb-hue-b) * 1deg) 100% 68% / 0.62));
+  -webkit-mask-image: radial-gradient(circle, #000 0 62%, rgb(0 0 0 / 0.96) 74%, transparent 98%);
+  mask-image: radial-gradient(circle, #000 0 62%, rgb(0 0 0 / 0.96) 74%, transparent 98%);
 }
 
 .sr-orb-plasma::after {
@@ -86,8 +95,8 @@
 
 .sr-orb-aura {
   inset: -17%;
-  filter: blur(11px);
-  opacity: calc(0.45 + var(--orb-glow) * 0.3);
+  filter: blur(10px);
+  opacity: calc(0.68 + var(--orb-glow) * 0.24);
 }
 
 .sr-orb-ripple {
@@ -132,7 +141,7 @@
 
 .sr-orb-visual[data-mode="listening"]::before {
   animation-duration: 3.8s;
-  filter: blur(8px) saturate(1.32);
+  filter: blur(7px) saturate(1.44) brightness(1.08);
 }
 
 .sr-orb-visual[data-mode="listening"]::after {
@@ -155,7 +164,7 @@
   animation:
     sr-energy-morph 1.75s ease-in-out infinite alternate,
     sr-energy-speak 2.4s ease-in-out infinite;
-  filter: blur(7px) saturate(1.45) brightness(1.12);
+  filter: blur(6px) saturate(1.5) brightness(1.18);
 }
 
 .sr-orb-visual[data-mode="speaking"] .sr-orb-ripple {

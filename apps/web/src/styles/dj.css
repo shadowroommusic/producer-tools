@@ -94,6 +94,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  grid-area: set;
 }
 
 .sr-dj-toolbar-label {
@@ -134,6 +135,7 @@
   justify-content: flex-end;
   gap: 6px;
   min-width: 0;
+  grid-area: actions;
 }
 
 .sr-dj-actions .sr-page-action {
@@ -168,6 +170,37 @@
     radial-gradient(200px 110px at 0% 0%, rgb(217 255 61 / 6%), transparent 75%),
     #0c130f;
   box-shadow: 0 18px 48px rgb(0 0 0 / 54%);
+}
+
+/*
+ * With the right dock open, the centre column can be ~640px. At that width the desktop four-track
+ * header cannot keep its intrinsic widths and the timing text runs underneath the actions. Reflow
+ * to two explicit rows before anything is allowed to overlap; the container query follows the DJ
+ * surface rather than the window, because the dock changes the available width without a resize.
+ */
+@container (max-width: 860px) {
+  .sr-dj-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "set actions"
+      "overlap actions"
+      "timing timing";
+    align-items: start;
+  }
+
+  .sr-dj-overlap {
+    grid-area: overlap;
+    justify-self: start;
+  }
+
+  .sr-dj-timing {
+    grid-area: timing;
+    min-height: 16px;
+  }
+
+  .sr-dj-actions {
+    align-self: start;
+  }
 }
 
 .sr-dj-more-menu .sr-page-action {
@@ -337,16 +370,21 @@
   }
 
   .sr-dj-topbar {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "set"
+      "overlap"
+      "timing"
+      "actions";
   }
 
   .sr-dj-setline {
-    grid-column: 1 / -1;
+    grid-area: set;
   }
 
   .sr-dj-actions {
-    grid-column: 3;
-    grid-row: 2;
+    grid-area: actions;
+    justify-content: flex-start;
   }
 
   .sr-dj-filters {

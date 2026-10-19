@@ -1682,7 +1682,8 @@
 }
 
 .sr-lib-ingest-panel {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -1694,12 +1695,19 @@
 }
 
 .sr-lib-ingest-panel .sr-lib-scanpath {
-  flex: 1 1 auto;
+  min-width: 0;
   height: 34px;
 }
 
 .sr-lib-ingest-panel .sr-lib-scanprogress {
-  flex: 0 1 25ch;
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
+.sr-lib-ingest-panel .sr-lib-browse,
+.sr-lib-ingest-panel .sr-lib-scan {
+  flex: none;
+  white-space: nowrap;
 }
 
 @keyframes sr-lib-reveal {
@@ -1835,11 +1843,16 @@
   }
 
   .sr-lib-ingest-panel {
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .sr-lib-ingest-panel .sr-lib-scanpath,
   .sr-lib-ingest-panel .sr-lib-scanprogress {
-    flex-basis: 100%;
+    grid-column: 1 / -1;
+  }
+
+  .sr-lib-ingest-panel .sr-lib-browse,
+  .sr-lib-ingest-panel .sr-lib-scan {
+    width: 100%;
   }
 }
