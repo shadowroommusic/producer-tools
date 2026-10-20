@@ -119,6 +119,27 @@ check(
 );
 
 await page.screenshot({ path: `${SHOTS}/editor-1440.png`, fullPage: true });
+await page.setViewportSize({ width: 1092, height: 605 });
+await page.waitForTimeout(250);
+const compact = await page.evaluate(() => {
+  const root = document.querySelector(".sr-dj");
+  const main = document.querySelector(".sr-dj-main--editor");
+  const deck = document.querySelector(".sr-dj-deck");
+  return {
+    rootOverflow: root === null ? -1 : root.scrollWidth - root.clientWidth,
+    mainOverflow: main === null ? -1 : main.scrollWidth - main.clientWidth,
+    boardVisible: document.querySelector(".sr-dj-board")?.getBoundingClientRect().height ?? 0,
+    deckVisible: deck instanceof HTMLElement && deck.getBoundingClientRect().height > 0,
+  };
+});
+check(
+  "⑥ 1092×605 独立编辑面不横向溢出，看板与 deck 均在场",
+  compact.rootOverflow <= 1 && compact.mainOverflow <= 1 && compact.boardVisible >= 80 && compact.deckVisible,
+  JSON.stringify(compact),
+);
+await page.screenshot({ path: `${SHOTS}/editor-1092.png`, fullPage: true });
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.waitForTimeout(200);
 
 await page.getByRole("button", { name: "← 返回总览", exact: true }).click();
 await page.waitForFunction(() => document.querySelector(".sr-dj")?.getAttribute("data-dj-view") === "overview");
@@ -145,14 +166,14 @@ const afterPlayingSwitch = await page.locator(".sr-dj-deck").evaluate((element) 
   state: element.getAttribute("data-state"),
 }));
 check(
-  "⑥ 播放中切到 Set 编辑面，deck 节点与播放状态都不断",
+  "⑦ 播放中切到 Set 编辑面，deck 节点与播放状态都不断",
   playingDeck === "same-node" &&
     afterPlayingSwitch.marker === "same-node" &&
     afterPlayingSwitch.state === "playing",
   JSON.stringify(afterPlayingSwitch),
 );
 
-check("⑦ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+check("⑧ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
 await context.close();
 await browser.close();
