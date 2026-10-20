@@ -14,9 +14,16 @@
  */
 import { useEffect, useRef, type CSSProperties } from "react";
 import { ORB_STATES, lerpHue, type OrbVisualMode } from "../lib/orb-states.ts";
+import { voiceCoreGain, voiceShellGain, voiceWaveGain } from "../lib/orb-voice.ts";
 import "../styles/orb-refine.css";
 
 export type { OrbVisualMode } from "../lib/orb-states.ts";
+
+/**
+ * 麦克风电平的来源：数字（旧行为，只在 React 重渲染时更新）或 getter。
+ * getter 会在 Canvas 自己的 rAF 里**每帧**读取，所以 60fps 的实时电平不必把 React 拖下水。
+ */
+export type OrbLevelSource = number | (() => number);
 
 const TAU = Math.PI * 2;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
@@ -104,8 +111,12 @@ export function GlassSphere({
 }: {
   size: number;
   mode: OrbVisualMode;
-  /** 麦克风电平 0–1（listening 时驱动边宽与发光） */
-  level: number;
+  /**
+   * 麦克风电平 0–1（listening 时驱动粒子壳层、核心亮度与环形声波）。
+   * 传 getter 才是实时路径：Canvas 的 rAF 每帧调用它取当前电平；
+   * 传数字则退回旧行为（只在 React 重渲染时更新）。
+   */
+  level: OrbLevelSource;
   /** 干活进度 0–1；不给 = 不定态（酸绿弧追赶）。 */
   progress?: number;
   reducedMotion?: boolean;
@@ -158,7 +169,7 @@ export function GlassSphere({
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw);
       const t = FINITE(now / 1000, 0);
-      const { mode: m, level: rawLevel, still, transitioning: morphing } = state.current;
+      const { mode: m, level: levelSource, still, transitioning: morphing } = state.current;
       const motionTime = still ? 0 : t;
       const target = ORB_STATES[m] ?? ORB_STATES.idle;
       const k = morphing ? 0.035 : 0.095;
@@ -169,9 +180,28 @@ export function GlassSphere({
       current.glow = lerp(current.glow, target.glow, k);
       current.ripple = lerp(current.ripple, target.ripple, k);
       current.swirl = lerp(current.swirl, target.swirl, k);
-      smoothedLevel +=
-        (Math.max(0, Math.min(1, FINITE(rawLevel, 0))) - smoothedLevel) * (morphing ? 0.075 : 0.16);
-      visualElement.style.setProperty("--orb-voice", smoothedLevel.toFixed(3));
+      /**
+       * 麦克风电平：getter 源每帧取一次（实时），数字源只在重渲染时更新（旧行为）。
+       * ButlerOrb 那边已做过感知映射与快攻慢放包络，这里只留一道很轻的平滑压掉抖动。
+       */
+      const rawVoice = typeof levelSource === "function" ? levelSource() : levelSource;
+      const voiceTarget = Math.max(0, Math.min(1, FINITE(rawVoice, 0)));
+      // getter 源已经是平滑过的包络，这里只留一道很轻的跟随（数字源则保留原来的慢平滑）。
+      const smoothK = typeof levelSource === "function" ? 0.7 : 0.16;
+      smoothedLevel += (voiceTarget - smoothedLevel) * (morphing ? 0.2 : smoothK);
+      const voice = smoothedLevel;
+      visualElement.style.setProperty("--orb-voice", voice.toFixed(3));
+      /**
+       * 语音的三层跟随（listening）：
+       *  ① 核心：球心"接住"声音——变亮、变大（coreGain）
+       *  ② 粒子壳层：整层被声音推开一点（voiceShellGain）
+       *  ③ 环形短声波：沿圆周行进的波包，音节起伏一眼可见（voiceWaveGain）
+       * 三层都由同一条包络驱动，所以动的是"声音"不是"随机动画"。
+       */
+      const live = m === "listening";
+      const coreGain = live ? voiceCoreGain(voice) : 0;
+      const shellGain = live ? voiceShellGain(voice) : 1;
+      const waveGain = live ? voiceWaveGain(voice) : 0;
       const voiceBlend = m === "speaking" ? smoothstep(current.ripple) : 0;
       const r = size / 2;
       const cx = r;
@@ -196,8 +226,8 @@ export function GlassSphere({
         ctx.globalAlpha = 0.74 + current.glow * 0.18;
         ctx.drawImage(glowSprite(i === 1 ? hueB : hueA, "lobe"), x - radius, y - radius, radius * 2, radius * 2);
       }
-      const coreRadius = plasmaR * 0.96;
-      ctx.globalAlpha = (0.76 + current.glow * 0.2) * (1 - voiceBlend * 0.3);
+      const coreRadius = plasmaR * (0.96 + coreGain * 1.15);
+      ctx.globalAlpha = Math.min(1, (0.76 + current.glow * 0.2) * (1 - voiceBlend * 0.3) + coreGain * 2.3);
       ctx.drawImage(
         glowSprite(hueA, "core"),
         cx - coreRadius * 1.08,
@@ -261,7 +291,7 @@ export function GlassSphere({
         const radius =
           plasmaR * mote.radius *
           (still ? 1 : 1 + Math.sin(motionTime * 0.24 + mote.phase) * 0.025) *
-          (m === "listening" ? 1 + smoothedLevel * 0.08 : 1);
+          shellGain;
         const direction = mote.direction;
         const angle =
           mote.phase +
@@ -298,8 +328,11 @@ export function GlassSphere({
           ctx.fill();
         }
         ctx.fillStyle = PARTICLE_COLORS[hue];
-        ctx.globalAlpha =
-          Math.max(0.2, Math.min(1, (0.3 + sparkle * 0.58) * current.rimAlpha)) * (1 - voiceBlend * 0.16);
+        ctx.globalAlpha = Math.min(
+          1,
+          Math.max(0.2, Math.min(1, (0.3 + sparkle * 0.58) * current.rimAlpha)) * (1 - voiceBlend * 0.16) +
+            (live ? voice * 0.26 : 0),
+        );
         ctx.beginPath();
         ctx.arc(x, y, dot, 0, TAU);
         ctx.fill();
@@ -314,20 +347,31 @@ export function GlassSphere({
       ctx.globalAlpha = 1;
 
       if (m === "listening") {
-        // A tiny radial meter makes microphone response legible without changing the outer geometry.
-        const ticks = 44;
+        // A ring of short ticks that travels around the rim: the envelope sets the height, the
+        // travelling phase sets where the crest is. Syllables read as pulses, not as noise.
+        const ticks = 48;
         ctx.translate(cx, cy);
         ctx.strokeStyle = PARTICLE_COLORS[hueB];
         for (let i = 0; i < ticks; i += 1) {
           const angle = (i / ticks) * TAU;
-          const wave = Math.abs(Math.sin(angle * 3 + motionTime * 1.15)) * smoothedLevel;
-          const inner = plasmaR * 0.93;
-          const outer = inner + 0.8 + wave * size * 0.055;
+          const travel = still ? 0.5 : Math.sin(angle * 3 - motionTime * 2.2) * 0.5 + 0.5;
+          const wave = voice * (0.32 + 0.68 * travel);
+          const inner = plasmaR * 0.95;
+          const outer = inner + 0.9 + wave * size * 0.17;
           ctx.beginPath();
           ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
           ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
-          ctx.globalAlpha = 0.2 + wave * 0.72;
-          ctx.lineWidth = i % 4 === 0 ? 1.2 : 0.65;
+          ctx.globalAlpha = 0.16 + wave * 0.8;
+          ctx.lineWidth = i % 4 === 0 ? 1.25 : 0.7;
+          ctx.stroke();
+        }
+        // 声音波前：一圈粗描边，半径与亮度都随语音涨落——这是画布上最大块的可见变化，
+        // 也是"球在接住声音"最直接的读法（细刻度只是细节层）。
+        if (waveGain > 0.002) {
+          ctx.beginPath();
+          ctx.arc(0, 0, plasmaR * (1.02 + waveGain * 1.8), 0, TAU);
+          ctx.globalAlpha = 0.1 + voice * 0.46;
+          ctx.lineWidth = 1.6 + voice * size * 0.055;
           ctx.stroke();
         }
         ctx.globalAlpha = 1;

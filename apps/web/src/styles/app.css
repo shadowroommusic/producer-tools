@@ -3644,7 +3644,7 @@
     drop-shadow(0 0 3px hsl(calc(var(--orb-hue-a) * 1deg) 100% 67% / 0.92))
     drop-shadow(0 0 8px hsl(calc(var(--orb-hue-b) * 1deg) 100% 62% / 0.45));
   animation: sr-orb-ring-spin var(--orb-spin) linear infinite;
-  scale: calc(1 + var(--orb-voice) * 0.035);
+  scale: calc(1 + var(--orb-voice) * 0.075);
   will-change: rotate, scale;
 }
 
@@ -3888,12 +3888,12 @@
 @keyframes sr-orb-listen-aura {
   0%,
   100% {
-    opacity: calc(0.52 + var(--orb-voice) * 0.2);
-    transform: scale(calc(0.97 + var(--orb-voice) * 0.045));
+    opacity: calc(0.46 + var(--orb-voice) * 0.34);
+    transform: scale(calc(0.95 + var(--orb-voice) * 0.09));
   }
   50% {
-    opacity: calc(0.76 + var(--orb-voice) * 0.2);
-    transform: scale(calc(1.07 + var(--orb-voice) * 0.08));
+    opacity: calc(0.78 + var(--orb-voice) * 0.34);
+    transform: scale(calc(1.08 + var(--orb-voice) * 0.16));
   }
 }
 

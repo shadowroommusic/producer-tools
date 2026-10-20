@@ -206,9 +206,10 @@
   filter: blur(7px) saturate(1.44) brightness(1.08);
 }
 
+/* 语音光晕：跟着麦克风电平涨落——普通说话也要一眼看见球在"接住声音"。 */
 .sr-orb-visual[data-mode="listening"]::after {
-  opacity: calc(0.34 + var(--orb-voice) * 0.38);
-  scale: calc(1 + var(--orb-voice) * 0.07);
+  opacity: calc(0.3 + var(--orb-voice) * 0.62);
+  scale: calc(1 + var(--orb-voice) * 0.14);
 }
 
 .sr-orb-visual[data-mode="listening"] .sr-orb-arc {

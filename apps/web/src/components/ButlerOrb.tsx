@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
+import { stepVoiceEnvelope } from "../lib/orb-voice.ts";
 import {
   DEFAULT_ORB_SCALE,
   MAX_ORB_SCALE,
@@ -606,17 +607,22 @@ export function ButlerOrb({
   }, [contextKey, size]);
 
 
-  // 单 rAF：把 RMS 平滑进 level ref，交给 r3f 的 useFrame（玻璃珠渲染在 Canvas 内部循环）。
+  // 单 rAF：把 RMS 变成一条看得见的包络（感知映射 + 快攻慢放），交给 Canvas 自己的 rAF 每帧读。
   const levelRef = useRef(0);
   useEffect(() => {
     let last = performance.now();
     const tick = (now: number) => {
-      const dt = FINITE(now - last, 16) / 120;
+      const dtMs = FINITE(now - last, 16);
       last = now;
       /* 外部通话的电平来自 App 的同一条采集流；本地模式才用球自己的表。 */
       const live = externalCall ? (voiceLevel?.() ?? 0) : micLevel;
       const target = effectiveMode === "listening" ? live : 0;
-      levelRef.current += (FINITE(target, 0) - levelRef.current) * Math.min(1, dt);
+      /**
+       * 感知映射 + 快攻慢放都在纯函数里（lib/orb-voice.ts，单测锁死）：
+       * 音节顶上来要立刻跟（attack 40ms），词间停顿要落回静默（decay 75ms）。
+       * 这里只管把包络写进 ref——Canvas 的 rAF 每帧读它，不需要 React 重渲染。
+       */
+      levelRef.current = stepVoiceEnvelope(levelRef.current, FINITE(target, 0), dtMs);
       rafRef.current = window.requestAnimationFrame(tick);
     };
     rafRef.current = window.requestAnimationFrame(tick);
@@ -766,7 +772,7 @@ export function ButlerOrb({
         <GlassSphere
           size={size}
           mode={effectiveMode}
-          level={levelRef.current}
+          level={() => levelRef.current}
           progress={effectiveProgress}
           reducedMotion={reducedMotion.current}
           transitioning={callTransition === "opening" || callTransition === "closing"}
