@@ -25,10 +25,16 @@ export type SpeechQueueSpeaker = {
     },
   ) => void;
   cancel: () => void;
+  /**
+   * 可选：提前合成某一句（bridge provider 的实现是缓存合成请求）。
+   * 队列只在**当前句真正开口（onStart）之后**对紧邻的下一句调一次——不提前并发整个队列
+   * （Codex 裁决 #492-3）。系统 provider 拿不到音频流，不实现它。
+   */
+  prepare?: (text: string) => void;
 };
 
 export type SpeechQueueOptions = {
-  /** 每次取播放器都重新问一遍：换音色/换供应商后，下一句自动用新实例。 */
+  /** 每次取播放器都重新问一遍：换音色/换供应商/回退后，下一句自动用新实例。 */
   speaker: () => SpeechQueueSpeaker;
   /** 句间停顿，默认 120ms（100–160ms 都算自然）。 */
   gapMs?: number;
@@ -38,6 +44,8 @@ export type SpeechQueueOptions = {
   sleep?: (ms: number) => Promise<void>;
   /** 当前在念的句子（字幕）；null = 已经没在念。 */
   onSentence?: (text: string | null) => void;
+  /** 当前句真正开口（首声延迟测量点）。 */
+  onStart?: (text: string) => void;
   /** 队列自然播完（取消不算）。 */
   onIdle?: () => void;
   /** 合成/播放失败；队列会继续下一句，不吞掉原因。 */
@@ -74,6 +82,11 @@ export function createSpeechQueue(options: SpeechQueueOptions): SpeechQueue {
   let pumping = false;
   /** 正在播的那一句的收尾函数（clear/超时用）。 */
   let finishCurrent: (() => void) | null = null;
+  /**
+   * 正在发声的那一个播放器实例。clear 必须 cancel **它**，而不是再问一次 options.speaker()——
+   * 换 plan/回退之后 speaker() 已经返回新实例，cancel 新实例等于放走旧音频（Codex 裁决 #492-4）。
+   */
+  let activeSpeaker: SpeechQueueSpeaker | null = null;
   let waiters: Array<() => void> = [];
 
   const settleWaiters = () => {
@@ -85,13 +98,16 @@ export function createSpeechQueue(options: SpeechQueueOptions): SpeechQueue {
   const speakOnce = (item: SpeechItem, token: number): Promise<void> =>
     new Promise<void>((resolve) => {
       const speaker = options.speaker();
+      activeSpeaker = speaker;
       let done = false;
+      let started = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
       const finish = () => {
         if (done) return;
         done = true;
         if (timer !== null) clearTimeout(timer);
         if (finishCurrent === finish) finishCurrent = null;
+        if (activeSpeaker === speaker) activeSpeaker = null;
         resolve();
       };
       finishCurrent = finish;
@@ -106,6 +122,20 @@ export function createSpeechQueue(options: SpeechQueueOptions): SpeechQueue {
       try {
         speaker.speak(item.text, {
           ...(item.voiceId === undefined ? {} : { voiceId: item.voiceId }),
+          onStart: () => {
+            if (token !== epoch || started) return;
+            started = true;
+            options.onStart?.(item.text);
+            // 真正开口之后才预取下一句：只取紧邻的一句，不并发整个队列。
+            const next = items[0];
+            if (next !== undefined && speaker.prepare !== undefined) {
+              try {
+                speaker.prepare(next.text);
+              } catch {
+                /* 预取失败不算失败：播到那句时会重新合成。 */
+              }
+            }
+          },
           onEnd: finish,
           onError: (message) => {
             if (token === epoch) options.onError?.(message, item.text);
@@ -163,8 +193,11 @@ export function createSpeechQueue(options: SpeechQueueOptions): SpeechQueue {
       items = [];
       const finish = finishCurrent;
       finishCurrent = null;
+      const speaker = activeSpeaker;
+      activeSpeaker = null;
       if (finish !== null) {
-        options.speaker().cancel();
+        // 取消的是实际在播的那个实例，不是"现在该用谁"。
+        speaker?.cancel();
         finish();
       }
       options.onSentence?.(null);

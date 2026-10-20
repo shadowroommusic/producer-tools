@@ -46,6 +46,8 @@ export type TTSProvider = {
   cancel: () => void;
   /** Play an utterance and hand back the audio, or null when the implementation cannot produce one. */
   synthesize: (text: string, options?: { voiceId?: string; rate?: number; pitch?: number }) => Promise<AudioBuffer | null>;
+  /** Warm the cache for a sentence that is about to be spoken (only providers that can). */
+  prepare?: (text: string) => void;
   speaking: () => boolean;
 };
 
@@ -119,6 +121,13 @@ export function createBridgeTTS(options: {
   let playing: AudioBufferSourceNode | null = null;
   /** 每次 speak/cancel 递增：迟到的合成结果不得盖掉新的一句。 */
   let token = 0;
+  /**
+   * 预取缓存：队列在当前句开口后对下一句调 `prepare()`，合成请求在这里起飞；
+   * 播到那句时直接用缓存的 Promise，句间就只剩 120ms 而不是一整次 HTTP。
+   * 缓存是**实例私有**的——换音色/换端点就是新实例，旧缓存天然作废（Codex 裁决 #492-3）。
+   * 上限 2 条，失败条目删掉（播到那句时重新合成，不能缓存一个错误）。
+   */
+  const prefetched = new Map<string, Promise<AudioBuffer | null>>();
   const audioContext = () => {
     context ??= new AudioContext();
     return context;
@@ -155,12 +164,37 @@ export function createBridgeTTS(options: {
       throw new Error(`音频解码失败：${cause instanceof Error ? cause.message : String(cause)}`);
     }
   };
+  /**
+   * 取这一句的合成：优先用预取缓存（命中即删，一句只播一次）；没有就现合成。
+   * 预取里失败的条目已经被剔除，这里拿到的一定是新鲜的或缓存中的健康请求。
+   */
+  const synthesisFor = (text: string): Promise<AudioBuffer | null> => {
+    const cached = prefetched.get(text);
+    if (cached !== undefined) {
+      prefetched.delete(text);
+      return cached;
+    }
+    return synthesize(text);
+  };
   return {
     voices: async () => [],
     synthesize,
+    prepare: (text) => {
+      const trimmed = text.trim();
+      if (trimmed === "" || prefetched.has(trimmed)) return;
+      // 最多留两条预取：更老的（上一句剩的或更早的）先丢。
+      if (prefetched.size >= 2) {
+        const oldest = prefetched.keys().next().value;
+        if (oldest !== undefined) prefetched.delete(oldest);
+      }
+      const request = synthesize(trimmed);
+      prefetched.set(trimmed, request);
+      // 失败条目不留在缓存里（否则那句会被一个缓存着的错误弄哑两次）。
+      void request.catch(() => prefetched.delete(trimmed));
+    },
     speak: (text, speakOptions) => {
       const mine = ++token;
-      void synthesize(text)
+      void synthesisFor(text)
         .then((buffer) => {
           if (mine !== token) return;
           if (buffer === null) {

@@ -68,6 +68,19 @@ test("S0-1 新回合不得重念上一轮的回答", async () => {
   assert.equal(turn.owns("a-1"), false);
 });
 
+test("S0-1b 同一轮后续不同 id 一律忽略（Codex #492-5）", async () => {
+  const { createSpeechTurn } = await import("../src/lib/speech-turn.ts");
+  const turn = createSpeechTurn();
+  turn.begin();
+  turn.bind("a-1");
+  turn.bind("a-2");
+  assert.equal(turn.id(), "a-1", "第一个 id 锁定本轮答案");
+  assert.equal(turn.owns("a-2"), false, "同一轮的分段/重发不得换掉答案");
+  turn.begin();
+  turn.bind("a-2");
+  assert.equal(turn.id(), "a-2", "begin 之后才允许绑定新 id");
+});
+
 test("S0-2 连续 speak 不得隐式 cancel 上一句", () => {
   const stub = installSystemSpeech();
   try {

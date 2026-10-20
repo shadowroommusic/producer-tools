@@ -112,6 +112,22 @@ test("凭证变化会改变实例 key", () => {
   assert.notEqual(a.key, b.key);
 });
 
+test("端点变化会改变实例 key（Codex #492-6）", () => {
+  const a = resolveSpeechPlan(settingsWith(), storage());
+  const changed = settingsWith();
+  changed.providers[0].capabilities.tts.baseUrl = "https://api2.minimax.cn/v1";
+  const b = resolveSpeechPlan(changed, storage());
+  assert.notEqual(a.key, b.key, "改了 baseUrl 还用旧实例会把请求打到旧端点");
+});
+
+test("协议变化会改变实例 key（Codex #492-6）", () => {
+  const a = resolveSpeechPlan(settingsWith(), storage());
+  const changed = settingsWith();
+  changed.providers[0].capabilities.tts.protocol = "elevenlabs-tts";
+  const b = resolveSpeechPlan(changed, storage());
+  assert.notEqual(a.key, b.key);
+});
+
 test("同样输入得到同样的 key（不会每轮重建）", () => {
   const store = storage({ "shadowroom.tts.voice": "voice-A" });
   assert.equal(resolveSpeechPlan(settingsWith(), store).key, resolveSpeechPlan(settingsWith(), store).key);
@@ -305,6 +321,66 @@ test("bridge cancel 之后迟到的合成结果不再播放", async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(started, 0);
     assert.equal(audio.sources.filter((source) => source.started).length, 0);
+  } finally {
+    network.restore();
+    audio.restore();
+  }
+});
+
+test("prepare 预取后 speak 命中缓存，不再发请求", async () => {
+  const audio = installAudio();
+  const network = installFetch(() => ({ audio: AUDIO }));
+  try {
+    const tts = createBridgeTTS({
+      baseUrl: "https://api.example.com/v1",
+      credentialRef: "key",
+      protocol: "minimax-t2a",
+      model: "speech-2.5",
+      voice: "voice-A",
+    });
+    tts.speak("一。", {});
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    tts.prepare?.("二。");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(network.bodies.length, 2, "speak 一次 + prepare 一次");
+    tts.speak("二。", {});
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(network.bodies.length, 2, "命中缓存：第二句不再发请求");
+    assert.deepEqual(
+      network.bodies.map((entry) => entry.body.text),
+      ["一。", "二。"],
+    );
+  } finally {
+    network.restore();
+    audio.restore();
+  }
+});
+
+test("预取失败的条目不留在缓存里（播到那句重新合成）", async () => {
+  const audio = installAudio();
+  let failFirst = true;
+  const network = installFetch(() => {
+    if (failFirst) {
+      failFirst = false;
+      return { error: "boom" };
+    }
+    return { audio: AUDIO };
+  });
+  try {
+    const tts = createBridgeTTS({
+      baseUrl: "https://api.example.com/v1",
+      credentialRef: "key",
+      protocol: "minimax-t2a",
+      model: "speech-2.5",
+      voice: "voice-A",
+    });
+    tts.prepare?.("二。");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const errors = [];
+    tts.speak("二。", { onError: (message) => errors.push(message) });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(network.bodies.length, 2, "失败不缓存：speak 重新合成了一次");
+    assert.equal(errors.length, 0, "第二次合成成功，不该报错");
   } finally {
     network.restore();
     audio.restore();

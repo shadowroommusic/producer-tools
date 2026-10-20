@@ -49,8 +49,20 @@ function systemKey(voiceId: string): string {
   return `system:${voiceId}`;
 }
 
-function bridgeKey(providerId: string, model: string, credentialRef: string | null, voice: string): string {
-  return `bridge:${providerId}:${model}:${credentialRef ?? ""}:${voice}`;
+/**
+ * 实例 key 必须覆盖端点形状的全部六项（Codex 裁决 #492-6）：改了 baseUrl/protocol 而没改
+ * 供应商/模型/音色时，旧实例照样要作废——否则请求会带着新音色打到旧端点上。
+ */
+function bridgeKey(parts: { providerId: string; model: string; credentialRef: string | null; baseUrl: string; protocol: string; voice: string }): string {
+  return [
+    "bridge",
+    parts.providerId,
+    parts.model,
+    parts.credentialRef ?? "",
+    parts.baseUrl,
+    parts.protocol,
+    parts.voice,
+  ].join(":");
 }
 
 /**
@@ -69,7 +81,14 @@ export function resolveSpeechPlan(settings: ModelSettings, storage: SpeechStorag
   const voice = read(PROVIDER_VOICE_KEY);
   return {
     kind: "bridge",
-    key: bridgeKey(target.provider.id, target.model, target.provider.credentialRef, voice),
+    key: bridgeKey({
+      providerId: target.provider.id,
+      model: target.model,
+      credentialRef: target.provider.credentialRef,
+      baseUrl: capability.baseUrl,
+      protocol: capability.protocol,
+      voice,
+    }),
     providerId: target.provider.id,
     providerName: target.provider.name,
     baseUrl: capability.baseUrl,
@@ -91,7 +110,14 @@ export function planWithVoice(plan: SpeechPlan, voice: string | undefined): Spee
   }
   return {
     kind: "bridge",
-    key: bridgeKey(plan.providerId, plan.model, plan.credentialRef, next),
+    key: bridgeKey({
+      providerId: plan.providerId,
+      model: plan.model,
+      credentialRef: plan.credentialRef,
+      baseUrl: plan.baseUrl,
+      protocol: plan.protocol,
+      voice: next,
+    }),
     providerId: plan.providerId,
     providerName: plan.providerName,
     baseUrl: plan.baseUrl,

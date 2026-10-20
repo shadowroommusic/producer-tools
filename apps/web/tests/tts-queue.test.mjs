@@ -12,7 +12,7 @@ import { SPEECH_GAP_MS, createSpeechQueue } from "../src/lib/tts-queue.ts";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** 假的播放器：一次只允许一句，手动结束，记录并发与 cancel 次数。 */
+/** 假的播放器：一次只允许一句，手动开始/结束，记录并发与 cancel 次数。 */
 function createSpeaker() {
   const log = [];
   const state = { active: 0, maxActive: 0, cancelCalls: 0, pending: null };
@@ -29,6 +29,9 @@ function createSpeaker() {
       },
     },
     log,
+    start: () => {
+      state.pending?.options.onStart?.();
+    },
     end: () => {
       const pending = state.pending;
       state.pending = null;
@@ -224,4 +227,80 @@ test("clear 之后 whenIdle 也会放行", async () => {
   queue.clear();
   await settled;
   assert.equal(queue.pending(), 0);
+});
+
+test("clear 取消的是实际在播的实例，不是 speaker() 现在返回的那个", async () => {
+  const first = createSpeaker();
+  const second = createSpeaker();
+  let useSecond = false;
+  const queue = createSpeechQueue({
+    speaker: () => (useSecond ? second.provider : first.provider),
+    sleep: async () => undefined,
+  });
+  queue.push("一。");
+  await tick();
+  // 换 plan/回退：getter 已经指向新实例，但旧音频还在响。
+  useSecond = true;
+  queue.clear();
+  assert.equal(first.state.cancelCalls, 1, "必须取消真正在播的旧实例");
+  assert.equal(second.state.cancelCalls, 0, "不许误伤新实例");
+});
+
+test("clear 进行中 push 新句：泵重启且句子不丢", async () => {
+  const speaker = createSpeaker();
+  const queue = createSpeechQueue({ speaker: () => speaker.provider, sleep: async () => undefined });
+  queue.push("一。");
+  await tick();
+  queue.clear();
+  queue.push("二。");
+  queue.push("三。");
+  await tick();
+  assert.deepEqual(speaker.log, ["一。", "二。"]);
+  speaker.end();
+  await tick();
+  assert.deepEqual(speaker.log, ["一。", "二。", "三。"]);
+  speaker.end();
+  await queue.whenIdle();
+});
+
+test("prepare 只在当前句开口后预取紧邻的下一句", async () => {
+  const speaker = createSpeaker();
+  const prepared = [];
+  const provider = {
+    ...speaker.provider,
+    prepare: (text) => prepared.push(text),
+  };
+  const queue = createSpeechQueue({ speaker: () => provider, sleep: async () => undefined });
+  queue.push("一。");
+  queue.push("二。");
+  queue.push("三。");
+  await tick();
+  assert.deepEqual(prepared, [], "还没开口不许预取");
+  speaker.start();
+  assert.deepEqual(prepared, ["二。"], "开口后只预取紧邻的一句");
+  speaker.end();
+  await tick();
+  speaker.start();
+  assert.deepEqual(prepared, ["二。", "三。"]);
+  speaker.end();
+  await tick();
+  // 第三句也要收尾，否则队列永远等它的 onEnd。
+  speaker.end();
+  await queue.whenIdle();
+});
+
+test("onStart 上报当前句（首声延迟测量点）", async () => {
+  const speaker = createSpeaker();
+  const started = [];
+  const queue = createSpeechQueue({
+    speaker: () => speaker.provider,
+    sleep: async () => undefined,
+    onStart: (text) => started.push(text),
+  });
+  queue.push("一。");
+  await tick();
+  speaker.start();
+  speaker.end();
+  await queue.whenIdle();
+  assert.deepEqual(started, ["一。"]);
 });

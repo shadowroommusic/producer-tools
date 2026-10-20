@@ -26,8 +26,8 @@ export const SPEECH_BUDGETS: Record<SpeechMode, SpeechBudget> = {
   detail: { maxSentences: 8, maxChars: 360 },
 };
 
-/** 单轮绝对上限：再"详细"也不许把一通电话变成有声书。 */
-export const SPEECH_HARD_MAX_CHARS = 420;
+/** 单轮朗读的硬顶时长：预算正常时到不了，它是"模型失控"的安全带（App 用它掐表）。 */
+export const SPEECH_TURN_MAX_MS = 90_000;
 
 /** 句末标点（和 splitSentences 同一套，故意不含逗号）。 */
 const SENTENCE_END = /[。！？!?…]/;
@@ -75,6 +75,13 @@ const DIVIDER = /^[ \t]{0,3}(?:[-*_][ \t]*){3,}$/gm;
 const BOLD = /\*\*([^*\n]+)\*\*/g;
 const ITALIC = /(?<![\w*])[*_]([^*_\n]+)[*_](?![\w*])/g;
 const STRIKE = /~~([^~\n]+)~~/g;
+/**
+ * 纯垫话开头：只剥文本最开头的「好的，/收到，/当然可以，」这类不带信息的客套，
+ * 只剥一次、只剥开头，绝不按语义删正文（Codex 裁决 #492-1：状态报告不许语义过滤）。
+ */
+const LEADING_FILLER = /^(?:好的呀|好的|当然可以|没问题|收到|嗯嗯|嗯)[，,。.!！]\s*/;
+/** 中文标点前多余空格（剥掉 URL/路径后的残留）：「看这个 ，然后」→「看这个，然后」。 */
+const SPACE_BEFORE_PUNCT = /\s+([，。；、：？！…])/g;
 
 /**
  * 把回答变成"可以念的文字"：剥掉只对屏幕有意义的部分，保留句子与顺序。
@@ -101,8 +108,12 @@ export function stripForSpeech(text: string): string {
     .replace(QUOTE, "")
     .replace(BOLD, "$1")
     .replace(STRIKE, "$1")
-    .replace(ITALIC, "$1");
-  return stripped
+    .replace(ITALIC, "$1")
+    .replace(SPACE_BEFORE_PUNCT, "$1");
+  // 垫话只剥到"还剩东西可说"为止：整句都是垫话时宁可念出来，也不要让回答凭空消失。
+  const unfilled = stripped.replace(LEADING_FILLER, "");
+  const spoken = unfilled.trim() === "" ? stripped : unfilled;
+  return spoken
     .split("\n")
     .map((line) => line.replace(/[ \t]+/g, " ").trim())
     // 段落之间只留一个换行：朗读时换行就是停顿，空行没有额外意义。
@@ -176,29 +187,36 @@ function clipHard(sentence: string, maxChars: number): string {
   return `${out.trim()}……`;
 }
 
+/** 这一轮已经念掉的量（流式喂入时预算要跨 chunk 累计，不能每段重新给 70 字）。 */
+export type SpeechSpent = { sentences: number; chars: number };
+
 /**
  * 朗读版句子列表（队列逐句播放，句间由队列给自然停顿）。
- * @param text - 转录原文。
+ * @param text - 转录原文（或流式里新稳定下来的一段）。
  * @param mode - `brief` 默认短答；`detail` 用户明确要展开时用。
+ * @param spent - 本轮已念句数/字数；预算按剩余量计算。
  */
-export function speechSentences(text: string, mode: SpeechMode = "brief"): string[] {
+export function speechSentences(text: string, mode: SpeechMode = "brief", spent: SpeechSpent = { sentences: 0, chars: 0 }): string[] {
   const cleaned = stripForSpeech(text);
   if (cleaned === "") return [];
   const budget = SPEECH_BUDGETS[mode];
+  const remainingSentences = budget.maxSentences - spent.sentences;
+  const remainingChars = budget.maxChars - spent.chars;
+  if (remainingSentences <= 0 || remainingChars <= 0) return [];
   const sentences = splitSpeechSentences(cleaned);
   const spoken: string[] = [];
   let used = 0;
   for (const sentence of sentences) {
-    if (spoken.length >= budget.maxSentences) break;
+    if (spoken.length >= remainingSentences) break;
     const length = spokenLength(sentence);
-    if (used + length <= budget.maxChars) {
+    if (used + length <= remainingChars) {
       spoken.push(sentence);
       used += length;
       continue;
     }
-    // 一句都还没念：这一句本身超预算，退到分句或硬截，保证"有声音"且不念半句。
-    if (spoken.length === 0 && used === 0) {
-      spoken.push(cutAtClause(sentence, budget.maxChars) ?? clipHard(sentence, budget.maxChars));
+    // 本轮一句都还没念：这一句本身超预算，退到分句或硬截，保证"有声音"且不念半句。
+    if (spoken.length === 0 && used === 0 && spent.sentences === 0 && spent.chars === 0) {
+      spoken.push(cutAtClause(sentence, remainingChars) ?? clipHard(sentence, remainingChars));
     }
     break;
   }
@@ -208,4 +226,61 @@ export function speechSentences(text: string, mode: SpeechMode = "brief"): strin
 /** 朗读版纯文本（句间用换行，交给一次性朗读的调用方）。 */
 export function speechText(text: string, mode: SpeechMode = "brief"): string {
   return speechSentences(text, mode).join("\n");
+}
+
+/**
+ * 流式喂入器：回答是一边生成一边到的，但朗读只能念"已经稳定"的部分。
+ *
+ * 两条规则（Codex 裁决 #492-8）：
+ * - 只把**以句末标点/换行结束**的完整句交给队列，最后一个边界之后的残句等更多 delta 或 flush；
+ * - 每个 delta 只追加、不重算历史——已消费的原文从 pending 里切走，句子边界一旦判定就不回头。
+ *   （strip 发生在"稳定之后"：URL/表格跨 delta 时，残段还压在 pending 里，不会被念一半。）
+ *
+ * 预算跨 chunk 累计：brief 整轮就是 2 句/70 字，不是每段 70 字。
+ */
+export type SpeechFeeder = {
+  /** 追加流式原文；返回新稳定下来的可念句子（通常 0 或 1 句）。 */
+  push: (rawDelta: string) => string[];
+  /** 回合结束：把剩余文本（可能没有句末标点）冲刷成最后的句子。 */
+  flush: () => string[];
+  /** 已产出的句数/字数（队列与硬顶用）。 */
+  stats: () => SpeechSpent;
+};
+
+export function createSpeechFeeder(mode: SpeechMode = "brief"): SpeechFeeder {
+  let pending = "";
+  let sentences = 0;
+  let chars = 0;
+  /** 最后稳定边界的下一个位置（按码点索引）；没有稳定边界返回 -1。 */
+  const lastBoundary = (charsArr: string[]): number => {
+    let last = -1;
+    for (let index = 0; index < charsArr.length; index += 1) {
+      if (isSentenceEnd(charsArr, index) || charsArr[index] === "\n") last = index + 1;
+    }
+    return last;
+  };
+  const take = (text: string): string[] => {
+    const out = speechSentences(text, mode, { sentences, chars });
+    sentences += out.length;
+    chars += out.reduce((count, sentence) => count + spokenLength(sentence), 0);
+    return out;
+  };
+  return {
+    push: (rawDelta) => {
+      if (rawDelta === "") return [];
+      pending += rawDelta;
+      const charsArr = Array.from(pending);
+      const boundary = lastBoundary(charsArr);
+      if (boundary < 0) return [];
+      const stable = charsArr.slice(0, boundary).join("");
+      pending = charsArr.slice(boundary).join("");
+      return take(stable);
+    },
+    flush: () => {
+      const rest = pending;
+      pending = "";
+      return take(rest);
+    },
+    stats: () => ({ sentences, chars }),
+  };
 }

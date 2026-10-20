@@ -12,7 +12,9 @@
 export type SpeechTurn = {
   /** 新回合开始（用户说完一句话）。清掉上一轮的 id 与已念句数。 */
   begin: () => void;
-  /** 绑定本轮的回答 id（submit 里生成的那一个）。重复绑定同一个 id 不动进度。 */
+  /** 绑定本轮的回答 id（submit 里生成的那一个）。**只认第一个**：同一轮里再来不同的 id
+   * （tool/reasoning 分段重发、二次提交）一律忽略，直到下一次 begin —— 否则一句话说到一半
+   * 答案会被换掉（Codex 裁决 #492-5）。重复绑定同一个 id 不动进度。 */
   bind: (messageId: string) => void;
   /** 这条 assistant 消息是不是本轮允许朗读的那一条。 */
   owns: (messageId: string | null | undefined) => boolean;
@@ -35,7 +37,8 @@ export function createSpeechTurn(): SpeechTurn {
       spoken = 0;
     },
     bind: (next) => {
-      messageId = next;
+      // 第一个 id 锁定本轮答案；之后的不同 id 视为同一轮的分段/重发，忽略。
+      if (messageId === null) messageId = next;
     },
     owns: (candidate) => messageId !== null && candidate === messageId,
     id: () => messageId,

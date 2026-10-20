@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   SPEECH_BUDGETS,
-  SPEECH_HARD_MAX_CHARS,
+  SPEECH_TURN_MAX_MS,
+  createSpeechFeeder,
   speechSentences,
   speechText,
   splitSpeechSentences,
@@ -74,7 +75,7 @@ test("URL 不念", () => {
 });
 
 test("URL 不吞掉句末中文标点", () => {
-  assert.equal(stripForSpeech("看这个 https://example.com/x，然后继续。"), "看这个 ，然后继续。");
+  assert.equal(stripForSpeech("看这个 https://example.com/x，然后继续。"), "看这个，然后继续。");
 });
 
 test("macOS 绝对路径不念", () => {
@@ -210,5 +211,65 @@ test("省略号不吞掉下一句", () => {
 test("预算常量是产品口径", () => {
   assert.deepEqual(SPEECH_BUDGETS.brief, { maxSentences: 2, maxChars: 70 });
   assert.deepEqual(SPEECH_BUDGETS.detail, { maxSentences: 8, maxChars: 360 });
-  assert.equal(SPEECH_HARD_MAX_CHARS, 420);
+  assert.equal(SPEECH_TURN_MAX_MS, 90_000);
+});
+
+test("开头的纯垫话被剥掉，只剥一次", () => {
+  assert.equal(stripForSpeech("好的，已经排好了。"), "已经排好了。");
+  assert.equal(stripForSpeech("收到，加进去了。"), "加进去了。");
+  assert.equal(stripForSpeech("当然可以。这是结果。"), "这是结果。");
+  assert.equal(stripForSpeech("没问题，这就改。"), "这就改。");
+});
+
+test("垫话只剥开头，不误伤正文", () => {
+  assert.equal(stripForSpeech("已经排好了。好的部分在第二段。"), "已经排好了。好的部分在第二段。");
+  assert.equal(stripForSpeech("这个没问题。"), "这个没问题。");
+});
+
+test("剥掉 URL 后中文标点前不留空格", () => {
+  assert.equal(stripForSpeech("看这个 https://example.com/x，然后继续。"), "看这个，然后继续。");
+});
+
+test("流式喂入：残句等更多 delta，flush 冲刷尾句", () => {
+  // detail 模式：3 句都在预算内（brief 只放 2 句，那是另一条用例）。
+  const feeder = createSpeechFeeder("detail");
+  assert.deepEqual(feeder.push("第一句。第二"), ["第一句。"]);
+  assert.deepEqual(feeder.push("句。第三"), ["第二句。"]);
+  assert.deepEqual(feeder.flush(), ["第三"]);
+  assert.deepEqual(feeder.stats(), { sentences: 3, chars: 10 });
+});
+
+test("流式喂入：没有边界的文本什么都不吐", () => {
+  const feeder = createSpeechFeeder();
+  assert.deepEqual(feeder.push("还没有说完"), []);
+  assert.deepEqual(feeder.flush(), ["还没有说完"]);
+});
+
+test("流式喂入：预算是整轮的不是每段的", () => {
+  const feeder = createSpeechFeeder();
+  assert.deepEqual(feeder.push("一。"), ["一。"]);
+  assert.deepEqual(feeder.push("二。"), ["二。"]);
+  assert.deepEqual(feeder.push("三。"), [], "brief 整轮 2 句，第三句不再产出");
+  assert.deepEqual(feeder.flush(), []);
+});
+
+test("流式喂入：跨 delta 的 URL 不会被念一半", () => {
+  const feeder = createSpeechFeeder();
+  assert.deepEqual(feeder.push("看这个 https://exa"), []);
+  assert.deepEqual(feeder.push("mple.com/x，好。下一"), ["看这个，好。"]);
+  assert.deepEqual(feeder.flush(), ["下一"]);
+});
+
+test("流式喂入：换行也是稳定边界，表格行被剥掉", () => {
+  const feeder = createSpeechFeeder();
+  assert.deepEqual(feeder.push("| 项目 | 数量 |\n共 51 首。"), ["共 51 首。"]);
+});
+
+test("流式喂入：detail 模式按 detail 预算累计", () => {
+  const feeder = createSpeechFeeder("detail");
+  const sentence = `${"字".repeat(59)}。`;
+  const out = [];
+  for (let index = 0; index < 10; index += 1) out.push(...feeder.push(sentence));
+  out.push(...feeder.flush());
+  assert.equal(out.length, 6, "detail 360 字 ÷ 60 字/句 = 6 句");
 });
