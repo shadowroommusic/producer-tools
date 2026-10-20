@@ -28,8 +28,33 @@ await page.goto(BASE, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".sr-dj-library .sr-dj-row", { timeout: 30000 });
 await page.waitForTimeout(1200);
 
+// 前置自检（2026-10-20）：「S5 验收场」set 与 2/4/6/8 号曲目是 2026-09-25 的验收 fixture；
+// 10-20 换 51 首 FLAC 真库后两者都不在库里。fixture 缺失时 SKIP 并说明，不误报产品回归。
+// 恢复方法：按库页 spec 重新导入那份 Rekordbox XML（或等 fixture 库回归）。
+{
+  const response = await fetch("http://127.0.0.1:8787/api/call", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ server: "library", tool: "set_list", arguments: {} }),
+  });
+  const payload = await response.json();
+  const sets = JSON.parse(typeof payload.result === "string" ? payload.result : JSON.stringify(payload.result)).sets ?? [];
+  if (!sets.some((row) => (row.name ?? "").includes("S5 验收场"))) {
+    console.log(`SKIP  前置缺失：库里没有「S5 验收场」set（现有 ${sets.length} 个 set）——fixture 未随 2026-10-20 真库迁移恢复，非产品回归。`);
+    console.log("\n汇总: SKIP 0/0（前置缺失）");
+    await browser.close();
+    process.exit(0);
+  }
+}
+
 // ① 导入 set：打开选择器 → 选「S5 验收场」→ 看板 = 4 行、按 track_id 对得上
-await page.getByRole("button", { name: "导入 set" }).click();
+// 2026-10-19 起「导入 set」收进 ⋯ More 菜单（2026-10-20 修复：先开菜单再点 menuitem）
+const openMore = async () => {
+  await page.getByRole("button", { name: "更多 Set 操作" }).click();
+  await page.waitForSelector(".sr-dj-more-menu", { timeout: 5000 });
+};
+await openMore();
+await page.getByRole("menuitem", { name: "导入 set" }).click();
 await page.waitForSelector(".sr-dj-import-row", { timeout: 15000 });
 const rowTexts = await page.locator(".sr-dj-import-row").allTextContents();
 check("① 选择器列出导入的 set", rowTexts.some((t) => t.includes("S5 验收场") && t.includes("4 首")), JSON.stringify(rowTexts));
@@ -42,8 +67,9 @@ check("③ 每行按 track_id 对得上（不是标题）", JSON.stringify(board
 const setName = await page.locator(".sr-dj-topbar input").first().inputValue();
 check("④ set 名跟随导入", setName.includes("S5 验收场"), setName);
 
-// ② 导出 m3u（导入 notice 还在——等它变成「已导出」，不能读旧文本）
-await page.getByRole("button", { name: "导出 m3u" }).click();
+// ② 导出 m3u（导入 notice 还在——等它变成「已导出」，不能读旧文本）；同样先开 More 菜单
+await openMore();
+await page.getByRole("menuitem", { name: "导出 m3u" }).click();
 await page.waitForFunction(() => document.querySelector(".sr-dj-notice")?.textContent?.includes("已导出"), null, { timeout: 15000 });
 const notice = await page.locator(".sr-dj-notice").textContent();
 const pathMatch = notice.match(/→ (.+?\.m3u)/);

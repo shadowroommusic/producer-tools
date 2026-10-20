@@ -1,11 +1,13 @@
 /**
  * Set workbench: build an ordered set against the library, one player for auditioning and cue work.
  *
- * Layout: TopBar (set name / track count / actions) · left = library with the three pinned
- * suggestions over it · middle = the SetBoard (drag in, drag to order) · bottom = the single
- * player (`lib/dj-deck.ts`). Timing, AI ordering and exporting are S3/S5 — this file holds the
- * shape they will land in. Draft state (name + track ids) is the only thing persisted, under
- * `shadowroom.setdraft`; the truth about cues stays in library.db.
+ * Two internal views (one truth, no extra mainView): overview = TopBar + library with pinned
+ * suggestions + SetBoard + player; editor = the focused face for one set (rename / reorder / time /
+ * export), entered from 新建 set or 编辑 set, remembered across refreshes in `shadowroom.djview`.
+ * The player section stays mounted in both views so switching never interrupts audio.
+ *
+ * Draft state (name + track ids) is the only set truth, persisted under `shadowroom.setdraft`;
+ * the truth about cues stays in library.db.
  *
  * No bottom input bar: typing lives in the orb and the conversation dock.
  */
@@ -147,9 +149,20 @@ type SetDetail = {
 const DRAG_TRACK = "application/x-shadowroom-track";
 const DRAG_ROW = "application/x-shadowroom-setrow";
 const DRAFT_KEY = "shadowroom.setdraft";
+/** DJ 页内部子视图（不新增 mainView）：总览（曲库+Set+播放器）⇄ Set 独立编辑面。 */
+const DJ_VIEW_KEY = "shadowroom.djview";
+type DjView = "overview" | "editor";
 const DEFAULT_OVERLAP_MS = 16_000;
 const CUE_COLORS = ["#f43f5e", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#6366f1"];
 const newSetId = (): string => `set-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+function readDjView(): DjView {
+  try {
+    return window.localStorage.getItem(DJ_VIEW_KEY) === "editor" ? "editor" : "overview";
+  } catch {
+    return "overview";
+  }
+}
 
 function mmss(seconds: number): string {
   const safe = Math.max(0, seconds);
@@ -279,6 +292,15 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
   }, [player]);
 
   const [draft, setDraft] = useState<Draft>(readDraft);
+  /** 内部子视图与草稿分开存：切走再回来、刷新，编辑面都按上次的视图恢复。 */
+  const [view, setView] = useState<DjView>(readDjView);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DJ_VIEW_KEY, view);
+    } catch {
+      // storage 不可写：本会话内视图切换照常，只是不跨刷新
+    }
+  }, [view]);
   const [details, setDetails] = useState<Record<number, TrackDetail>>({});
   /** A deleted library row is a stable state, not a request that should retry forever. */
   const [detailErrors, setDetailErrors] = useState<Record<number, string>>({});
@@ -446,14 +468,16 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
   }, []);
 
   const newSet = useCallback(() => {
+    setUndoOrder(null);
     if (draft.name === "未命名 set" && draft.trackIds.length === 0 && draft.overlapMs === DEFAULT_OVERLAP_MS) {
-      say("当前已经是新的空 set。");
+      setView("editor");
+      say("已进入新 set 的编辑面。");
       return;
     }
-    setUndoOrder(null);
     setDraft({ id: newSetId(), name: "未命名 set", trackIds: [], overlapMs: DEFAULT_OVERLAP_MS });
     setSuggestions([]);
-    say("已新建空 set。");
+    setView("editor");
+    say("已新建空 set，进入编辑面。");
   }, [draft.name, draft.trackIds.length, draft.overlapMs, say]);
 
   // ------------------------------------------------ import an existing set / export the draft as m3u
@@ -911,7 +935,36 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
         };
 
   return (
-    <div className="sr-dj">
+    <div className="sr-dj" data-dj-view={view}>
+      {view === "editor" ? (
+        <header className="sr-dj-hero sr-dj-hero--editor" aria-label="Set 编辑面">
+          <div className="sr-dj-hero-copy">
+            <button
+              type="button"
+              className="sr-page-action sr-dj-back"
+              onClick={() => setView("overview")}
+            >
+              ← 返回总览
+            </button>
+            <span className="sr-eyebrow">
+              <span className="sr-eyebrow-dot" />
+              SET EDITOR
+            </span>
+            <p>专心排这个 set：改名、排序、计时、导出；左下播放器一直在线。</p>
+          </div>
+          <div className="sr-dj-hero-meta" aria-label="Set 概览">
+            <span><strong>{draft.trackIds.length}</strong> 首</span>
+            <span>
+              <strong>{plan === null ? "—" : formatPlanDuration(plan.summary.total_duration_ms)}</strong>
+              总长
+            </span>
+            <span>
+              <strong>{plan === null ? 0 : Math.round(plan.summary.overlap_saved_ms / 1000)}s</strong>
+              实际重叠
+            </span>
+          </div>
+        </header>
+      ) : (
       <header className="sr-dj-hero">
         <div className="sr-dj-hero-copy">
           <span className="sr-eyebrow">
@@ -933,6 +986,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
           </span>
         </div>
       </header>
+      )}
       <div className="sr-dj-topbar">
         <div className="sr-dj-setline">
           <span className="sr-dj-toolbar-label sr-mono">SET</span>
@@ -1001,6 +1055,19 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
           <button type="button" className="sr-page-action" onClick={newSet}>
             新建 set
           </button>
+          {view === "overview" ? (
+            <button
+              type="button"
+              className="sr-page-action"
+              title="进入这个 set 的独立编辑面（不重置草稿）"
+              onClick={() => {
+                setView("editor");
+                say(null);
+              }}
+            >
+              编辑 set
+            </button>
+          ) : null}
           <button
             type="button"
             className="sr-page-action sr-dj-more-toggle"
@@ -1087,6 +1154,29 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
         </div>
       ) : null}
       {notice !== null ? <div className="sr-dj-notice" role="alert">{notice}</div> : null}
+      {view === "editor" ? (
+        <div className="sr-dj-main sr-dj-main--editor">
+          <SuggestList
+            suggestions={suggestions}
+            suggestBusy={suggestBusy}
+            inSet={new Set(draft.trackIds)}
+            onOpen={(id) => void openTrack(id)}
+            onAdd={addToSet}
+          />
+          <SetBoard
+            trackIds={draft.trackIds}
+            details={details}
+            detailErrors={detailErrors}
+            planRows={planRows}
+            selectedId={selectedId}
+            onSelect={(id) => void openTrack(id)}
+            onRemove={removeFromSet}
+            onMove={moveRow}
+            onInsert={insertIntoSet}
+            emptyHint="返回总览从曲目库加入歌曲；加入第一首后，这里会出现下一首推荐。"
+          />
+        </div>
+      ) : (
       <div className="sr-dj-main" data-set-empty={draft.trackIds.length === 0 || undefined}>
         <LibraryBrowser
           suggestions={suggestions}
@@ -1119,6 +1209,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
           onInsert={insertIntoSet}
         />
       </div>
+      )}
       <section className="sr-dj-deck" data-state={deck.state}>
         <header className="sr-dj-deck-head">
           <span className="sr-dj-deck-title" title={deck.path ?? undefined}>
@@ -1442,6 +1533,7 @@ function SetBoard(props: {
   detailErrors: Record<number, string>;
   planRows: Map<string, PlanRow>;
   selectedId: number | null;
+  emptyHint?: string;
   onSelect: (id: number) => void;
   onRemove: (id: number) => void;
   onMove: (from: number, to: number) => void;
@@ -1573,7 +1665,9 @@ function SetBoard(props: {
           );
         })}
         {props.trackIds.length === 0 ? (
-          <p className="sr-dj-empty">从左边把歌拖进来（或点「加入」），拖动可排序</p>
+          <p className="sr-dj-empty">
+            {props.emptyHint ?? "从左边把歌拖进来（或点「加入」），拖动可排序"}
+          </p>
         ) : (
           <div className="sr-dj-next-drop">
             <span className="sr-dj-next-drop-mark" aria-hidden="true">＋</span>
@@ -1585,6 +1679,58 @@ function SetBoard(props: {
         )}
       </div>
     </section>
+  );
+}
+
+/** 推荐条：总览贴在曲库上方，Set 编辑面单独占一行——同一份数据与Markup，两个落点。 */
+function SuggestList(props: {
+  suggestions: SuggestionRow[];
+  suggestBusy: boolean;
+  inSet: Set<number>;
+  onOpen: (trackId: number) => void;
+  onAdd: (trackId: number) => void;
+}) {
+  if (props.suggestions.length === 0) {
+    return props.suggestBusy ? <span className="sr-dj-count">推荐计算中…</span> : null;
+  }
+  return (
+    <div className="sr-dj-suggest-strip">
+      {props.suggestions.map((item) => (
+        <div
+          key={item.id}
+          className="sr-dj-row sr-dj-suggest-row"
+          data-inset={props.inSet.has(item.id) || undefined}
+          draggable
+          onDragStart={(event) => event.dataTransfer.setData(DRAG_TRACK, String(item.id))}
+          onClick={() => props.onOpen(item.id)}
+        >
+          <div className="sr-dj-suggest-main">
+            <span className="sr-dj-badge sr-dj-badge-pick">推荐</span>
+            <span className="sr-dj-row-title">{item.title}</span>
+            <button
+              type="button"
+              className="sr-page-action"
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onAdd(item.id);
+              }}
+            >
+              加入
+            </button>
+          </div>
+          <div className="sr-dj-suggest-meta">
+            {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
+            {item.key ? <span className="sr-chip">{item.key}</span> : null}
+            <span className="sr-dj-score" title={`推荐分 ${Math.round(item.score * 100)} / 100`}>匹配 {Math.round(item.score * 100)}</span>
+          </div>
+          <div className="sr-dj-reasons" title={item.reasons.join("\n")}>
+            {item.reasons.map((reason, index) => (
+              <span key={index} className="sr-dj-reason">{reason}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1650,48 +1796,13 @@ function LibraryBrowser(props: {
         <span className="sr-dj-count">{loading ? "查询中…" : `共 ${tracks.length}${tracks.length >= 200 ? "+" : ""} 首`}</span>
       </div>
       {failed !== null ? <div className="sr-dj-notice" role="alert">{failed}</div> : null}
-      {props.suggestions.length > 0 ? (
-        <div className="sr-dj-suggest-strip">
-          {props.suggestions.map((item) => (
-            <div
-              key={item.id}
-              className="sr-dj-row sr-dj-suggest-row"
-              data-inset={inSet.has(item.id) || undefined}
-              draggable
-              onDragStart={(event) => event.dataTransfer.setData(DRAG_TRACK, String(item.id))}
-              onClick={() => props.onOpen(item.id)}
-            >
-              <div className="sr-dj-suggest-main">
-                <span className="sr-dj-badge sr-dj-badge-pick">推荐</span>
-                <span className="sr-dj-row-title">{item.title}</span>
-                <button
-                  type="button"
-                  className="sr-page-action"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onAdd(item.id);
-                  }}
-                >
-                  加入
-                </button>
-              </div>
-              <div className="sr-dj-suggest-meta">
-                {item.bpm !== null ? <span className="sr-chip">{Number(item.bpm.toFixed(1))} BPM</span> : null}
-                {item.key ? <span className="sr-chip">{item.key}</span> : null}
-                <span className="sr-dj-score" title={`推荐分 ${Math.round(item.score * 100)} / 100`}>匹配 {Math.round(item.score * 100)}</span>
-              </div>
-              <div className="sr-dj-reasons" title={item.reasons.join("\n")}>
-                {item.reasons.map((reason, index) => (
-                  <span key={index} className="sr-dj-reason">{reason}</span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {props.suggestBusy && props.suggestions.length === 0 ? (
-        <span className="sr-dj-count">推荐计算中…</span>
-      ) : null}
+      <SuggestList
+        suggestions={props.suggestions}
+        suggestBusy={props.suggestBusy}
+        inSet={inSet}
+        onOpen={props.onOpen}
+        onAdd={props.onAdd}
+      />
       <div className="sr-dj-rows">
         {tracks.map((track) => (
           <div

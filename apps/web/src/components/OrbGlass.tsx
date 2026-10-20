@@ -100,6 +100,7 @@ export function GlassSphere({
   level,
   progress,
   reducedMotion,
+  transitioning = false,
 }: {
   size: number;
   mode: OrbVisualMode;
@@ -108,11 +109,13 @@ export function GlassSphere({
   /** 干活进度 0–1；不给 = 不定态（酸绿弧追赶）。 */
   progress?: number;
   reducedMotion?: boolean;
+  /** Opening/closing spends longer blending material states so the handshake reads as a morph. */
+  transitioning?: boolean;
 }) {
   const visualRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const state = useRef({ mode, level, progress, still: reducedMotion === true });
-  state.current = { mode, level, progress, still: reducedMotion === true };
+  const state = useRef({ mode, level, progress, still: reducedMotion === true, transitioning });
+  state.current = { mode, level, progress, still: reducedMotion === true, transitioning };
   const visual = ORB_STATES[mode] ?? ORB_STATES.idle;
   const rim = Math.max(1, size * visual.rimWidth * 0.14);
   const progressValue =
@@ -155,10 +158,10 @@ export function GlassSphere({
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw);
       const t = FINITE(now / 1000, 0);
-      const { mode: m, level: rawLevel, still } = state.current;
+      const { mode: m, level: rawLevel, still, transitioning: morphing } = state.current;
       const motionTime = still ? 0 : t;
       const target = ORB_STATES[m] ?? ORB_STATES.idle;
-      const k = 0.11;
+      const k = morphing ? 0.035 : 0.095;
       current.hueA = lerpHue(current.hueA, target.hueA, k);
       current.hueB = lerpHue(current.hueB, target.hueB, k);
       current.drift = lerp(current.drift, target.drift, k);
@@ -166,7 +169,8 @@ export function GlassSphere({
       current.glow = lerp(current.glow, target.glow, k);
       current.ripple = lerp(current.ripple, target.ripple, k);
       current.swirl = lerp(current.swirl, target.swirl, k);
-      smoothedLevel += (Math.max(0, Math.min(1, FINITE(rawLevel, 0))) - smoothedLevel) * 0.18;
+      smoothedLevel +=
+        (Math.max(0, Math.min(1, FINITE(rawLevel, 0))) - smoothedLevel) * (morphing ? 0.075 : 0.16);
       visualElement.style.setProperty("--orb-voice", smoothedLevel.toFixed(3));
       const voiceBlend = m === "speaking" ? smoothstep(current.ripple) : 0;
       const r = size / 2;

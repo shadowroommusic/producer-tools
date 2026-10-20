@@ -8,7 +8,16 @@
  */
 
 export const ORB_SIZE = 84;
+/** 通话态基准径：与闲置径按同一档比例缩放（Kimi 主审：通话态按同一比例缩放）。 */
+export const ORB_ACTIVE_SIZE = 124;
 export const POSITION_KEY = "shadowroom.orb.position";
+export const ORB_SCALE_KEY = "shadowroom.orb.scale.v1";
+export const DEFAULT_ORB_SCALE = 1;
+export const MIN_ORB_SCALE = 0.25;
+export const MAX_ORB_SCALE = 1.25;
+export const ORB_SCALE_STEP = 0.25;
+/** 最小档的视觉球只有约 21px，但命中圆不得低于这个直径（可点击性不随视觉缩小）。 */
+export const ORB_MIN_HIT_PX = 32;
 
 /** 视口与受保护矩形的离屏形状（DOMRect 的字段子集即可）。 */
 export type Viewport = { width: number; height: number };
@@ -17,6 +26,44 @@ export type Position = { x: number; y: number };
 
 const MARGIN = 12;
 const SNAP_DISTANCE = 48;
+
+/**
+ * Idle size is a user preference; the call size scales by the same ratio so a deliberately tiny
+ * resting orb keeps a proportional (still readable) call orb, and vice versa.
+ */
+export function orbSizeAtScale(scale: number, baseSize: number = ORB_SIZE): number {
+  return Math.round(baseSize * clampOrbScale(scale));
+}
+
+/** Pointer target for a visual size: never below ORB_MIN_HIT_PX, so 25% stays clickable. */
+export function orbHitSize(visualSize: number): number {
+  return Math.max(ORB_MIN_HIT_PX, Math.round(visualSize));
+}
+
+/** Quantize to the five menu stops so saved values and button steps cannot drift apart. */
+export function clampOrbScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_ORB_SCALE;
+  const clamped = Math.max(MIN_ORB_SCALE, Math.min(MAX_ORB_SCALE, value));
+  return Math.round(clamped / ORB_SCALE_STEP) * ORB_SCALE_STEP;
+}
+
+export function loadOrbScale(storage: Pick<Storage, "getItem">): number {
+  try {
+    const raw = storage.getItem(ORB_SCALE_KEY);
+    if (raw === null) return DEFAULT_ORB_SCALE;
+    return clampOrbScale(Number(raw));
+  } catch {
+    return DEFAULT_ORB_SCALE;
+  }
+}
+
+export function saveOrbScale(storage: Pick<Storage, "setItem">, scale: number): void {
+  try {
+    storage.setItem(ORB_SCALE_KEY, String(clampOrbScale(scale)));
+  } catch {
+    // A storage-denied browser keeps the chosen size for this session only.
+  }
+}
 
 /**
  * 视口边界夹取：窗口内留 12px 边距，不许只露半个球。

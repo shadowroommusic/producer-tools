@@ -5,11 +5,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  DEFAULT_ORB_SCALE,
+  MAX_ORB_SCALE,
+  MIN_ORB_SCALE,
+  ORB_ACTIVE_SIZE,
+  ORB_MIN_HIT_PX,
+  ORB_SCALE_KEY,
   ORB_SIZE,
   POSITION_KEY,
+  clampOrbScale,
   clampToViewport,
   defaultPosition,
+  loadOrbScale,
   loadPosition,
+  orbHitSize,
+  orbSizeAtScale,
+  saveOrbScale,
   savePosition,
   snapToViewport,
 } from "../src/lib/orb-position.ts";
@@ -63,6 +74,39 @@ test("位置持久化：存取往返一致；坏 JSON / 缺字段 / 非 JSON 都
   storage.setItem(POSITION_KEY, '{"x":"88","y":240}');
   assert.equal(loadPosition(storage), null);
   assert.equal(loadPosition(storage), null); // 空库 → null
+});
+
+test("大小偏好：25%–125% 五档、往返持久化、坏值回默认", () => {
+  assert.equal(MIN_ORB_SCALE, 0.25);
+  assert.equal(MAX_ORB_SCALE, 1.25);
+  assert.equal(clampOrbScale(-4), 0.25);
+  assert.equal(clampOrbScale(9), 1.25);
+  assert.equal(clampOrbScale(0.62), 0.5, "菜单与持久化共用一档量化口径（0.62 → 0.5）");
+  assert.equal(clampOrbScale(0.63), 0.75, "过半向上归档（0.63 → 0.75）");
+  assert.equal(clampOrbScale(Number.NaN), DEFAULT_ORB_SCALE);
+  assert.equal(orbSizeAtScale(0.25), 21);
+  assert.equal(orbSizeAtScale(1), 84);
+  assert.equal(orbSizeAtScale(1.25), 105);
+
+  const storage = memoryStorage();
+  assert.equal(loadOrbScale(storage), 1);
+  saveOrbScale(storage, 1.25);
+  assert.equal(storage.getItem(ORB_SCALE_KEY), "1.25");
+  assert.equal(loadOrbScale(storage), 1.25);
+  storage.setItem(ORB_SCALE_KEY, "not-a-number");
+  assert.equal(loadOrbScale(storage), 1);
+});
+
+test("通话径按同一档比例缩放；命中圆不随视觉缩小到 32px 以下", () => {
+  // 通话基准 124：0.25 档 = 31px、1 档 = 124px、1.25 档 = 155px（Kimi 主审口径）。
+  assert.equal(orbSizeAtScale(0.25, ORB_ACTIVE_SIZE), 31);
+  assert.equal(orbSizeAtScale(1, ORB_ACTIVE_SIZE), 124);
+  assert.equal(orbSizeAtScale(1.25, ORB_ACTIVE_SIZE), 155);
+  // 命中兜底：21px 视觉球仍有 32px 命中圆；≥32px 的视觉球命中=视觉。
+  assert.equal(ORB_MIN_HIT_PX, 32);
+  assert.equal(orbHitSize(orbSizeAtScale(0.25)), 32);
+  assert.equal(orbHitSize(orbSizeAtScale(0.5)), 42);
+  assert.equal(orbHitSize(orbSizeAtScale(1)), 84);
 });
 
 test("defaultPosition：右下角 24px，不压受保护控件", () => {

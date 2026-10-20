@@ -66,7 +66,7 @@ const REVIEW_NOTES = {
   "library/重新学习":
     "有反馈（哈希签名测到 DOM 变化：busy 闪动 + 结果区更新；第一轮长度签名曾漏检）。注意罐头 /api/call 下学习结果为空态文案，真桥数字需真桥复核。",
   "dj/新建 set":
-    "合法无操作：draft 永非空（DJPage:261 useState<Draft>(readDraft)），进入页时已是全新空 draft，再点一次重置无可见变化；用户改过 draft 后点击会可见重置（DJPage:371 newSet）。",
+    "有反馈（2026-10-20 起）：点击重置草稿并切入 Set 独立编辑面（data-dj-view=editor），罐头 /api/call 下也必有可见视图切换；返回总览用「← 返回总览」。",
   "mic:NotAllowedError":
     "环境路径：headless 拒绝 getUserMedia → 语音输入/开始通话 抛未处理 rejection（pageerror）。真实用户拒绝麦克风权限走同一路径：按钮自身有 DOM 反馈，但无「没拿到麦克风」的可读提示——记为可改进项而非阻断。",
 };

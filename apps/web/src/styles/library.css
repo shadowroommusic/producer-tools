@@ -1686,6 +1686,28 @@
   padding-inline: 11px;
 }
 
+.sr-lib-commandbar .sr-lib-analyze {
+  border-color: color-mix(in srgb, var(--sr-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--sr-accent) 5.5%, transparent);
+  color: var(--sr-label-primary);
+}
+
+.sr-lib-commandbar .sr-lib-analyze:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--sr-accent) 36%, transparent);
+  background: color-mix(in srgb, var(--sr-accent) 9%, transparent);
+}
+
+.sr-lib-analyze-note {
+  margin: 0;
+  padding: 7px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--sr-accent) 58%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--sr-accent) 3.5%, transparent);
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-12);
+  line-height: 18px;
+}
+
 .sr-lib-ingest-panel {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto auto;

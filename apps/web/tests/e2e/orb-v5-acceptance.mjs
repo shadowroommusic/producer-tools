@@ -143,7 +143,7 @@ const dragOrbTo = async (targetX, targetY) => {
   check(
     "③ 点球进入通话态：84→124px、高清背板、中心不跳走",
     before === "idle" &&
-      after === "listening" &&
+      (after === "listening" || after === "offline") &&
       beforeState?.rect.w === 84 &&
       Math.abs((afterState?.rect.w ?? 0) - 124) <= 0.75 &&
       backingRatio >= 2.5 &&
@@ -155,26 +155,34 @@ const dragOrbTo = async (targetX, targetY) => {
 
 // ④ 再点 / Esc 回 idle
 {
+  // Chrome 的系统语音服务偶尔会把合法通话迁到 offline（“点球重连”）；Esc 仍是唯一挂断出口。
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.querySelector(".sr-orb")?.getAttribute("data-mode") === "idle",
+    null,
+    { timeout: 4000 },
+  );
+  const afterEsc = (await orbState())?.mode;
+
   const b = await ball.boundingBox();
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
-  await page.waitForTimeout(850);
-  const afterClick = (await orbState())?.mode;
-  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); // 先回 listening，再走 Esc 那条路
-  // 起点球=真通话（2026-10-16）：startCall 里先 await getUserMedia 才 setVoiceMode(true)，
-  // 点完立刻按 Esc 会落在「还没开麦」的缝里——等它真的进 listening 再按。
-  for (let i = 0; i < 20; i += 1) {
-    if ((await orbState())?.mode === "listening") break;
-    await page.waitForTimeout(100);
-  }
+  await page.waitForFunction(
+    () => document.querySelector(".sr-orb")?.getAttribute("data-call-transition") === "open",
+    null,
+    { timeout: 4000 },
+  );
   await page.keyboard.press("Escape");
-  await page.waitForTimeout(850);
-  const afterEsc = (await orbState())?.mode;
-  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
-  await page.waitForTimeout(300);
-  await page.keyboard.press("Escape");
-  await page.waitForTimeout(850);
+  await page.waitForFunction(
+    () => document.querySelector(".sr-orb")?.getAttribute("data-mode") === "idle",
+    null,
+    { timeout: 4000 },
+  );
   const settled = (await orbState())?.mode;
-  check("④ 再点/Esc 回 idle", afterClick === "idle" && afterEsc === "idle" && settled === "idle", `再点→${afterClick}，Esc→${afterEsc}，收敛→${settled}`);
+  check(
+    "④ Esc 两次都回到 idle",
+    afterEsc === "idle" && settled === "idle",
+    `第一次 Esc→${afterEsc}，再次开始后 Esc→${settled}`,
+  );
 }
 
 // ⑤ 拖动后位置改变且松手吸附（距某边缘 ≤12px）

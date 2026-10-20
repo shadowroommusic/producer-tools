@@ -67,6 +67,22 @@ const cleanTrashFixtures = () => {
 };
 
 /**
+ * A failing assertion used to skip the normal tail cleanup and leave fixture tracks/crates in the
+ * real development DB. Keep a synchronous last-resort cleanup on every exit path; the normal tail
+ * still performs the richer API-level cleanup when the run reaches it.
+ */
+let exitCleanupDb = null;
+process.once("exit", () => {
+  if (exitCleanupDb !== null) {
+    execSync(
+      `python3 -c "import sqlite3;db=sqlite3.connect('${exitCleanupDb}');db.execute(\\"DELETE FROM tracks WHERE path LIKE '${FIX}/%'\\");db.execute(\\"DELETE FROM crates WHERE name IN ('未命名 set','验收crate-二期')\\");db.commit()"`,
+    );
+  }
+  cleanTrashFixtures();
+  rmSync(FIX, { recursive: true, force: true });
+});
+
+/**
  * 废纸篓能力探针（2026-10-16 实修）：这条命令链（Codex 终端 → node → python3）常常**没有**
  * 废纸篓写入权限，此时 send2trash 会「源文件消失、废纸篓里没有」地静默失败。插件端的自检
  * （core.track_remove 落点复验）会如实报错并保留库行——这是防「静默丢文件」的设计，不是 bug。
@@ -113,6 +129,7 @@ const setupFixtures = () => {
 
 setupFixtures();
 const db = await dbPath();
+exitCleanupDb = db;
 cleanFixtureRows(db);
 cleanTrashFixtures();
 const statsBefore = await call("stats", {});
@@ -238,17 +255,20 @@ check(
 );
 
 // ---- ⑩ 加入分类库：两个 crate 都在、path 逐字节不变
+// 2026-10-20 修复：原步骤依赖历史残留的「未命名 set」crate（早年 DJ 导出留下的，DJ e2e
+// 清理库后就不存在了）——现在两个 crate 都由本步骤自建，跑完的清理段照旧删掉。
+await openMenu("libaccept-02");
+await menuItem("加入分类库 ▸").click();
+await page.waitForSelector(".sr-lib-rowmenu-crates", { timeout: 5000 });
+await page.locator('.sr-lib-rowmenu-crates input[aria-label="新 crate 名"]').fill("未命名 set");
+await page.keyboard.press("Enter");
+await page.waitForFunction(() => document.querySelector(".sr-lib-notice")?.textContent?.includes("已加入「未命名 set」"), null, { timeout: 10000 });
 await openMenu("libaccept-02");
 await menuItem("加入分类库 ▸").click();
 await page.waitForSelector(".sr-lib-rowmenu-crates", { timeout: 5000 });
 await page.locator('.sr-lib-rowmenu-crates input[aria-label="新 crate 名"]').fill("验收crate-二期");
 await page.keyboard.press("Enter");
 await page.waitForFunction(() => document.querySelector(".sr-lib-notice")?.textContent?.includes("已加入「验收crate-二期」"), null, { timeout: 10000 });
-await openMenu("libaccept-02");
-await menuItem("加入分类库 ▸").click();
-await page.waitForSelector(".sr-lib-rowmenu-crates", { timeout: 5000 });
-await page.locator(".sr-lib-rowmenu-crates .sr-lib-rowmenu-item", { hasText: "未命名 set" }).first().click();
-await page.waitForFunction(() => document.querySelector(".sr-lib-notice")?.textContent?.includes("已加入「未命名 set」"), null, { timeout: 10000 });
 const crateRows = await call("list_tracks", { query: "libaccept-02", limit: 10 });
 const crateDetail = await call("track_detail", { id: crateRows.tracks[0].id });
 const crateNames = crateDetail.crates.map((c) => c.name).sort();
@@ -491,11 +511,13 @@ await page.getByRole("button", { name: "重新学习", exact: true }).click();
 await page.waitForSelector(".sr-lib-pref-rows li", { timeout: 15000 });
 const learnText = await page.locator(".sr-lib-pref-rows").textContent();
 const setRows = await page.locator(".sr-lib-set-row").count();
+// set 行与桥对账（2026-10-20 起真库可能 0 个 set——S5 fixture 没迁移回来；UI 显示空态即正确）
+const bridgeSets = ((await call("set_list", {})).sets ?? []).length;
 await page.screenshot({ path: `${SHOTS}/05-board.png` });
 check(
   "④ 看板数字齐：瓦片/摘要/学习行/set 列表",
-  tileText.includes(String(statsNow.tracks)) && learnText.includes("样本") && setRows >= 1,
-  `瓦片含现取 ${statsNow.tracks}=${tileText.includes(String(statsNow.tracks))} · 学习行含样本=${learnText.includes("样本")} · set ${setRows} 行`,
+  tileText.includes(String(statsNow.tracks)) && learnText.includes("样本") && setRows === bridgeSets,
+  `瓦片含现取 ${statsNow.tracks}=${tileText.includes(String(statsNow.tracks))} · 学习行含样本=${learnText.includes("样本")} · set ${setRows} 行（桥 ${bridgeSets}）`,
 );
 await page.getByRole("button", { name: "忘记偏好", exact: true }).click();
 const armedText = await page.locator(".sr-lib-forget").textContent();
@@ -518,6 +540,15 @@ check("⑦ 零 console error", consoleErrors.length === 0, consoleErrors.length 
 await browser.close();
 cleanFixtureRows(db);
 cleanTrashFixtures();
+// ⑩ 自建的 crate 也要清（crate_remove 按 id；幂等目标——跑完库回原样，可重复跑）
+{
+  const crates = (await call("crate_list", {})).crates ?? [];
+  for (const crate of crates) {
+    if (crate.name === "未命名 set" || crate.name === "验收crate-二期") {
+      await call("crate_remove", { crate_id: crate.id });
+    }
+  }
+}
 const statsEnd = await call("stats", {});
 console.log(`收尾：fixture 行与 ~/.Trash 残骸已清，库 ${statsEnd.tracks} 首（跑前 ${statsBefore.tracks}）`);
 const failed = results.filter((r) => !r.ok).length;

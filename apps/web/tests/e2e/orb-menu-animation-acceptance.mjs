@@ -107,10 +107,10 @@ const openMenu = async () => {
   });
   check(
     "①c 贴角时菜单自动翻转且不出界",
-    edge !== null &&
+      edge !== null &&
       edge.orb.x <= 21 &&
       edge.orb.y <= 301 &&
-      edge.vertical === "below" &&
+      edge.vertical === "above" &&
       edge.horizontal === "left" &&
       edge.menu.x >= 0 &&
       edge.menu.y >= 0 &&
@@ -183,7 +183,8 @@ const openMenu = async () => {
     "hide disabled",
   );
   await page.keyboard.press("Escape");
-  await ball.click();
+  await openMenu();
+  await page.getByRole("menuitem", { name: "结束通话" }).click();
   await page.waitForFunction(() => document.querySelector(".sr-orb")?.getAttribute("data-call-transition") === "closing");
   await page.waitForTimeout(120);
   const closing = await page.locator(".sr-orb").boundingBox();

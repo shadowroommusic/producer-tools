@@ -14,23 +14,32 @@
 
 /* The call handshake is slower than a button state: energy gathers, overshoots gently, then settles. */
 .sr-orb[data-call-transition="opening"] .sr-orb-visual {
-  animation: sr-orb-awaken 880ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: sr-orb-awaken 1100ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .sr-orb[data-call-transition="opening"] .sr-orb-visual::after {
   animation:
     sr-energy-halo 7s ease-in-out infinite alternate,
-    sr-orb-wake-halo 880ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    sr-orb-wake-halo 1100ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .sr-orb[data-call-transition="closing"] .sr-orb-visual {
-  animation: sr-orb-sleep 720ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: sr-orb-sleep 800ms cubic-bezier(0.32, 0, 0.2, 1) both;
 }
 
 .sr-orb[data-call-transition="closing"] .sr-orb-visual::after {
   animation:
     sr-energy-halo 7s ease-in-out infinite alternate,
-    sr-orb-sleep-halo 720ms cubic-bezier(0.4, 0, 0.2, 1) both;
+    sr-orb-sleep-halo 800ms cubic-bezier(0.32, 0, 0.2, 1) both;
+}
+
+/* Failsafe close (call never established): the 400ms rollback, not another slow farewell. */
+.sr-orb[data-fail-close] .sr-orb-visual {
+  animation-duration: 400ms;
+}
+
+.sr-orb[data-fail-close] .sr-orb-visual::after {
+  animation-duration: 7s, 400ms;
 }
 
 .sr-orb-visual::before {
@@ -301,14 +310,23 @@
 
 @keyframes sr-orb-awaken {
   0% {
-    opacity: 0.58;
-    transform: scale(0.76);
-    filter: saturate(0.72) brightness(0.86);
+    opacity: 0.52;
+    transform: scale(0.72);
+    filter: saturate(0.68) brightness(0.82);
   }
-  46% {
+  34% {
+    opacity: 0.9;
+    transform: scale(0.9);
+    filter: saturate(1.05) brightness(1.04);
+  }
+  58% {
     opacity: 1;
-    transform: scale(1.045);
-    filter: saturate(1.25) brightness(1.15);
+    transform: scale(1.055);
+    filter: saturate(1.28) brightness(1.17);
+  }
+  78% {
+    transform: scale(0.992);
+    filter: saturate(1.08) brightness(1.04);
   }
   100% {
     opacity: 1;
@@ -323,15 +341,20 @@
     transform: scale(1);
     filter: none;
   }
-  42% {
+  22% {
     opacity: 1;
-    transform: scale(1.035);
+    transform: scale(1.026);
     filter: saturate(1.16) brightness(1.1);
   }
+  62% {
+    opacity: 0.94;
+    transform: scale(0.975);
+    filter: saturate(1.02) brightness(0.98);
+  }
   100% {
-    opacity: 0.86;
-    transform: scale(0.92);
-    filter: saturate(0.82) brightness(0.9);
+    opacity: 0.82;
+    transform: scale(0.9);
+    filter: saturate(0.78) brightness(0.86);
   }
 }
 

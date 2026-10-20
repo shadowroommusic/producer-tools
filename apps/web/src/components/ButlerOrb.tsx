@@ -11,11 +11,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { acquireMicrophone, onMicrophoneChange, releaseMicrophone } from "../lib/mic";
 import {
-  ORB_SIZE,
+  DEFAULT_ORB_SCALE,
+  MAX_ORB_SCALE,
+  MIN_ORB_SCALE,
+  ORB_ACTIVE_SIZE,
+  ORB_SCALE_STEP,
   avoidProtected,
+  clampOrbScale,
   clampToViewport,
   defaultPosition,
+  loadOrbScale,
   loadPosition,
+  orbHitSize,
+  orbSizeAtScale,
+  saveOrbScale,
   savePosition,
   snapToViewport,
   type Rect,
@@ -30,15 +39,18 @@ export type OrbMode = OrbVisualMode;
 type CallTransition = "idle" | "opening" | "open" | "closing";
 
 const ORB_HIDDEN_KEY = "shadowroom.orb.hidden.v1";
-const OPEN_TRANSITION_MS = 880;
-const CLOSE_TRANSITION_MS = 720;
-const OPENING_FAILSAFE_MS = 2400;
+/** 开合动画（Kimi 主审 2026-10-20）：opening 1100±100ms、closing 800±100ms；reduced-motion 0ms 直接落态。 */
+const OPEN_TRANSITION_MS = 1100;
+const CLOSE_TRANSITION_MS = 800;
+/** 通话没真正建立时的回退收束：≤400ms，快速退回，不再演一遍慢动画。 */
+const FAIL_CLOSE_MS = 400;
+const OPENING_FAILSAFE_MS = 3200;
 
 /**
- * 尺寸：v6 把主体从容器角落撑满，闲置 84px、通话 124px。再小会牺牲能量核心和语音刻度的清晰度；
- * 再大会重新压住 Studio/DJ 的主要内容。位置逻辑仍负责夹取和避让控件。
+ * 尺寸：闲置与通话各有一个基准径（84 / 124），都按用户缩放档（25%–125%）同比缩放——
+ * 21px 的小球通话时是 31px，105px 的大球通话时是 155px。位置/夹取按当前视觉径算，
+ * 命中区单独兜底（最小 32px，见 orb-position.ts 的 orbHitSize）。
  */
-const ACTIVE_SIZE = 124;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
@@ -97,6 +109,7 @@ export function ButlerOrb({
   onOpenSettings,
   caption,
   captionAction,
+  contextKey,
 }: {
   mode?: OrbMode;
   progress?: number;
@@ -128,12 +141,22 @@ export function ButlerOrb({
    * 非语音 fallback 是 W3C 硬要求，不是加分项。只在有 caption 时出现，最多一颗。
    */
   captionAction?: { label: string; onAction: () => void };
+  /** Page identity used to re-check protected controls after navigation, without watching scroll. */
+  contextKey?: string;
 }) {
+  const externalCall = onCallToggle !== undefined;
+  const [orbScale, setOrbScale] = useState(() => loadOrbScale(window.localStorage));
+  const idleSize = orbSizeAtScale(orbScale);
+  const activeSize = orbSizeAtScale(orbScale, ORB_ACTIVE_SIZE);
+  const initialCallActive = running || mode !== undefined || (externalCall && voiceMode === true);
+  const initialSize = initialCallActive ? activeSize : idleSize;
   const [position, setPosition] = useState(() => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     const controls = protectedRects();
     const stored = loadPosition(window.localStorage);
-    return stored === null ? defaultPosition(viewport, controls) : avoidProtected(stored, controls, viewport);
+    return stored === null
+      ? defaultPosition(viewport, controls, initialSize)
+      : avoidProtected(stored, controls, viewport, initialSize);
   });
   const [hidden, setHidden] = useState(() => {
     try {
@@ -144,7 +167,7 @@ export function ButlerOrb({
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const previousSizeRef = useRef(ORB_SIZE);
+  const previousSizeRef = useRef(initialSize);
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
   /** 本地演示通话（没有 onCallToggle 时的旧行为：只有麦克风电平，不接会话）。 */
@@ -203,17 +226,19 @@ export function ButlerOrb({
    * 用户点球最重要的期待是「说话它能听见并回答」——只要 App 给了 onCallToggle，
    * 球就不再自己维护一份 callOn，界面与真通话无法走散。
    */
-  const externalCall = onCallToggle !== undefined;
   const callOn = externalCall ? voiceMode === true : localCallOn;
   /** 通话五态 → 球外观态：映射在 lib/orb-states.ts（callOrbMode），这里不再就地猜。 */
   const callPhase: OrbMode = externalCall ? callOrbMode(voiceState) : "listening";
   const [callTransition, setCallTransition] = useState<CallTransition>(callOn ? "open" : "idle");
   const [closeShrink, setCloseShrink] = useState(false);
+  /** 通话没建立起来的收束走 400ms 快路径（data-fail-close），不占用户等一遍慢动画。 */
+  const [failClose, setFailClose] = useState(false);
   const lastCallMode = useRef<OrbMode>("listening");
   const callOnRef = useRef(callOn);
   const previousCallOn = useRef(callOn);
   const transitionTimer = useRef<number | null>(null);
   const openingFailsafe = useRef<number | null>(null);
+  const openingStartedAt = useRef(0);
   const closeFrame = useRef<number | null>(null);
   callOnRef.current = callOn;
   if (callOn && callPhase !== "idle") lastCallMode.current = callPhase;
@@ -235,11 +260,11 @@ export function ButlerOrb({
   const size =
     callTransition === "closing"
       ? closeShrink
-        ? ORB_SIZE
-        : ACTIVE_SIZE
+        ? idleSize
+        : activeSize
       : callOn || callTransition === "opening" || (callTransition === "open" && !callOn) || effectiveMode !== "idle"
-        ? ACTIVE_SIZE
-        : ORB_SIZE;
+        ? activeSize
+        : idleSize;
   const callBusy = callOn || callTransition !== "idle";
 
   // prefers-reduced-motion。
@@ -268,12 +293,16 @@ export function ButlerOrb({
         openingFailsafe.current = null;
       }
       setCloseShrink(false);
+      setFailClose(false);
       setCallTransition("opening");
+      const elapsed = openingStartedAt.current > 0 ? performance.now() - openingStartedAt.current : OPEN_TRANSITION_MS;
       transitionTimer.current = window.setTimeout(() => {
         transitionTimer.current = null;
+        openingStartedAt.current = 0;
         setCallTransition("open");
-      }, reducedMotion.current ? 0 : OPEN_TRANSITION_MS);
+      }, reducedMotion.current ? 0 : Math.max(0, OPEN_TRANSITION_MS - elapsed));
     } else if (wasOn) {
+      openingStartedAt.current = 0;
       if (reducedMotion.current) {
         setCloseShrink(true);
         setCallTransition("idle");
@@ -362,16 +391,28 @@ export function ButlerOrb({
     else setLocalCallOn((on) => !on);
   }, [externalCall, onCallToggle]);
 
+  const changeOrbScale = useCallback(
+    (next: number) => {
+      if (callBusy) return;
+      const normalized = clampOrbScale(next);
+      setOrbScale(normalized);
+      saveOrbScale(window.localStorage, normalized);
+    },
+    [callBusy],
+  );
+
   const startCallWithAnimation = useCallback(() => {
     if (callOn || callTransition === "opening" || callTransition === "closing") return;
     setExpanded(false);
     setMenuOpen(false);
     setCloseShrink(false);
+    openingStartedAt.current = performance.now();
     setCallTransition("opening");
     if (openingFailsafe.current !== null) window.clearTimeout(openingFailsafe.current);
     openingFailsafe.current = window.setTimeout(() => {
       openingFailsafe.current = null;
       if (callOnRef.current) return;
+      setFailClose(true);
       setCloseShrink(false);
       setCallTransition("closing");
       if (closeFrame.current !== null) cancelAnimationFrame(closeFrame.current);
@@ -385,7 +426,7 @@ export function ButlerOrb({
       transitionTimer.current = window.setTimeout(() => {
         transitionTimer.current = null;
         setCallTransition("idle");
-      }, CLOSE_TRANSITION_MS);
+      }, FAIL_CLOSE_MS);
     }, OPENING_FAILSAFE_MS);
     toggleCall();
   }, [callOn, callTransition, toggleCall]);
@@ -531,9 +572,10 @@ export function ButlerOrb({
   }, [position, dragging]);
 
   /**
-   * SPA navigation and tab switches replace protected controls without resizing the orb. Re-check
-   * after those DOM changes so a remembered position cannot sit on top of the settings form.
-   * rAF coalesces bursts; equal positions do not write state and therefore cannot loop.
+   * Re-check only when the page or viewport changes. A capture-phase scroll listener used to react
+   * to every list scroll and could walk the orb across the screen as protected controls moved.
+   * `shadowroom:orb-revalidate` is the page-side hook (App dispatches it on mainView change);
+   * `contextKey` covers the same thing via props for isolated mounts.
    */
   useEffect(() => {
     let frame: number | null = null;
@@ -548,18 +590,15 @@ export function ButlerOrb({
         });
       });
     };
-    const observer = new MutationObserver(revalidate);
-    observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", revalidate);
-    window.addEventListener("scroll", revalidate, true);
+    window.addEventListener("shadowroom:orb-revalidate", revalidate);
     revalidate();
     return () => {
-      observer.disconnect();
       window.removeEventListener("resize", revalidate);
-      window.removeEventListener("scroll", revalidate, true);
+      window.removeEventListener("shadowroom:orb-revalidate", revalidate);
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [size]);
+  }, [contextKey, size]);
 
 
   // 单 rAF：把 RMS 平滑进 level ref，交给 r3f 的 useFrame（玻璃珠渲染在 Canvas 内部循环）。
@@ -647,7 +686,7 @@ export function ButlerOrb({
     );
   }
 
-  const menuVertical = position.y + size + 12 + 260 <= window.innerHeight ? "below" : "above";
+  const menuVertical = position.y + size + 12 + 330 <= window.innerHeight ? "below" : "above";
   const menuHorizontal = position.x + size - 208 >= 8 ? "right" : "left";
 
   return (
@@ -655,7 +694,13 @@ export function ButlerOrb({
       className={`sr-orb${expanded ? " sr-orb--expanded" : ""}${dragging ? " sr-orb--dragging" : ""}${active ? " sr-orb--active" : ""}`}
       data-mode={effectiveMode}
       data-call-transition={callTransition}
-      style={{ left: position.x, top: position.y, ["--sr-orb-size" as string]: `${size}px` }}
+      data-fail-close={failClose || undefined}
+      style={{
+        left: position.x,
+        top: position.y,
+        ["--sr-orb-size" as string]: `${size}px`,
+        ["--sr-orb-hit-size" as string]: `${orbHitSize(size)}px`,
+      }}
     >
       {/* 容器不吃事件（fixed 方块盖住内容就是 D2 的病根）；事件只挂在球面上，点空白穿透。 */}
       <div
@@ -706,7 +751,14 @@ export function ButlerOrb({
         }}
       >
         {/* v6 材质分层：CSS 负责高清玻璃/双边缘，canvas 只画粒子和语音细节。 */}
-        <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} progress={effectiveProgress} reducedMotion={reducedMotion.current} />
+        <GlassSphere
+          size={size}
+          mode={effectiveMode}
+          level={levelRef.current}
+          progress={effectiveProgress}
+          reducedMotion={reducedMotion.current}
+          transitioning={callTransition === "opening" || callTransition === "closing"}
+        />
       </div>
       {menuOpen && (
         <div
@@ -770,6 +822,42 @@ export function ButlerOrb({
               <span>新对话</span>
             </button>
           )}
+          <div className="sr-orb-menu-size" role="group" aria-label={`悬浮球大小 ${Math.round(orbScale * 100)}%`}>
+            <span className="sr-orb-menu-size-label">悬浮球大小</span>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-orb-menu-size-btn"
+              aria-label="缩小悬浮球"
+              title={callBusy ? "先结束通话，再调整大小" : "缩小悬浮球"}
+              disabled={callBusy || orbScale <= MIN_ORB_SCALE}
+              onClick={() => changeOrbScale(orbScale - ORB_SCALE_STEP)}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-orb-menu-size-value"
+              aria-label="恢复悬浮球默认大小"
+              title="恢复 100%"
+              disabled={callBusy}
+              onClick={() => changeOrbScale(DEFAULT_ORB_SCALE)}
+            >
+              {Math.round(orbScale * 100)}%
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-orb-menu-size-btn"
+              aria-label="放大悬浮球"
+              title={callBusy ? "先结束通话，再调整大小" : "放大悬浮球"}
+              disabled={callBusy || orbScale >= MAX_ORB_SCALE}
+              onClick={() => changeOrbScale(orbScale + ORB_SCALE_STEP)}
+            >
+              ＋
+            </button>
+          </div>
           <span className="sr-orb-menu-sep" aria-hidden="true" />
           <button
             type="button"

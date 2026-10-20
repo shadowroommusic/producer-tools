@@ -82,6 +82,10 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 const LIBRARY_PAGE_SIZE = 80;
+/** 主动分析（主操作区按钮）：每轮 analyze_missing(25)，最多 4 轮、总预算 60s——大库分次点，不假装一口气全完。 */
+const ANALYZE_ROUND_SIZE = 25;
+const ANALYZE_MAX_ROUNDS = 4;
+const ANALYZE_BUDGET_MS = 60_000;
 
 export function LibraryPage({ onContextChange }: { onContextChange?: (context: LibraryAgentContext) => void }) {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -371,25 +375,64 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
     }
   }, [busy, say, fail]);
 
-  const onAnalyze = useCallback(async () => {
+  /** 主操作区「分析待分析（N）」的逐轮进度句；null = 不显示。 */
+  const [analyzeNote, setAnalyzeNote] = useState<string | null>(null);
+  const [analyzeRound, setAnalyzeRound] = useState(0);
+
+  const onAnalyzePending = useCallback(async () => {
     if (busy !== null) return;
     setBusy("analyze");
+    setAnalyzeRound(1);
+    setAnalyzeNote(`第 1/${ANALYZE_MAX_ROUNDS} 轮分析中…`);
+    let analysed = 0;
+    let failed = 0;
+    let keySkipped = 0;
+    let roundsUsed = 0;
+    let msTotal = 0;
+    let budgetStopped = false;
+    const errors: string[] = [];
     try {
-      const result = await analyzeMissing(25);
-      say(
-        `补齐缺失分析：候选 ${result.candidates} · 补全 ${result.analysed} · 失败 ${result.failed}` +
-          (result.key_skipped_low_confidence > 0 ? ` · 调性低置信跳过 ${result.key_skipped_low_confidence}` : "") +
-          (result.errors.length > 0 ? `（${result.errors[0]}）` : "") +
-          `，用时 ${result.ms}ms`,
-      );
+      const deadline = Date.now() + ANALYZE_BUDGET_MS;
+      for (let round = 1; round <= ANALYZE_MAX_ROUNDS; round += 1) {
+        roundsUsed = round;
+        setAnalyzeRound(round);
+        const result = await analyzeMissing(ANALYZE_ROUND_SIZE);
+        // 插件缺字段/形状不对时按 0 计，绝不把 undefined 拼进进度句
+        const candidates = Number(result.candidates) || 0;
+        const roundAnalysed = Number(result.analysed) || 0;
+        const roundFailed = Number(result.failed) || 0;
+        analysed += roundAnalysed;
+        failed += roundFailed;
+        keySkipped += Number(result.key_skipped_low_confidence) || 0;
+        msTotal += Number(result.ms) || 0;
+        if (Array.isArray(result.errors)) errors.push(...result.errors);
+        setAnalyzeNote(
+          `第 ${round}/${ANALYZE_MAX_ROUNDS} 轮：补 ${roundAnalysed} · 失败 ${roundFailed} · 累计补 ${analysed}`,
+        );
+        // 没有候选 = 库里已无待分析；一轮零补全 = 剩下的不会自己变好（如调性低置信被跳过）。
+        // 两种都不再空转下一轮，完成句照实说。
+        if (candidates === 0 || roundAnalysed === 0 || roundAnalysed >= candidates) break;
+        if (round < ANALYZE_MAX_ROUNDS && Date.now() >= deadline) {
+          budgetStopped = true;
+          break;
+        }
+      }
       await Promise.all([refreshStats(), reloadTracks()]);
       refreshDetail();
+      const parts = [`分析完成：${roundsUsed} 轮补全 ${analysed} 首 · 用时 ${Math.round(msTotal / 100) / 10}s`];
+      if (failed > 0) parts.push(`失败 ${failed}${errors.length > 0 ? `（${errors[0]}）` : "（插件没给原因）"}`);
+      if (keySkipped > 0) parts.push(`调性低置信跳过 ${keySkipped}（宁空勿滥，不硬填）`);
+      if (budgetStopped) parts.push("已到 60s 预算，剩下的再点一次继续");
+      setAnalyzeNote(parts.join(" · "));
     } catch (cause) {
-      fail("补齐分析失败", cause);
+      // 失败必须给原文：解析错和插件原话都不是「完成」
+      setAnalyzeNote(null);
+      fail("分析待分析失败", cause);
     } finally {
       setBusy(null);
+      setAnalyzeRound(0);
     }
-  }, [busy, say, fail, refreshStats, reloadTracks, refreshDetail]);
+  }, [busy, fail, refreshStats, reloadTracks, refreshDetail]);
 
   // 忘记偏好：两次点击确认（第一次 arm 5 秒，第二次才真删）。
   const onForget = useCallback(async () => {
@@ -669,6 +712,18 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
           <div className="sr-lib-toolbar-actions">
             <button
               type="button"
+              className="sr-btn sr-lib-analyze"
+              data-slot="analyze-pending"
+              disabled={busy !== null || missing === 0}
+              title={missing === 0 ? "没有待分析的曲目" : "analyze_missing：每轮 25 首，最多 4 轮或 60 秒"}
+              onClick={() => void onAnalyzePending()}
+            >
+              {busy === "analyze"
+                ? `分析中${analyzeRound > 0 ? ` 第 ${analyzeRound}/${ANALYZE_MAX_ROUNDS} 轮` : ""}…`
+                : `分析待分析（${missing}）`}
+            </button>
+            <button
+              type="button"
               className="sr-btn"
               data-open={boardOpen || undefined}
               aria-expanded={boardOpen}
@@ -681,6 +736,11 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
             </button>
           </div>
         </div>
+        {analyzeNote !== null ? (
+          <p className="sr-lib-analyze-note" role="status" aria-live="polite">
+            {analyzeNote}
+          </p>
+        ) : null}
         {scanOpen ? (
         <div className="sr-lib-ingest-panel">
           <input
@@ -774,9 +834,6 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
             </button>
             <button type="button" className="sr-btn" disabled={busy !== null} onClick={() => void onImportHistory()}>
               {busy === "import" ? "导入中…" : "读取 Rekordbox / Serato 历史"}
-            </button>
-            <button type="button" className="sr-btn" disabled={busy !== null || missing === 0} onClick={() => void onAnalyze()}>
-              {busy === "analyze" ? "补齐中…" : `补齐缺失分析（${missing}）`}
             </button>
             <span className="sr-lib-actions-gap" />
             {/* 危险动作包成一组：换行整组一起落，checkbox 与按钮永远相邻、不被拆出视野。 */}
@@ -1035,7 +1092,7 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
                         缺 {what}
                       </span>
                     ))}
-                    <span className="sr-lib-miss-note">（看板里的「补齐缺失分析」统一补）</span>
+                    <span className="sr-lib-miss-note">（主操作区的「分析待分析」统一补）</span>
                   </p>
                 ) : null}
                 <div className="sr-lib-crates">

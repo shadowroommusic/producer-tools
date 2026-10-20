@@ -3237,6 +3237,7 @@ export function App() {
         worker。两条草稿也分开发，避免在 Studio 里打开球时把管家话术带进工程线程。
       */}
       <ButlerOrb
+        contextKey={mainView}
         draft={drafts.butler}
         onDraftChange={setButlerDraft}
         onSubmit={() => void submit(drafts.butler, { kind: "butler" })}

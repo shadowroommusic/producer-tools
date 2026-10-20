@@ -3455,10 +3455,23 @@
 .sr-orb[data-call-transition="open"],
 .sr-orb[data-call-transition="closing"] {
   transition:
-    width 880ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 880ms cubic-bezier(0.22, 1, 0.36, 1),
-    left 880ms cubic-bezier(0.22, 1, 0.36, 1),
-    top 880ms cubic-bezier(0.22, 1, 0.36, 1);
+    width 1100ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 1100ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 1100ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 1100ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sr-orb[data-call-transition="closing"] {
+  transition-duration: 800ms;
+}
+
+/* 通话没建立（failsafe）时的回退收束：≤400ms 快速退回，不演慢动画。 */
+.sr-orb[data-fail-close] {
+  transition-duration: 400ms;
+}
+
+.sr-orb[data-fail-close] .sr-orb-ball {
+  transition-duration: 400ms;
 }
 
 .sr-orb--active {
@@ -3472,15 +3485,31 @@
 }
 
 .sr-orb-ball {
-  position: relative;
-  width: var(--sr-orb-size, 72px);
-  height: var(--sr-orb-size, 72px);
+  /* 命中区与视觉径分离：视觉缩到 25%（约 21px）时，可点直径仍有 ORB_MIN_HIT_PX（32px）兜底；
+     球面以中心锚点盖在视觉球上，方形角落依旧只拖不点（D2 口径不变）。 */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  width: var(--sr-orb-hit-size, var(--sr-orb-size, 72px));
+  height: var(--sr-orb-hit-size, var(--sr-orb-size, 72px));
   border-radius: 50%;
   cursor: grab;
   pointer-events: auto;
+  /* User size changes are immediate; only the call handshake animates geometry. */
+  transition: none;
+}
+
+.sr-orb[data-call-transition="opening"] .sr-orb-ball,
+.sr-orb[data-call-transition="open"] .sr-orb-ball,
+.sr-orb[data-call-transition="closing"] .sr-orb-ball {
   transition:
-    width 880ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 880ms cubic-bezier(0.22, 1, 0.36, 1);
+    width 1100ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 1100ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sr-orb[data-call-transition="closing"] .sr-orb-ball {
+  transition-duration: 800ms;
 }
 
 .sr-orb-ball:active {
@@ -3493,7 +3522,9 @@
 
 .sr-orb-visual {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
   isolation: isolate;
   contain: layout style;
   border-radius: 50%;
@@ -4092,6 +4123,64 @@
 
 .sr-orb-menu-item--quiet .sr-orb-menu-mark {
   color: var(--sr-label-caption);
+}
+
+.sr-orb-menu-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 52px 28px;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 4px 6px 4px 8px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--sr-accent) 4%, transparent);
+}
+
+.sr-orb-menu-size-label {
+  color: var(--sr-label-secondary);
+  font-size: 11px;
+}
+
+.sr-orb-menu-size-btn,
+.sr-orb-menu-size-value {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--sr-accent) 10%, var(--sr-border-l3));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--sr-surface-elevated) 72%, transparent);
+  color: var(--sr-label-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sr-orb-menu-size-btn {
+  color: var(--sr-accent);
+  font-size: 15px;
+}
+
+.sr-orb-menu-size-value {
+  color: var(--sr-label-secondary);
+  font-family: var(--sr-font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-orb-menu-size-btn:hover:not(:disabled),
+.sr-orb-menu-size-value:hover:not(:disabled),
+.sr-orb-menu-size-btn:focus-visible,
+.sr-orb-menu-size-value:focus-visible {
+  border-color: color-mix(in srgb, var(--sr-accent) 34%, var(--sr-border-l3));
+  background: color-mix(in srgb, var(--sr-accent) 9%, var(--sr-hover));
+  outline: none;
+}
+
+.sr-orb-menu-size-btn:disabled,
+.sr-orb-menu-size-value:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .sr-orb-menu-sep {

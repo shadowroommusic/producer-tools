@@ -578,3 +578,19 @@
     transition: none;
   }
 }
+
+/* ── Set 编辑面（DjPage 内部子视图）：曲库留在总览，这里只有推荐条 + 整宽看板 ── */
+
+.sr-dj-hero--editor .sr-dj-back {
+  justify-self: start;
+  margin-bottom: 3px;
+}
+
+.sr-dj-main--editor {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.sr-dj-main--editor > .sr-dj-suggest-strip {
+  margin: 0 2px;
+}
