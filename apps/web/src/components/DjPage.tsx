@@ -18,6 +18,7 @@ import { formatPlanDuration, plannerTrackPayload } from "../lib/dj-plan";
 import { zhBpmSource, zhCueNote, zhCueReason } from "../lib/dj-cue-zh";
 import type { DjAgentContext } from "../lib/agent-context";
 import { coverUrl } from "../lib/library";
+import { peaksFor } from "../lib/waveform";
 import "../styles/dj.css";
 
 type LibraryTrack = {
@@ -52,7 +53,18 @@ type CueBlock = {
   imported_cue_overridden: number;
 };
 
-type TrackDetail = LibraryTrack & CueBlock & { peaks: number[]; genre?: string | null };
+type TrackDetail = LibraryTrack & CueBlock & { peaks?: number[] | null; genre?: string | null };
+type WaveState = "idle" | "loading" | "ready" | "error";
+type WavePresentation = {
+  trackId: number | null;
+  state: WaveState;
+  peaks: number[];
+  error: string | null;
+};
+
+function isMissingTrackError(message: string): boolean {
+  return /no track\s*#\d+/i.test(message);
+}
 
 type SuggestionRow = {
   id: number;
@@ -247,6 +259,8 @@ const emptySnapshot = (): DeckSnapshot => ({
 
 export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgentContext) => void }) {
   const changeRef = useRef<(snapshot: DeckSnapshot) => void>(() => {});
+  const openTrackSeq = useRef(0);
+  const openTrackQueue = useRef<Promise<void>>(Promise.resolve());
   const [player] = useState(
     () =>
       new Player({
@@ -259,12 +273,16 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
   useEffect(() => {
     changeRef.current = (snapshot) => setDeck(snapshot);
     return () => {
+      openTrackSeq.current += 1;
       player.deck.unload();
     };
   }, [player]);
 
   const [draft, setDraft] = useState<Draft>(readDraft);
   const [details, setDetails] = useState<Record<number, TrackDetail>>({});
+  /** A deleted library row is a stable state, not a request that should retry forever. */
+  const [detailErrors, setDetailErrors] = useState<Record<number, string>>({});
+  const [wave, setWave] = useState<WavePresentation>({ trackId: null, state: "idle", peaks: [], error: null });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -339,36 +357,56 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
     async (id: number): Promise<TrackDetail> => {
       const cached = details[id];
       if (cached !== undefined) return cached;
+      const failed = detailErrors[id];
+      if (failed !== undefined) throw new Error(failed);
       const next = await tool<TrackDetail>("library", "track_detail", { id });
       setDetails((current) => ({ ...current, [id]: next }));
       return next;
     },
-    [details],
+    [detailErrors, details],
   );
 
   // Backfill details for anything the draft references (restore path and drag-in path share this).
   useEffect(() => {
-    const missing = draft.trackIds.filter((id) => details[id] === undefined);
+    const missing = draft.trackIds.filter((id) => details[id] === undefined && detailErrors[id] === undefined);
     for (const id of missing) {
       void tool<TrackDetail>("library", "track_detail", { id })
         .then((next) => setDetails((current) => ({ ...current, [id]: next })))
-        .catch(() => {}); // a missing track shows as its id; the board flags it
+        .catch((cause) => {
+          setDetailErrors((current) => ({
+            ...current,
+            [id]: cause instanceof Error ? cause.message : String(cause),
+          }));
+        });
     }
-  }, [draft.trackIds, details]);
+  }, [draft.trackIds, detailErrors, details]);
 
   /** Load a track onto the single player and make it the selected one. */
   const openTrack = useCallback(
-    async (id: number) => {
-      try {
-        const next = await ensureDetail(id);
-        await player.deck.load(next.path);
-        setSelectedId(id);
-        setEditing(null);
-        setAiCue(null);
-        say(null);
-      } catch (cause) {
-        say(`载入失败：${cause instanceof Error ? cause.message : String(cause)}`);
-      }
+    async (id: number): Promise<boolean> => {
+      const request = ++openTrackSeq.current;
+      let loaded = false;
+      const task = openTrackQueue.current.then(async () => {
+        if (request !== openTrackSeq.current) return;
+        try {
+          const next = await ensureDetail(id);
+          if (request !== openTrackSeq.current) return;
+          await player.deck.load(next.path);
+          if (request !== openTrackSeq.current) return;
+          setSelectedId(id);
+          setEditing(null);
+          setAiCue(null);
+          say(null);
+          loaded = true;
+        } catch (cause) {
+          if (request === openTrackSeq.current) {
+            say(`载入失败：${cause instanceof Error ? cause.message : String(cause)}`);
+          }
+        }
+      });
+      openTrackQueue.current = task.catch(() => {});
+      await task;
+      return loaded;
     },
     [ensureDetail, player, say],
   );
@@ -466,6 +504,23 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
   /** Our set lands in a crate first (crate = library's structure), then crate_export_m3u writes the file. */
   const exportM3u = useCallback(async () => {
     if (draft.trackIds.length === 0) return;
+    if (
+      draft.trackIds.some((id) => {
+        const error = detailErrors[id];
+        return error !== undefined && isMissingTrackError(error);
+      })
+    ) {
+      say("先移出已不在曲目库的歌曲，再导出 set。");
+      return;
+    }
+    if (draft.trackIds.some((id) => detailErrors[id] !== undefined)) {
+      say("有曲目信息读取失败，请稍后重试或移出该曲目。");
+      return;
+    }
+    if (draft.trackIds.some((id) => details[id] === undefined)) {
+      say("曲目信息还在读取，稍后再导出。");
+      return;
+    }
     setExportBusy(true);
     try {
       const crate = await tool<{ id: number; created: boolean }>("library", "crate_create", { name: draft.name });
@@ -486,7 +541,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
     } finally {
       setExportBusy(false);
     }
-  }, [draft.name, draft.trackIds, say]);
+  }, [detailErrors, details, draft.name, draft.trackIds, say]);
 
   // ------------------------------------------------ suggestions: last track + whole-set blend
   useEffect(() => {
@@ -496,8 +551,15 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
       return;
     }
     const lastId = ids[ids.length - 1];
+    if (detailErrors[lastId] !== undefined) {
+      setSuggestions([]);
+      return;
+    }
     const last = details[lastId];
-    if (last === undefined) return; // details backfill will re-trigger this effect
+    if (last === undefined) {
+      setSuggestions([]);
+      return; // details backfill will re-trigger this effect
+    }
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       setSuggestBusy(true);
@@ -584,7 +646,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [draft.trackIds, draft.name, details, say]);
+  }, [detailErrors, draft.trackIds, draft.name, details, say]);
 
   // ------------------------------------------------ timing: plan_set drives the topbar readouts
   useEffect(() => {
@@ -593,7 +655,14 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
       setPlan(null);
       return;
     }
-    if (ids.some((id) => details[id] === undefined)) return; // the backfill re-triggers this effect
+    if (ids.some((id) => detailErrors[id] !== undefined)) {
+      setPlan(null);
+      return;
+    }
+    if (ids.some((id) => details[id] === undefined)) {
+      setPlan(null);
+      return; // the backfill re-triggers this effect
+    }
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
@@ -613,12 +682,29 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [draft.trackIds, draft.overlapMs, details, say]);
+  }, [draft.trackIds, draft.overlapMs, detailErrors, details, say]);
 
   /** planner.order_set re-orders the whole draft; the previous order stays one undo deep. */
   const applyAiOrder = useCallback(async () => {
     const ids = draft.trackIds;
-    if (ids.length < 2 || ids.some((id) => details[id] === undefined)) return;
+    if (ids.length < 2) return;
+    if (
+      ids.some((id) => {
+        const error = detailErrors[id];
+        return error !== undefined && isMissingTrackError(error);
+      })
+    ) {
+      say("先移出已不在曲目库的歌曲，再让 AI 排序。");
+      return;
+    }
+    if (ids.some((id) => detailErrors[id] !== undefined)) {
+      say("有曲目信息读取失败，请稍后重试或移出该曲目。");
+      return;
+    }
+    if (ids.some((id) => details[id] === undefined)) {
+      say("曲目信息还在读取，稍后再排序。");
+      return;
+    }
     setOrderBusy(true);
     try {
       const result = await tool<OrderResult>("planner", "order_set", {
@@ -636,7 +722,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
     } finally {
       setOrderBusy(false);
     }
-  }, [draft.trackIds, details, say]);
+  }, [detailErrors, draft.trackIds, details, say]);
 
   const undoAiOrder = useCallback(() => {
     setUndoOrder((previous) => {
@@ -656,6 +742,27 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
           imported_cue_overridden: selectedDetail.imported_cue_overridden ?? 0,
         }
       : null;
+
+  const selectedPath = selectedDetail?.path ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    if (selectedPath === null) {
+      setWave({ trackId: selectedId, state: "idle", peaks: [], error: null });
+      return;
+    }
+    setWave({ trackId: selectedId, state: "loading", peaks: [], error: null });
+    void peaksFor(selectedPath, 512).then((peaks) => {
+      if (cancelled) return;
+      if (peaks === null || peaks.length === 0) {
+        setWave({ trackId: selectedId, state: "error", peaks: [], error: "波形读取失败" });
+        return;
+      }
+      setWave({ trackId: selectedId, state: "ready", peaks, error: null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, selectedPath]);
 
   const saveCues = useCallback(
     async (cues: DjCue[]) => {
@@ -793,6 +900,15 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
 
   // The plan's per-track rows, keyed by track id for the SetBoard.
   const planRows = new Map<string, PlanRow>((plan?.timeline ?? []).map((row) => [row.id, row]));
+  const visibleWave: WavePresentation =
+    wave.trackId === selectedId
+      ? wave
+      : {
+          trackId: selectedId,
+          state: selectedPath === null ? "idle" : "loading",
+          peaks: [],
+          error: null,
+        };
 
   return (
     <div className="sr-dj">
@@ -867,7 +983,11 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
           <button
             type="button"
             className="sr-page-action sr-dj-action-primary"
-            disabled={orderBusy || draft.trackIds.length < 2}
+            disabled={
+              orderBusy ||
+              draft.trackIds.length < 2 ||
+              draft.trackIds.some((id) => details[id] === undefined || detailErrors[id] !== undefined)
+            }
             title="planner.order_set：贪心链 + 2-opt 重排整个 set"
             onClick={() => void applyAiOrder()}
           >
@@ -918,7 +1038,11 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
                 type="button"
                 role="menuitem"
                 className="sr-page-action"
-                disabled={exportBusy || draft.trackIds.length === 0}
+                disabled={
+                  exportBusy ||
+                  draft.trackIds.length === 0 ||
+                  draft.trackIds.some((id) => details[id] === undefined || detailErrors[id] !== undefined)
+                }
                 title="导出为 m3u"
                 onClick={() => {
                   setMoreOpen(false);
@@ -975,7 +1099,9 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
               if (deck.state === "playing") player.deck.pause();
               else player.deck.play();
             } else {
-              void openTrack(id).then(() => player.deck.play());
+              void openTrack(id).then((loaded) => {
+                if (loaded) player.deck.play();
+              });
             }
           }}
           onOpen={(id) => void openTrack(id)}
@@ -984,6 +1110,7 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
         <SetBoard
           trackIds={draft.trackIds}
           details={details}
+          detailErrors={detailErrors}
           planRows={planRows}
           selectedId={selectedId}
           onSelect={(id) => void openTrack(id)}
@@ -1007,7 +1134,10 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
           {selectedDetail?.camelot ? <span className="sr-chip">{selectedDetail.camelot}</span> : null}
         </header>
         <WaveformStrip
-          peaks={selectedDetail?.peaks ?? []}
+          peaks={visibleWave.peaks}
+          state={visibleWave.state}
+          error={visibleWave.error}
+          trackId={selectedId}
           durationMs={deck.durationMs}
           positionMs={player.deck.positionMs()}
           cues={cueBlock?.cues ?? []}
@@ -1178,26 +1308,51 @@ export function DjPage({ onContextChange }: { onContextChange?: (context: DjAgen
 
 function WaveformStrip(props: {
   peaks: number[];
+  state: WaveState;
+  error: string | null;
+  trackId: number | null;
   durationMs: number;
   positionMs: number;
   cues: DjCue[];
   onSeek: (ms: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const { peaks, durationMs, positionMs, cues } = props;
+  const [resizeTick, setResizeTick] = useState(0);
+  const { peaks, state, error, trackId, durationMs, positionMs, cues } = props;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    const observer = new ResizeObserver(() => setResizeTick((value) => value + 1));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
     const context = canvas.getContext("2d");
     if (context === null) return;
-    const width = canvas.width;
-    const height = canvas.height;
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width || 560));
+    const height = Math.max(1, Math.round(rect.height || 64));
+    const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+    const backingWidth = Math.round(width * dpr);
+    const backingHeight = Math.round(height * dpr);
+    if (canvas.width !== backingWidth || canvas.height !== backingHeight) {
+      canvas.width = backingWidth;
+      canvas.height = backingHeight;
+    }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
     context.fillStyle = "#101014";
     context.fillRect(0, 0, width, height);
     if (peaks.length > 0 && durationMs > 0) {
-      context.fillStyle = "#5b5f6b";
+      const bars = context.createLinearGradient(0, 0, width, 0);
+      bars.addColorStop(0, "rgb(84 99 82 / 0.72)");
+      bars.addColorStop(0.55, "rgb(112 132 104 / 0.88)");
+      bars.addColorStop(1, "rgb(86 104 85 / 0.72)");
+      context.fillStyle = bars;
       const bar = width / peaks.length;
       peaks.forEach((peak, index) => {
         const h = Math.max(2, peak * (height - 12));
@@ -1214,21 +1369,36 @@ function WaveformStrip(props: {
         context.fillRect(cx - 1, 0, 3, 8);
       }
     }
-  }, [peaks, durationMs, positionMs, cues]);
+  }, [peaks, durationMs, positionMs, cues, resizeTick]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="sr-dj-wave"
-      width={560}
-      height={64}
-      onClick={(event) => {
-        if (durationMs <= 0) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        const fraction = (event.clientX - rect.left) / rect.width;
-        props.onSeek(fraction * durationMs);
-      }}
-    />
+    <div
+      className="sr-dj-wave-wrap"
+      data-wave-state={state}
+      data-wave-bars={peaks.length}
+      data-track-id={trackId ?? undefined}
+    >
+      <canvas
+        ref={canvasRef}
+        className="sr-dj-wave"
+        width={560}
+        height={64}
+        aria-label="歌曲波形，点击定位"
+        onClick={(event) => {
+          if (durationMs <= 0) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const fraction = (event.clientX - rect.left) / rect.width;
+          props.onSeek(fraction * durationMs);
+        }}
+      />
+      {state === "loading" ? (
+        <span className="sr-dj-wave-status" role="status">读取波形…</span>
+      ) : state === "error" ? (
+        <span className="sr-dj-wave-status sr-dj-wave-status--error" role="alert">
+          {error ?? "波形读取失败"}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -1269,6 +1439,7 @@ function CueEditor(props: {
 function SetBoard(props: {
   trackIds: number[];
   details: Record<number, TrackDetail>;
+  detailErrors: Record<number, string>;
   planRows: Map<string, PlanRow>;
   selectedId: number | null;
   onSelect: (id: number) => void;
@@ -1277,6 +1448,17 @@ function SetBoard(props: {
   onInsert: (id: number, at: number) => void;
 }) {
   const [dropAt, setDropAt] = useState<number | null>(null);
+  const missingCount = props.trackIds.filter((id) => {
+    const error = props.detailErrors[id];
+    return error !== undefined && isMissingTrackError(error);
+  }).length;
+  const failedCount = props.trackIds.filter((id) => props.detailErrors[id] !== undefined).length - missingCount;
+  const warningTitle = [
+    missingCount > 0 ? `${missingCount} 首已不在曲目库` : "",
+    failedCount > 0 ? `${failedCount} 首曲目信息读取失败` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const handleDrop = (event: DragEvent<HTMLElement>, index: number) => {
     event.preventDefault();
@@ -1298,18 +1480,31 @@ function SetBoard(props: {
         <span className="sr-dj-mixer-label">Set</span>
         <span className="sr-dj-count">{props.trackIds.length} 首 · 拖入或拖动排序</span>
       </div>
+      {missingCount > 0 || failedCount > 0 ? (
+        <div className="sr-dj-board-warning" role="alert">
+          <strong>{warningTitle}</strong>
+          <span>
+            {missingCount > 0 ? "移出后才能计时和 AI 排序；源文件不会在这里被删除。 " : ""}
+            {failedCount > 0 ? "可以移除后继续编辑 Set；稍后刷新也可重试。" : ""}
+          </span>
+        </div>
+      ) : null}
       <div className="sr-dj-rows" onDragOver={(event) => event.preventDefault()} onDrop={(event) => handleDrop(event, props.trackIds.length)}>
         {props.trackIds.map((id, index) => {
           const detail = props.details[id];
+          const detailError = props.detailErrors[id];
+          const missing = detailError !== undefined && isMissingTrackError(detailError);
+          const failed = detailError !== undefined;
           const planRow = props.planRows.get(String(id));
           return (
             <div
               key={id}
-              className="sr-dj-row"
+              className={`sr-dj-row${failed ? " sr-dj-row--missing" : ""}`}
               data-track-id={id}
               data-selected={props.selectedId === id || undefined}
+              data-missing={missing || undefined}
               data-dropat={dropAt === index || undefined}
-              draggable
+              draggable={!failed}
               onDragStart={(event) => event.dataTransfer.setData(DRAG_ROW, String(index))}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -1320,12 +1515,25 @@ function SetBoard(props: {
                 event.stopPropagation();
                 handleDrop(event, index);
               }}
-              onClick={() => props.onSelect(id)}
+              onClick={() => {
+                if (!failed) props.onSelect(id);
+              }}
             >
               <span className="sr-dj-row-index">{index + 1}</span>
               <span className="sr-dj-row-title">
-                {detail !== undefined ? (detail.title ?? detail.path.split("/").pop()) : `#${id}（载入中…）`}
+                {failed
+                  ? missing
+                    ? `曲目已不在库中 · #${id}`
+                    : `曲目信息读取失败 · #${id}`
+                  : detail !== undefined
+                    ? (detail.title ?? detail.path.split("/").pop())
+                    : `#${id}（读取中…）`}
               </span>
+              {failed ? (
+                <span className="sr-dj-row-missing-meta" title={detailError}>
+                  {missing ? "旧 Set 引用" : "读取失败"}
+                </span>
+              ) : null}
               {detail?.bpm !== null && detail !== undefined && detail.bpm !== null ? (
                 <span className="sr-chip">{Number(detail.bpm.toFixed(1))} BPM</span>
               ) : null}
@@ -1342,7 +1550,9 @@ function SetBoard(props: {
                 </span>
               ) : null}
               <span className="sr-dj-row-time">
-                {planRow !== undefined
+                {failed
+                  ? "—"
+                  : planRow !== undefined
                   ? `${planRow.play_start}–${planRow.play_end}`
                   : detail?.duration_ms != null
                     ? mmss(detail.duration_ms / 1000)
@@ -1350,14 +1560,14 @@ function SetBoard(props: {
               </span>
               <button
                 type="button"
-                className="sr-page-action"
-                aria-label={`移出 ${detail?.title ?? id}`}
+                className={`sr-page-action${missing ? " sr-dj-row-remove" : ""}`}
+                aria-label={`移出 ${failed ? `${missing ? "已缺失曲目" : "读取失败曲目"} ${id}` : (detail?.title ?? id)}`}
                 onClick={(event) => {
                   event.stopPropagation();
                   props.onRemove(id);
                 }}
               >
-                ✕
+                {failed ? "移出" : "✕"}
               </button>
             </div>
           );
@@ -1487,6 +1697,7 @@ function LibraryBrowser(props: {
           <div
             key={track.id}
             className="sr-dj-row"
+            data-track-id={track.id}
             data-inset={inSet.has(track.id) || undefined}
             data-previewing={props.deckPath === track.path || undefined}
             data-loaded={props.deckPath === track.path || undefined}

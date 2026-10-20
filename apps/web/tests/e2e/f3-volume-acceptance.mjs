@@ -39,7 +39,12 @@ await page.addInitScript(() => {
 });
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".sr-dj-board", { timeout: 30000 });
-await page.waitForTimeout(2500);
+await page.locator(".sr-dj-library .sr-dj-row").first().click();
+await page.waitForFunction(() => {
+  const button = document.querySelector(".sr-dj-deck button[aria-label^='播放']");
+  return button instanceof HTMLButtonElement && !button.disabled;
+}, null, { timeout: 30000 });
+await page.waitForTimeout(400);
 
 const group = page.locator(".sr-dj-vol-group").first();
 const input = group.locator("input");

@@ -268,6 +268,53 @@
   min-height: 42px;
 }
 
+.sr-dj-row--missing {
+  min-height: 48px;
+  border-color: color-mix(in srgb, var(--sr-warn) 34%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--sr-warn) 8%, transparent), transparent 46%),
+    var(--sr-surface);
+  cursor: default;
+}
+
+.sr-dj-row--missing .sr-dj-row-title {
+  color: var(--sr-warn);
+  font-weight: 650;
+}
+
+.sr-dj-row-missing-meta {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--sr-warn) 24%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--sr-warn) 84%, var(--sr-label-secondary));
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sr-dj-board-warning {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--sr-warn) 30%, transparent);
+  border-radius: var(--sr-radius-sm);
+  background: color-mix(in srgb, var(--sr-warn) 6%, var(--sr-surface));
+  color: var(--sr-label-secondary);
+  font-size: var(--sr-text-12);
+}
+
+.sr-dj-board-warning strong {
+  color: var(--sr-warn);
+  font-size: var(--sr-text-13);
+}
+
+.sr-dj-row-remove {
+  min-width: 42px !important;
+  color: var(--sr-warn) !important;
+}
+
 .sr-dj-suggest-strip {
   flex: none;
   gap: 5px;
@@ -415,6 +462,16 @@
   min-height: 130px;
 }
 
+.sr-dj-board .sr-dj-empty {
+  min-height: 0;
+  padding: 10px 8px;
+  line-height: 18px;
+}
+
+.sr-dj-board .sr-dj-empty::before {
+  display: none;
+}
+
 .sr-dj-deck,
 .sr-dj-aicue {
   flex: none;
@@ -429,10 +486,40 @@
 }
 
 .sr-dj-deck[data-state="empty"] .sr-dj-wave,
+.sr-dj-deck[data-state="empty"] .sr-dj-wave-wrap,
 .sr-dj-deck[data-state="empty"] .sr-dj-cues,
 .sr-dj-deck[data-state="empty"] .sr-dj-transport,
 .sr-dj-deck[data-state="empty"] .sr-dj-aicue {
   display: none;
+}
+
+.sr-dj-wave-wrap {
+  position: relative;
+  width: 100%;
+  min-height: 64px;
+  overflow: hidden;
+  border-radius: var(--sr-radius-sm);
+}
+
+.sr-dj-wave {
+  display: block;
+}
+
+.sr-dj-wave-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--sr-accent) 74%, var(--sr-label-secondary));
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  background: linear-gradient(90deg, transparent, rgb(217 255 61 / 4%), transparent);
+}
+
+.sr-dj-wave-status--error {
+  color: var(--sr-warn);
+  background: color-mix(in srgb, var(--sr-warn) 5%, transparent);
 }
 
 @container (max-width: 560px) {

@@ -64,8 +64,31 @@ await page.getByRole("button", { name: "更多 Set 操作" }).click();
 const moreText = await page.locator(".sr-dj-more-menu").innerText();
 check("⑤ 低频操作收进 More，导入/导出仍可达", moreText.includes("导入 set") && moreText.includes("导出 m3u"), moreText.replace(/\n+/g, " | "));
 
+await page.keyboard.press("Escape");
+await page.locator(".sr-dj-library .sr-dj-row").first().click();
+await page.waitForFunction(() => document.querySelector(".sr-dj-wave-wrap")?.getAttribute("data-wave-state") === "ready", null, { timeout: 15000 });
+const emptyFit = await page.locator(".sr-dj-board .sr-dj-empty").evaluate((empty) => {
+  const rows = empty.closest(".sr-dj-rows");
+  const emptyRect = empty.getBoundingClientRect();
+  const rowsRect = rows?.getBoundingClientRect();
+  return rowsRect === undefined
+    ? null
+    : {
+        empty: { top: emptyRect.top, bottom: emptyRect.bottom },
+        rows: { top: rowsRect.top, bottom: rowsRect.bottom, scrollHeight: rows.scrollHeight, clientHeight: rows.clientHeight },
+      };
+});
+check(
+  "⑥ deck 展开后 Set 空态仍完整可见",
+  emptyFit !== null &&
+    emptyFit.empty.top >= emptyFit.rows.top - 1 &&
+    emptyFit.empty.bottom <= emptyFit.rows.bottom + 1 &&
+    emptyFit.rows.scrollHeight <= emptyFit.rows.clientHeight + 1,
+  JSON.stringify(emptyFit),
+);
+
 await page.screenshot({ path: `${SHOTS}/dj-1092.png` });
-check("⑥ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+check("⑦ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
 await browser.close();
 const failed = results.filter((ok) => !ok).length;
