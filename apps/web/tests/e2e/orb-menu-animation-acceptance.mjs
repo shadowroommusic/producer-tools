@@ -76,6 +76,32 @@ const openMenu = async () => {
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => document.querySelector(".sr-orb-menu") === null);
 
+  // macOS 双指右键在部分输入设备上会先报告 button=0 的 pointerdown，再由 contextmenu
+  // 把它升级成右键。这条序列必须与普通左键点击分开，否则 pointerup 会误启动通话。
+  const secondaryPoint = await ball.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.move(secondaryPoint.x, secondaryPoint.y);
+  await page.mouse.down({ button: "left" });
+  await page.dispatchEvent(".sr-orb-ball", "contextmenu", {
+    button: 2,
+    clientX: secondaryPoint.x,
+    clientY: secondaryPoint.y,
+  });
+  await page.mouse.up({ button: "left" });
+  await page.waitForSelector(".sr-orb-menu", { timeout: 3000 });
+  await page.waitForTimeout(80);
+  check(
+    "①e macOS 双指右键只开菜单，不误触通话",
+    (await page.locator(".sr-orb-menu").count()) === 1 &&
+      (await page.locator(".sr-orb").getAttribute("data-mode")) === "idle" &&
+      (await page.locator(".sr-orb").getAttribute("data-call-transition")) === "idle",
+    "菜单已打开，通话仍为 idle",
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelector(".sr-orb-menu") === null);
+
   // macOS 触控板的 Control+点击会发 pointerdown(button=0, ctrlKey) + contextmenu。
   const controlPoint = await page.locator(".sr-orb-ball").evaluate((element) => {
     const rect = element.getBoundingClientRect();

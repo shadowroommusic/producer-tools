@@ -739,6 +739,13 @@ export function ButlerOrb({
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
+          /**
+           * Some macOS trackpads report the secondary click as a left-button pointerdown before
+           * firing contextmenu. Drop that pending gesture here; otherwise the following pointerup
+           * still satisfies the click branch and starts a call underneath the menu.
+           */
+          dragRef.current = null;
+          setDragging(false);
           setExpanded(false);
           setMenuOpen(true);
         }}
