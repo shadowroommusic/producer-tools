@@ -43,6 +43,7 @@ import {
 import { RouteIntentCard, type RouteIntent } from "./components/RouteIntentCard";
 import {
   answerApproval,
+  applyAgentSettings,
   fetchAgentHealth,
   fetchModels,
   interruptTurn,
@@ -52,6 +53,18 @@ import {
   type AgentHealth,
   type Mention,
 } from "./lib/agent";
+import {
+  accessFromSandboxType,
+  accessLabel,
+  effortChoiceFor,
+  effortForModel,
+  effortForSend,
+  loadAgentDefaults,
+  saveAgentDefaults,
+  type AgentAccess,
+  type AgentSettings,
+} from "./lib/agent-settings";
+import { appendAssistantDelta, segmentKeyFor } from "./lib/conversation-flow";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import { callTool } from "./lib/mcp";
 
@@ -502,17 +515,39 @@ export function App() {
         displayName: `${provider.name} · ${model}`,
         description: `${provider.name} · 走你自己的端点`,
         isDefault: false,
-        supportedReasoningEfforts: [],
+        // effort 能力来自模型档案自己的声明（reasoning.requestProtocol），协议映射不了就不显示、
+        // 也不发送——自定义 provider 的思考深度不许装饰（Kimi #484 第 6 条）。
+        ...(profile?.reasoning === undefined
+          ? { supportedReasoningEfforts: [] }
+          : {
+              supportedReasoningEfforts: profile.reasoning.supportedEfforts.map((effort) => ({
+                effort,
+                description: effort,
+              })),
+              defaultReasoningEffort: profile.reasoning.defaultEffort,
+              reasoningProtocol: profile.reasoning.requestProtocol,
+            }),
       })),
     [modelSettings],
   );
-  const [modelId, setModelId] = useState<string | undefined>(
-    () => window.localStorage.getItem("shadowroom.model") ?? undefined,
-  );
+  /**
+   * 全局默认快照（新会话继承；模型/effort/权限确认成功后写回）。老安装里全局存的
+   * `shadowroom.model` 在第一次读取时被它吸收——一次性迁移。
+   */
+  const [agentDefaults, setAgentDefaults] = useState<AgentSettings>(() => loadAgentDefaults());
 
   const sessionKind = sessionKindForView(mainView);
   const session = sessionForKind(store, sessionKind);
   const butlerSession = sessionForKind(store, "butler");
+
+  /**
+   * 本会话生效的设置：会话里确认过的字段优先，没确认过的继承全局默认（新会话就是这么
+   * 继承的）；两层都各自持久化，刷新即恢复。
+   */
+  const agentSettingValues = useMemo<AgentSettings>(
+    () => ({ ...agentDefaults, ...(session?.settings ?? {}) }),
+    [agentDefaults, session],
+  );
 
   useEffect(() => {
     saveSessions(store);
@@ -587,7 +622,8 @@ export function App() {
     };
   }, []);
 
-  // The model picker mirrors the core's own list; the choice sticks per browser.
+  // The model picker mirrors the core's own list; the choice sticks per session (defaults snapshot
+  // for new ones). See `applyChoice` below for the confirm-then-persist flow.
   useEffect(() => {
     if (agent?.ok !== true) return;
     let cancelled = false;
@@ -600,11 +636,6 @@ export function App() {
       cancelled = true;
     };
   }, [agent?.ok]);
-
-  const chooseModel = useCallback((id: string) => {
-    setModelId(id);
-    window.localStorage.setItem("shadowroom.model", id);
-  }, []);
 
   // The agent core is optional: without it the composer records requests instead of running them.
   useEffect(() => {
@@ -678,6 +709,109 @@ export function App() {
     };
   }, []);
 
+  /* ── 模型 / 思考深度 / 访问权限：确认后才算数 ───────────────────────────────
+   *
+   * 流程（Kimi #484 第 3、4 条）：选择 → bridge /api/agent/settings → 以
+   * thread/settings/updated 回读为准 → 成功才写 session.settings 与全局默认快照；
+   * 失败 UI 不动（本地从未提前改过），composer 附近给原文。自定义供应商的模型不经这条
+   * 链（模型在 thread/start 上由 provider 决定），本地持久化、下一轮生效。运行中全禁。
+   */
+  const [settingsPending, setSettingsPending] = useState<Partial<AgentSettings> | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsApplied, setSettingsApplied] = useState<string | null>(null);
+  /**
+   * 连续点击只有最后一次算数：每个请求带序号，过期响应（用户已经又点了一下）一律丢弃，
+   * 写状态的永远是最新那次——bridge 那头同样的串行链保证 thread 也停在最后一次。
+   */
+  const settingsSeq = useRef(0);
+
+  const modelOptions = useMemo(() => [...models, ...configuredMainModels], [models, configuredMainModels]);
+  const currentModel = useMemo(
+    () =>
+      modelOptions.find((model) => model.id === agentSettingValues.modelId) ??
+      modelOptions.find((model) => model.isDefault) ??
+      modelOptions[0],
+    [modelOptions, agentSettingValues.modelId],
+  );
+  const effortChoice = effortChoiceFor(currentModel);
+  const activeEffort =
+    effortChoice.kind === "list"
+      ? effortForSend(currentModel, agentSettingValues.effort) ?? effortChoice.defaultEffort
+      : undefined;
+
+  const persistSettings = useCallback(
+    (confirmed: AgentSettings) => {
+      setAgentDefaults(confirmed);
+      saveAgentDefaults(confirmed);
+      if (session === undefined) return;
+      setStore((current) =>
+        patchSession(current, session.id, (target) => ({ ...target, settings: confirmed })),
+      );
+    },
+    [session],
+  );
+
+  const applyChoice = useCallback(
+    async (choice: { modelId?: string; effort?: string; access?: AgentAccess }) => {
+      if (running) return;
+      const seq = ++settingsSeq.current;
+      const next: AgentSettings = { ...agentSettingValues, ...choice };
+      setSettingsError(null);
+      setSettingsApplied(null);
+      setSettingsPending(choice);
+      const isCustomModel = next.modelId?.startsWith("custom:") === true;
+      const needsBridge = session !== undefined && agent?.ok === true && !isCustomModel;
+      try {
+        if (needsBridge) {
+          const confirmed = await applyAgentSettings(
+            session.id,
+            {
+              ...(next.modelId !== undefined ? { model: next.modelId } : {}),
+              ...(next.effort !== undefined ? { effort: next.effort } : {}),
+              access: next.access,
+            },
+            sessionKind,
+          );
+          if (settingsSeq.current !== seq) return;
+          persistSettings({
+            ...(next.modelId === undefined ? {} : { modelId: next.modelId }),
+            ...(next.effort === undefined ? {} : { effort: next.effort }),
+            access: accessFromSandboxType(confirmed.sandboxPolicy?.type) ?? next.access,
+          });
+        } else {
+          // 自定义模型 / 内核没起来：thread/start 会带这些值，本地先记。
+          persistSettings(next);
+        }
+        const bits = [
+          choice.modelId === undefined
+            ? undefined
+            : `${modelOptions.find((model) => model.id === choice.modelId)?.displayName ?? choice.modelId}`,
+          choice.effort === undefined ? undefined : `思考深度 ${choice.effort}`,
+          choice.access === undefined ? undefined : accessLabel(choice.access),
+        ].filter((bit) => bit !== undefined);
+        setSettingsApplied(`${bits.join(" · ")} · 从下一轮开始生效`);
+      } catch (error) {
+        if (settingsSeq.current !== seq) return;
+        // 没确认就没生效：本地状态一行没动，把原文给用户。
+        setSettingsError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (settingsSeq.current === seq) setSettingsPending(null);
+      }
+    },
+    [agent?.ok, agentSettingValues, modelOptions, persistSettings, running, session, sessionKind],
+  );
+
+  const chooseModel = useCallback(
+    (id: string) => {
+      const target = modelOptions.find((model) => model.id === id);
+      // 换模型必重置 effort：A 模型的档位不能带到 B 模型上。
+      void applyChoice({ modelId: id, effort: effortForModel(target) });
+    },
+    [applyChoice, modelOptions],
+  );
+  const chooseEffort = useCallback((effort: string) => void applyChoice({ effort }), [applyChoice]);
+  const chooseAccess = useCallback((access: AgentAccess) => void applyChoice({ access }), [applyChoice]);
+
   const submit = useCallback(
     /**
      * Async because the turn may first have to point the Codex core at the chosen provider (a core
@@ -689,7 +823,6 @@ export function App() {
     if (text === "" || running) return;
     setDraftFor(kind, "");
     const at = Date.now();
-    const assistantId = `a-${at}`;
     const mentions = options.mentions ?? attachments;
     if (options.mentions === undefined) setAttachments([]);
 
@@ -766,29 +899,30 @@ export function App() {
     const abort = new AbortController();
     setController(abort);
     setRunning(true);
+    setSettingsApplied(null);
     const startedAt = Date.now();
     /** Latest token usage seen for this turn, reported when it finishes. */
     let usage: { totalTokens?: number } | undefined;
-    /** The answer is created lazily: its position in the flow must follow the tool rows. */
-    const appendDelta = (delta: string) => {
+    /** Calls this turn added — the turn-end summary counts exactly these. */
+    const turnCallIds = new Set<string>();
+    /** Shell rows carry no durationMs from the core; we measure them ourselves. */
+    const callStartedAt = new Map<string, number>();
+    /**
+     * 正文分段（lib/conversation-flow）：同一 itemId 且在消息数组末尾才追加；任何 tool /
+     * reasoning 行插进来之后，下一段文字就是新气泡。bridge 已把 <think> 剥成 reasoning 事件，
+     * delta 到这里全是净文本。
+     */
+    const appendDelta = (delta: string, itemId?: string, turnId?: string) => {
       setStore((current) =>
-        patchSession(current, sessionId, (session) => {
-          const existing = session.messages.find((message) => message.id === assistantId);
-          if (existing === undefined) {
-            return {
-              ...session,
-              messages: [...session.messages, { id: assistantId, role: "assistant", text: delta, at: Date.now() }],
-            };
-          }
-          return {
-            ...session,
-            messages: session.messages.map((message) =>
-              message.id === assistantId && message.role === "assistant"
-                ? { ...message, text: message.text + delta }
-                : message,
-            ),
-          };
-        }),
+        patchSession(current, sessionId, (session_) => ({
+          ...session_,
+          messages: appendAssistantDelta(
+            session_.messages,
+            delta,
+            segmentKeyFor(itemId, turnId, `at-${startedAt}`),
+            Date.now(),
+          ),
+        })),
       );
     };
     const finishAssistant = () => {
@@ -896,8 +1030,8 @@ export function App() {
      * provider, and Codex answered "The supported API model names are …".
      */
     const chosen =
-      modelId?.startsWith("custom:") === true
-        ? agentModelChoices(modelSettings).find((choice) => `custom:${choice.provider.id}:${choice.model}` === modelId)
+      agentSettingValues.modelId?.startsWith("custom:") === true
+        ? agentModelChoices(modelSettings).find((choice) => `custom:${choice.provider.id}:${choice.model}` === agentSettingValues.modelId)
         : undefined;
     const wantedProvider = chosen?.provider.id ?? "";
     if (wantedProvider !== appliedProvider.current) {
@@ -978,7 +1112,7 @@ export function App() {
           return;
         }
         if (event.type === "delta") {
-          appendDelta(event.text);
+          appendDelta(event.text, event.itemId, event.turnId);
           return;
         }
         if (event.type === "item") {
@@ -1016,8 +1150,25 @@ export function App() {
             );
             return;
           }
-          const call = toolCallFromItem(event.item, event.phase);
+          const call = toolCallFromItem(event.item, event.phase, event.turnId);
           if (call === null) return;
+          turnCallIds.add(call.id);
+          if (event.phase !== "completed") callStartedAt.set(call.id, callStartedAt.get(call.id) ?? Date.now());
+          const finishedAt = event.phase === "completed" ? Date.now() : undefined;
+          const measured =
+            call.durationMs ??
+            (finishedAt !== undefined && callStartedAt.has(call.id)
+              ? finishedAt - (callStartedAt.get(call.id) as number)
+              : undefined);
+          const timed =
+            measured === undefined
+              ? call
+              : {
+                  ...call,
+                  durationMs: measured,
+                  ...(finishedAt === undefined ? {} : { finishedAt }),
+                  ...(callStartedAt.has(call.id) ? { startedAt: callStartedAt.get(call.id) } : {}),
+                };
           if (kind === "butler" && event.phase === "completed" && call.name === "route_intent") {
             const route = parseRouteFromCall(call);
             if (route !== null) setRouteSuggestion(route);
@@ -1050,15 +1201,15 @@ export function App() {
           if (event.phase === "completed" && ownsCurrentProject) absorbRef.current(call);
           setStore((current) =>
             patchSession(current, sessionId, (session) => {
-              const known_ = session.calls.some((entry) => entry.id === call.id);
+              const known_ = session.calls.some((entry) => entry.id === timed.id);
               return {
                 ...session,
                 calls: known_
-                  ? session.calls.map((entry) => (entry.id === call.id ? { ...entry, ...call } : entry))
-                  : [...session.calls, call],
+                  ? session.calls.map((entry) => (entry.id === timed.id ? { ...entry, ...timed } : entry))
+                  : [...session.calls, timed],
                 messages: known_
                   ? session.messages
-                  : [...session.messages, { id: `c-${call.id}`, role: "tool", callId: call.id, at: Date.now() }],
+                  : [...session.messages, { id: `c-${timed.id}`, role: "tool", callId: timed.id, at: Date.now() }],
               };
             }),
           );
@@ -1121,9 +1272,9 @@ export function App() {
         // A `custom:` choice carries the provider with it: the bridge starts this thread on it.
         ...(() => {
           const custom =
-            modelId?.startsWith("custom:") === true
+            agentSettingValues.modelId?.startsWith("custom:") === true
               ? (() => {
-                  const [, providerId, model] = modelId.split(":");
+                  const [, providerId, model] = agentSettingValues.modelId.split(":");
                   return agentModelChoices(modelSettings).find((choice) => choice.provider.id === providerId && choice.model === model);
                 })()
               : undefined;
@@ -1134,11 +1285,29 @@ export function App() {
               ...(messageScope.setId === undefined ? {} : { setId: messageScope.setId }),
             },
           };
-          if (custom === undefined) return { model: modelId, mentions, ...scopeOptions };
+          if (custom === undefined) {
+            return {
+              // The session's confirmed settings ride along every turn: the bridge parameterizes
+              // thread/start with them and repeats them on turn/start as the last line of defence.
+              settings: {
+                ...(agentSettingValues.modelId === undefined || agentSettingValues.modelId.startsWith("custom:")
+                  ? {}
+                  : { model: agentSettingValues.modelId }),
+                ...(activeEffort === undefined ? {} : { effort: activeEffort }),
+                access: agentSettingValues.access,
+              },
+              mentions,
+              ...scopeOptions,
+            };
+          }
           return {
             model: custom.model,
             mentions,
             ...scopeOptions,
+            settings: {
+              ...(activeEffort === undefined ? {} : { effort: activeEffort }),
+              access: agentSettingValues.access,
+            },
             provider: {
               id: custom.provider.id,
               label: custom.provider.name,
@@ -1166,27 +1335,36 @@ export function App() {
       .finally(() => {
         finishAssistant();
         const elapsedMs = Date.now() - startedAt;
-        const tokens = usage?.totalTokens;
-        if (tokens !== undefined) {
-          const at_ = Date.now();
-          setStore((current) =>
-            patchSession(current, sessionId, (session) => ({
+        const seconds = Math.max(1, Math.round(elapsedMs / 1000));
+        const at_ = Date.now();
+        setStore((current) =>
+          patchSession(current, sessionId, (session) => {
+            // 回合尾的真实摘要：本回合的 calls 实数（工具数、去重 MCP server 数、秒数）。
+            const turnCalls = session.calls.filter((entry) => turnCallIds.has(entry.id));
+            const toolCount = turnCalls.length;
+            const mcpCount = new Set(turnCalls.filter((entry) => entry.server !== "shell").map((entry) => entry.server)).size;
+            const summaryText =
+              toolCount === 0 ? `${seconds} 秒` : `${toolCount} 个工具 · ${mcpCount} 个 MCP · ${seconds} 秒`;
+            const tokens = usage?.totalTokens;
+            return {
               ...session,
               messages: [
                 ...session.messages,
                 {
                   id: `u-${at_}`,
                   role: "usage",
-                  text: `${tokens.toLocaleString("en-US")} tokens · ${Math.round(elapsedMs / 1000)}s`,
+                  text: summaryText,
+                  // tokens 是开发者读数（Kimi F-5）：可见行只放工具/MCP/秒，读数挂 title。
+                  ...(tokens === undefined ? {} : { title: `${tokens.toLocaleString("en-US")} tokens` }),
                   at: at_,
                 },
               ],
-            })),
-          );
-        }
+            };
+          }),
+        );
       });
     },
-    [agent, attachments, djContext, drafts, libraryContext, mainView, modelId, modelSettings, noteContext, openProjectId, patchSession, pendingRoute, projects, running, setDraftFor, store],
+    [agent, agentSettingValues, attachments, djContext, drafts, libraryContext, mainView, modelSettings, noteContext, openProjectId, patchSession, pendingRoute, projects, running, setDraftFor, store],
   );
 
   const stop = useCallback(() => {
@@ -1825,8 +2003,15 @@ export function App() {
           in settings), which is the rule the user asked for.
         */
         models={[...models, ...configuredMainModels]}
-        modelId={modelId}
+        modelId={agentSettingValues.modelId ?? currentModel?.id}
         onModelSelect={chooseModel}
+        effortId={activeEffort}
+        effortChoice={effortChoice}
+        onEffortSelect={chooseEffort}
+        access={agentSettingValues.access}
+        onAccessSelect={chooseAccess}
+        settingsBusy={running || settingsPending !== null}
+        settingsNotice={settingsError ?? settingsApplied ?? undefined}
         attachments={attachments}
         onAttach={(mention) =>
                   setAttachments((current) =>
@@ -3308,7 +3493,7 @@ const SUGGESTIONS = [
  * @returns the same answer, spoken-shaped.
  */
 function speechText(text: string): string {
-  return text
+  return stripThinkForSpeech(text)
     .replace(/```[\s\S]*?```/g, "（代码略）")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -3328,6 +3513,14 @@ function stageLabel(stage: string | undefined): string {
   if (stage === "separate") return "分离中";
   if (stage === "collect") return "整理分轨";
   return "排队中";
+}
+
+/**
+ * TTS 的最后一道兜底：正文里若仍混着 <think>（旧会话数据、或某条旁路写入），朗读前剥掉。
+ * bridge 的流式状态机是第一道，历史迁移是第二道——这里是保险丝，三道各管一段入口。
+ */
+function stripThinkForSpeech(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "");
 }
 
 /** Part names the synth uses, in the workbench's language. */

@@ -6337,3 +6337,86 @@
   border-color: rgb(10 11 9 / 7%);
   background: rgb(255 255 255 / 52%);
 }
+
+/* ---------- conversation controls：访问权限 chip 与风险门 ---------- */
+
+/* 完全访问档在 chip 上给出强提示，收起态就能看出当前风险等级。 */
+.sr-chip--access[data-access="danger-full-access"] .sr-chip-label {
+  color: var(--sr-danger);
+}
+
+.sr-chip--access[data-access="read-only"] .sr-chip-label {
+  color: var(--sr-label-tertiary);
+}
+
+/* 风险门：勾选 + 双按钮。未勾选时确认按钮保持可见但禁用（点了没反应 = 坏功能）。 */
+.sr-menu-danger {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 10px;
+  border: 0.5px solid color-mix(in srgb, var(--sr-danger) 40%, transparent);
+  border-radius: var(--sr-radius-sm);
+  background: color-mix(in srgb, var(--sr-danger) 7%, var(--sr-surface-2));
+}
+
+.sr-menu-danger-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--sr-label-primary);
+  font-size: 12.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.sr-menu-danger-check input {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--sr-danger);
+}
+
+.sr-menu-danger-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sr-menu-danger-confirm {
+  padding: 4px 12px;
+  border: none;
+  border-radius: var(--sr-radius-xs);
+  background: var(--sr-danger);
+  color: white;
+  font-size: 12px;
+}
+
+.sr-menu-danger-confirm:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sr-menu-danger-cancel {
+  padding: 4px 12px;
+  border: 0.5px solid var(--sr-border-l3);
+  border-radius: var(--sr-radius-xs);
+  background: transparent;
+  color: var(--sr-label-secondary);
+  font-size: 12px;
+}
+
+/* locked 的思考深度：模型内置推理，唯一档不可切换。 */
+.sr-menu-item[data-locked="true"] {
+  cursor: default;
+}
+
+.sr-menu-item[data-locked="true"] .sr-menu-hint {
+  display: block;
+  margin-top: 1px;
+}
+
+/* 回合进行中：模型/深度/权限 chip 禁用态。 */
+.sr-chip--button[data-busy="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

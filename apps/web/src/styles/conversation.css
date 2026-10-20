@@ -451,9 +451,9 @@
   word-break: break-word;
 }
 
-/* Turn accounting: tokens/耗时读数只活在 title 里（hover 才见，F-5），本体是一条细悬停带。 */
+/* Turn accounting: the visible line is the real turn summary（N 个工具 · M 个 MCP · X 秒）;
+   tokens stay in the title for developers (Kimi F-5). */
 .sr-usage {
-  height: 8px;
   margin: 2px 0 0;
   color: var(--sr-label-caption);
   font-size: 11px;
@@ -492,14 +492,47 @@
 }
 
 .sr-call-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   color: var(--sr-label-primary);
   font-weight: 500;
 }
 
-.sr-call-server,
+/* 收起行的身份串：MCP · server · tool（行业词不翻译，Kimi #484 第 7 条）。 */
+.sr-call-kind {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: var(--sr-radius-xs);
+  background: var(--sr-surface-2);
+  color: var(--sr-label-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.sr-call-tool {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-call-dot {
+  flex: none;
+  color: var(--sr-label-tertiary);
+}
+
 .sr-call-state {
   color: var(--sr-label-caption);
   font-size: 11px;
+}
+
+/* 耗时常驻在收起行——实测值才有，没有就不渲染这一段。 */
+.sr-call-timing {
+  flex: none;
+  color: var(--sr-label-caption);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .sr-call-summary {
@@ -514,6 +547,10 @@
   white-space: nowrap;
 }
 
+.sr-call-timing + .sr-call-state {
+  margin-left: 0;
+}
+
 .sr-call[data-state="error"] .sr-call-state {
   color: var(--sr-danger);
 }
@@ -522,9 +559,25 @@
   color: var(--sr-accent);
 }
 
+/* 展开态：参数 / 结果 / 错误 分区，各自一块可滚动的代码面。 */
+.sr-call-body {
+  margin: 2px 0 4px 26px;
+}
+
+.sr-call-section {
+  margin: 6px 0 0;
+}
+
+.sr-call-section-title {
+  margin: 0 0 3px;
+  color: var(--sr-label-tertiary);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
 .sr-call-detail {
   max-height: 320px;
-  margin: 6px 0 0;
+  margin: 0;
   padding: 10px 12px;
   border: var(--sr-shell-border);
   border-radius: var(--sr-radius-sm);
@@ -534,6 +587,27 @@
   font-size: 11.5px;
   line-height: 18px;
   white-space: pre-wrap;
+}
+
+/* 超长结果的「展开全部」——长结果先给预览，要全文再点。 */
+.sr-call-more {
+  margin: 4px 0 0;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--sr-label-tertiary);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.sr-call-more:hover {
+  color: var(--sr-label-primary);
+  text-decoration: underline;
+}
+
+.sr-call-section[data-label="错误"] .sr-call-detail {
+  border-color: color-mix(in srgb, var(--sr-danger) 35%, transparent);
+  color: var(--sr-danger);
 }
 
 /* ---------- composer ---------- */

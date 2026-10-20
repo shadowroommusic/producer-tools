@@ -46,6 +46,8 @@ export function Transcript({
               </p>
             );
           }
+          // 迁移把纯 think 消息剥成空正文时，气泡不渲染（reasoning 行已经承载了内容）。
+          if (message.text === "") return null;
           return (
             <div key={message.id} className="sr-msg-assistant">
               {message.text}
@@ -72,9 +74,16 @@ export function Transcript({
           );
         }
         if (message.role === "usage") {
-          // tokens 读数是开发者读数，不进对话页（Kimi F-5）：挂 title，hover 才见；
-          // 行本体收成一条细悬停带，页面默认态搜不到 "tokens" 字样。
-          return <p key={message.id} className="sr-usage sr-mono" title={message.text} />;
+          // 回合尾的真实摘要（N 个工具 · M 个 MCP · X 秒）必须可见；tokens 是开发者读数，
+          // 挂 title。旧数据没有 title 字段——整行读数照旧只挂 title，行为不变。
+          const legacy = message.title === undefined;
+          return legacy ? (
+            <p key={message.id} className="sr-usage sr-mono" title={message.text} />
+          ) : (
+            <p key={message.id} className="sr-usage sr-mono" title={message.title}>
+              {message.text}
+            </p>
+          );
         }
         const call = calls.find((entry) => entry.id === message.callId);
         return call === undefined ? null : <ToolCallRow key={message.id} call={call} />;

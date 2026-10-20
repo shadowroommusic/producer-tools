@@ -8,6 +8,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentModel, Mention } from "../lib/agent";
+import type { AgentAccess, EffortChoice } from "../lib/agent-settings";
+import { ACCESS_LEVELS, accessLabel } from "../lib/agent-settings";
 import type { CallState } from "../lib/call-states";
 import { IconArrowUp, IconChevronDown, IconMic, IconPlugin, IconPlus, IconStop } from "./icons";
 
@@ -26,6 +28,13 @@ export function Composer({
   pendingModels = [],
   modelId,
   onModelSelect,
+  effortId,
+  effortChoice,
+  onEffortSelect,
+  access,
+  onAccessSelect,
+  settingsBusy = false,
+  settingsNotice,
   attachments = [],
   onAttach,
   onDetach,
@@ -57,6 +66,16 @@ export function Composer({
   pendingModels?: AgentModel[];
   modelId?: string;
   onModelSelect?: (id: string) => void;
+  /** 当前生效的思考深度档；模型没有可映射档时为 undefined。 */
+  effortId?: string;
+  effortChoice?: EffortChoice;
+  onEffortSelect?: (effort: string) => void;
+  access?: AgentAccess;
+  onAccessSelect?: (access: AgentAccess) => void;
+  /** 回合进行中或设置更新中：模型/深度/权限三个控制全部禁用。 */
+  settingsBusy?: boolean;
+  /** 设置相关的反馈（成功「从下一轮开始生效」/ 失败原文），显示在输入框上方。 */
+  settingsNotice?: string;
   attachments?: Mention[];
   onAttach?: (mention: Mention) => void;
   onDetach?: (name: string) => void;
@@ -81,22 +100,52 @@ export function Composer({
   onEndVoice?: () => void;
   placeholder?: string;
 }) {
-  const [menu, setMenu] = useState<"none" | "attach" | "model" | "path">("none");
+  const [menu, setMenu] = useState<"none" | "attach" | "model" | "path" | "access">("none");
   const [path, setPath] = useState("");
+  /**
+   * 完全访问的风险门：每次打开都从零开始勾选，确认过了才提交——勾选状态绝不持久化
+   * （Kimi #484 第 5 条）。切到别的档或关菜单即复位。
+   */
+  const [dangerArmed, setDangerArmed] = useState(false);
+  const [dangerChecked, setDangerChecked] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const canSend = value.trim().length > 0 && !busy;
   const current = models.find((model) => model.id === modelId) ?? models.find((model) => model.isDefault) ?? models[0];
   const bars = useVoiceBars(voiceMode, voiceLevel);
+  const effort = effortChoice ?? { kind: "hidden" as const };
 
-  // Any click outside closes whichever popover is open.
+  // Any click outside closes whichever popover is open — and re-arms the danger gate so the
+  // checkbox can never survive into the next open (每次进入完全访问都要重新勾选).
   useEffect(() => {
     if (menu === "none") return;
     const onDown = (event: PointerEvent): void => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) setMenu("none");
+      if (root.current !== null && !root.current.contains(event.target as Node)) {
+        setMenu("none");
+        setDangerArmed(false);
+        setDangerChecked(false);
+      }
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
   }, [menu]);
+
+  const closeMenus = () => {
+    setMenu("none");
+    setDangerArmed(false);
+    setDangerChecked(false);
+  };
+
+  const chooseAccess = (level: AgentAccess) => {
+    if (level === "danger-full-access") return; // 只能从风险门的确认按钮进
+    closeMenus();
+    onAccessSelect?.(level);
+  };
+
+  const confirmDanger = () => {
+    if (!dangerChecked) return; // 未勾选：档位不变，什么都不提交
+    closeMenus();
+    onAccessSelect?.("danger-full-access");
+  };
 
   const attachPath = () => {
     const trimmed = path.trim();
@@ -112,9 +161,9 @@ export function Composer({
 
   return (
     <div className="sr-composer" data-variant={variant} ref={root}>
-      {notice && (
+      {(notice || settingsNotice) && (
         <div className="sr-composer-notice" role="status">
-          {notice}
+          {settingsNotice ?? notice}
         </div>
       )}
       {voiceMode ? (
@@ -236,12 +285,33 @@ export function Composer({
               className="sr-chip sr-chip--button"
               aria-haspopup="menu"
               aria-expanded={menu === "model"}
-              title={current?.description ?? "选择模型"}
+              title={settingsBusy ? "回合进行中" : (current?.description ?? "模型与思考深度")}
+              disabled={settingsBusy}
+              data-busy={settingsBusy || undefined}
               onClick={() => setMenu((open) => (open === "model" ? "none" : "model"))}
             >
-              <span className="sr-chip-label">{current?.displayName ?? "默认模型"}</span>
+              <span className="sr-chip-label">
+                {current?.displayName ?? "默认模型"}
+                {effortId !== undefined ? ` · ${effortId}` : ""}
+              </span>
               <IconChevronDown size={12} />
             </button>
+            {onAccessSelect !== undefined && access !== undefined && (
+              <button
+                type="button"
+                className="sr-chip sr-chip--button sr-chip--access"
+                aria-haspopup="menu"
+                aria-expanded={menu === "access"}
+                title={settingsBusy ? "回合进行中" : "访问权限（从下一轮开始生效）"}
+                disabled={settingsBusy}
+                data-busy={settingsBusy || undefined}
+                data-access={access}
+                onClick={() => setMenu((open) => (open === "access" ? "none" : "access"))}
+              >
+                <span className="sr-chip-label">{accessLabel(access)}</span>
+                <IconChevronDown size={12} />
+              </button>
+            )}
             <button
               type="button"
               className={busy ? "sr-send sr-send--stop" : "sr-send"}
@@ -316,7 +386,7 @@ export function Composer({
         )}
 
         {menu === "model" && (
-          <div className="sr-menu sr-menu--right" role="menu" aria-label="选择模型">
+          <div className="sr-menu sr-menu--right" role="menu" aria-label="模型与思考深度">
             <p className="sr-menu-title sr-mono">模型</p>
             {models.length === 0 && <p className="sr-menu-hint">内核没启动，读不到模型列表。</p>}
             {pendingModels.map((model) => (
@@ -343,13 +413,99 @@ export function Composer({
                 data-on={model.id === current?.id || undefined}
                 onClick={() => {
                   onModelSelect?.(model.id);
-                  setMenu("none");
+                  closeMenus();
                 }}
               >
                 <span className="sr-menu-label">{model.displayName}</span>
                 <span className="sr-menu-hint">{model.description}</span>
               </button>
             ))}
+            {effort.kind === "list" && onEffortSelect !== undefined && (
+              <>
+                <p className="sr-menu-title sr-mono">思考深度</p>
+                {effort.efforts.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={level === effortId}
+                    className="sr-menu-item"
+                    data-on={level === effortId || undefined}
+                    onClick={() => {
+                      onEffortSelect(level);
+                      closeMenus();
+                    }}
+                  >
+                    <span className="sr-menu-label">{level}</span>
+                  </button>
+                ))}
+              </>
+            )}
+            {effort.kind === "locked" && (
+              <>
+                <p className="sr-menu-title sr-mono">思考深度</p>
+                <div className="sr-menu-item" role="menuitemradio" aria-checked={true} data-locked="true">
+                  <span className="sr-menu-label">
+                    {effort.effort}
+                    <span className="sr-menu-hint">锁定——这个模型自己内置推理</span>
+                  </span>
+                </div>
+              </>
+            )}
+            {/* hidden：模型没有可映射的思考深度——整节不出现，也不往请求里带 effort。 */}
+          </div>
+        )}
+
+        {menu === "access" && access !== undefined && (
+          <div className="sr-menu sr-menu--right" role="menu" aria-label="访问权限">
+            <p className="sr-menu-title sr-mono">访问权限 · 从下一轮开始生效</p>
+            {ACCESS_LEVELS.filter((level) => !dangerArmed || level.id === "danger-full-access").map((level) => (
+              <button
+                key={level.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={level.id === access && !dangerArmed}
+                className="sr-menu-item"
+                data-on={level.id === access && !dangerArmed ? true : undefined}
+                onClick={() => {
+                  if (level.id === "danger-full-access") {
+                    setDangerArmed(true);
+                    setDangerChecked(false);
+                    return;
+                  }
+                  chooseAccess(level.id);
+                }}
+              >
+                <span className="sr-menu-label">{level.label}</span>
+                <span className="sr-menu-hint">{level.hint}</span>
+              </button>
+            ))}
+            {dangerArmed && (
+              <div className="sr-menu-danger" data-testid="access-danger-gate">
+                <label className="sr-menu-danger-check">
+                  <input
+                    type="checkbox"
+                    checked={dangerChecked}
+                    onChange={(event) => setDangerChecked(event.target.checked)}
+                  />
+                  <span>我了解风险：可读写整盘、回合内不再询问</span>
+                </label>
+                <div className="sr-menu-danger-row">
+                  <button type="button" className="sr-btn sr-menu-danger-cancel" onClick={closeMenus}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="sr-btn sr-menu-danger-confirm"
+                    disabled={!dangerChecked}
+                    aria-disabled={!dangerChecked}
+                    onClick={confirmDanger}
+                  >
+                    确认完全访问
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

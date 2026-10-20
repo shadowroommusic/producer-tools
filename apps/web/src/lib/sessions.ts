@@ -4,12 +4,13 @@
  * later — `messages` plus `calls` — so wiring the agent does not move any of this around.
  */
 import type { ToolCall } from "../components/ToolCallRow";
+import { normalizeAgentSettings, type AgentSettings } from "./agent-settings.ts";
 
 export type ChatMessage =
   | { id: string; role: "user"; text: string; at: number; scope?: MessageScope }
   | { id: string; role: "assistant"; text: string; at: number; streaming?: boolean }
   | { id: string; role: "reasoning"; text: string; at: number; streaming?: boolean }
-  | { id: string; role: "usage"; text: string; at: number }
+  | { id: string; role: "usage"; text: string; at: number; title?: string }
   | { id: string; role: "notice"; title: string; text: string; at: number }
   | { id: string; role: "tool"; callId: string; at: number };
 
@@ -23,6 +24,11 @@ export type Session = {
   scope: SessionScope;
   messages: ChatMessage[];
   calls: ToolCall[];
+  /**
+   * 会话自己的模型/思考深度/访问权限。未设置 = 继承全局默认快照（lib/agent-settings）；
+   * 只存经 thread/settings/updated 确认过的值。
+   */
+  settings?: AgentSettings;
 };
 
 export type SessionKind = "butler" | "studio" | "dj" | "library";
@@ -100,6 +106,11 @@ export function loadSessions(): SessionStore {
           typeof rawEntry.lastActiveAt === "number" && Number.isFinite(rawEntry.lastActiveAt)
             ? rawEntry.lastActiveAt
             : rawEntry.createdAt,
+        // 旧数据没有 settings 字段就保持没有——「未设置」表示继承全局默认（App 侧逐字段合并），
+        // 存过的才补齐形状（access 落回默认），不重写已经存过的值。
+        ...(rawEntry.settings === undefined ? {} : { settings: normalizeAgentSettings(rawEntry.settings) }),
+        // 历史里被存成正文的一部分 <think>：一次性幂等搬进 reasoning 行（见 migrateSessionThink）。
+        messages: migrateSessionThink(rawEntry.messages ?? []),
       };
     });
     const legacyActive = sessions.find((entry) => entry.id === parsed.activeId);
@@ -211,4 +222,61 @@ export function timeAgo(at: number, now = Date.now()): string {
   const days = Math.round(hours / 24);
   if (days < 7) return `${days} 天前`;
   return new Date(at).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+// ---------------------------------------------------------------------------
+// 历史 think 迁移（conversation-controls-20261020 阻断项的后半段）：
+//
+// bridge 现在在 delta 出口就把 <think> 剥成 reasoning 事件，但修复之前存进 localStorage 的
+// 会话把思考原文留在了 assistant 正文里（真机截图实证）。加载时做一次幂等迁移：
+// 思考内容搬成它前面的 reasoning 行、正文剥净；消息顺序不动、重复加载不重复插入。
+//
+// 剥离规则与 tools/think-stream.mjs 的 splitThinkBlocks 同源（闭合块成段、末尾未闭合算
+// 思考）；这里是整串一次成型，不需要跨 chunk 状态机。两份实现各自被单测钉住。
+// ---------------------------------------------------------------------------
+
+function splitThinkOnce(text: string): { clean: string; thinks: string[] } {
+  if (!text.includes("<think")) return { clean: text, thinks: [] };
+  const thinks: string[] = [];
+  let rest = text;
+  let clean = "";
+  for (;;) {
+    const open = rest.indexOf("<think>");
+    if (open === -1) {
+      clean += rest;
+      break;
+    }
+    clean += rest.slice(0, open);
+    rest = rest.slice(open + "<think>".length);
+    const close = rest.indexOf("</think>");
+    if (close === -1) {
+      thinks.push(rest);
+      break;
+    }
+    thinks.push(rest.slice(0, close));
+    rest = rest.slice(close + "</think>".length);
+  }
+  return { clean, thinks };
+}
+
+/** 幂等：think 已剥净的会话原样返回；同一条 assistant 的迁移行 id 稳定（`th-<id>-<n>`）。 */
+export function migrateSessionThink(messages: ChatMessage[]): ChatMessage[] {
+  if (!messages.some((message) => message.role === "assistant" && message.text.includes("<think"))) return messages;
+  const knownIds = new Set(messages.map((message) => message.id));
+  const next: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.text.includes("<think")) {
+      next.push(message);
+      continue;
+    }
+    const { clean, thinks } = splitThinkOnce(message.text);
+    thinks.forEach((think, index) => {
+      const id = `th-${message.id}-${index}`;
+      if (knownIds.has(id)) return; // 已迁过（老迁移行还在），不重复插入
+      knownIds.add(id);
+      next.push({ id, role: "reasoning", text: think, at: message.at });
+    });
+    next.push(clean === message.text ? message : { ...message, text: clean });
+  }
+  return next;
 }

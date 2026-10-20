@@ -5,11 +5,10 @@ let scopedMcpServers;
 let scopeAllowsTool;
 let developerInstructionsFor;
 let flattenAdapterTools;
-let createVisibleTextFilter;
 
 before(async () => {
   process.env.SHADOWROOM_ADAPTER_TEST = "1";
-  ({ scopedMcpServers, scopeAllowsTool, developerInstructionsFor, flattenAdapterTools, createVisibleTextFilter } =
+  ({ scopedMcpServers, scopeAllowsTool, developerInstructionsFor, flattenAdapterTools } =
     await import("../../../tools/agent-bridge.mjs"));
 });
 
@@ -103,11 +102,5 @@ test("chat providers receive MCP tools only, never Codex shell or subagent tools
   assert.deepEqual(nameMap.get("mcp__steward__route_intent"), { server: "steward", tool: "route_intent" });
 });
 
-test("streaming removes think blocks even when tags are split across deltas", () => {
-  const filter = createVisibleTextFilter();
-  const chunks = ["先", "说<thi", "nk>内部推理</thi", "nk>后说", "<think>再来", "</think>。"].map((chunk) =>
-    filter.push(chunk),
-  );
-  chunks.push(filter.finish());
-  assert.equal(chunks.join(""), "先说后说。");
-});
+// think 跨 chunk 的剥离已上收到 tools/think-stream.mjs 的流式状态机（bridge 的 delta 出口），
+// adapter 不再做可见文本过滤——同一场景的断言在 tests/think-stream.test.mjs。

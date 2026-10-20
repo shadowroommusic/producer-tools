@@ -3,10 +3,11 @@
  * Agent bridge: drives `codex app-server` and streams its events to the UI.
  *
  * The app-server speaks JSON-RPC over stdio; the browser cannot. This server owns that link and
- * exposes three endpoints:
+ * exposes these endpoints:
  *
  *   GET  /api/agent/health   → is the core up, which model/sandbox/cwd it runs with
- *   POST /api/agent/send     → { sessionId, text } → an SSE stream of the turn's events
+ *   POST /api/agent/send     → { sessionId, text, settings? } → an SSE stream of the turn's events
+ *   POST /api/agent/settings → { sessionId, model?, effort?, access } → confirmed thread settings
  *   POST /api/agent/interrupt→ { sessionId }
  *
  * One UI session maps to one Codex thread, created on the first message. Each thread receives only
@@ -27,6 +28,7 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { buildPickScript } from "./pick-script.mjs";
+import { createThinkFilter, accessPreset } from "./think-stream.mjs";
 
 const HOST = process.env.SHADOWROOM_AGENT_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.SHADOWROOM_AGENT_PORT ?? 8788);
@@ -328,57 +330,10 @@ const STT_PROTOCOLS = {
 };
 
 /**
- * MiniMax-style chat providers may embed reasoning as `<think>…</think>` inside `content`. Keep the
- * user-facing stream fast, but never let those internal tags become transcript text.
+ * `<think>…</think>` 的剥离已上收到唯一的实现：core 的 agentMessage/delta 出口
+ * （`think-stream.mjs` 的流式状态机，见 Agent#send 的 listener）。adapter 原样透传文本增量，
+ * 思考内容因此能一路流到出口、被转成 reasoning 事件发给前端——而不是在这里被静默丢掉。
  */
-export function createVisibleTextFilter() {
-  let inThink = false;
-  let pending = "";
-  return {
-    push(chunk) {
-      pending += String(chunk);
-      let visible = "";
-      for (;;) {
-        const lower = pending.toLowerCase();
-        if (inThink) {
-          const close = lower.indexOf("</think");
-          if (close === -1) {
-            pending = pending.slice(-7);
-            return visible;
-          }
-          const closeEnd = pending.indexOf(">", close + 7);
-          if (closeEnd === -1) {
-            pending = pending.slice(close);
-            return visible;
-          }
-          pending = pending.slice(closeEnd + 1);
-          inThink = false;
-          continue;
-        }
-        const open = lower.indexOf("<think");
-        if (open === -1) {
-          const keep = Math.min(pending.length, 5);
-          visible += pending.slice(0, pending.length - keep);
-          pending = pending.slice(-keep);
-          return visible;
-        }
-        visible += pending.slice(0, open);
-        const openEnd = pending.indexOf(">", open + 6);
-        if (openEnd === -1) {
-          pending = pending.slice(open);
-          return visible;
-        }
-        pending = pending.slice(openEnd + 1);
-        inThink = true;
-      }
-    },
-    finish() {
-      const visible = inThink ? "" : pending;
-      pending = "";
-      return visible;
-    },
-  };
-}
 
 /** 一轮 chat 请求：把文本与工具调用都收齐（文本仍然按流式解析）。 */
 export async function runChatRound({ base, headers, model, messages, tools, temperature, onTextDelta }) {
@@ -860,7 +815,13 @@ export async function startChatAdapter(provider, credential) {
       };
 
       for (; round < 8; round += 1) {
-        const visibleText = createVisibleTextFilter();
+        /**
+         * 文本增量原样透传——包括 <think> 标签。思考的剥离只发生在一个地方：core 把
+         * agentMessage/delta 流回来时，bridge 出口的流式状态机（think-stream.mjs）把 think 转成
+         * reasoning 事件、正文只发净文本。以前 adapter 在这里静默丢 think（用户看不到模型想了
+         * 什么），而且它的 finish() 兜底会把未闭合的标签原样吐回正文——真机上 think 直出的
+         * 泄漏就是那条路。一个规则一个实现（AGENTS.md 第一原则）。
+         */
         const outcome = await runChatRound({
           base,
           headers,
@@ -870,19 +831,12 @@ export async function startChatAdapter(provider, credential) {
           temperature: body.temperature,
           // 每轮的文本增量：第一轮直接透传给用户（首句）；后续轮的文本也照发（工具间的话）。
           onTextDelta: (delta) => {
-            const visibleDelta = visibleText.push(delta);
-            if (visibleDelta === "") return;
+            if (delta === "") return;
             openMessage();
-            messageText += visibleDelta;
-            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: visibleDelta });
+            messageText += delta;
+            emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta });
           },
         });
-        const visibleTail = visibleText.finish();
-        if (visibleTail !== "") {
-          openMessage();
-          messageText += visibleTail;
-          emit("response.output_text.delta", { item_id: "msg-1", output_index: 0, content_index: 0, delta: visibleTail });
-        }
         if (outcome.toolCalls.length === 0) {
           finalText = outcome.text;
           break;
@@ -1288,6 +1242,15 @@ class Agent {
     this.extraEnv = {};
     /** The loopback adapter currently serving the configured provider, if any. */
     this.adapter = null;
+    /**
+     * Think splitters per (thread, turn, item): `<think>` tags can straddle chunks, so each
+     * assistant item's delta stream owns one filter until its turn completes.
+     */
+    this.thinkFilters = new Map();
+    /** Which provider a session's thread was started on, so settings updates reuse that thread. */
+    this.threadProviders = new Map();
+    /** Per-session serialized settings updates; the newest request wins the chain tail. */
+    this.settingsChains = new Map();
   }
 
   get connected() {
@@ -1383,6 +1346,8 @@ class Agent {
     const child = this.child;
     this.child = null;
     this.threads.clear();
+    this.threadProviders.clear();
+    this.thinkFilters.clear();
     this.models = null;
     if (child !== null) {
       for (const pending of this.pending.values()) pending.reject(new Error("core restarted for a provider switch"));
@@ -1401,6 +1366,8 @@ class Agent {
     });
     this.child = child;
     this.threads.clear();
+    this.threadProviders.clear();
+    this.thinkFilters.clear();
     this.stderr = [];
 
     child.on("exit", () => {
@@ -1451,7 +1418,10 @@ class Agent {
       "initialize",
       {
         clientInfo: { name: "shadow-producers", title: "Shadow Producers", version: "0.0.0" },
-        capabilities: { experimentalApi: false, requestAttestation: false },
+        // thread/settings/update（模型/effort/权限的真实生效通道）只在 experimentalApi 下开放——
+        // 2026-10-20 实测：false 时 core 直接回 "thread/settings/update requires experimentalApi
+        // capability"。
+        capabilities: { experimentalApi: true, requestAttestation: false },
       },
       INIT_TIMEOUT_MS,
     );
@@ -1571,7 +1541,7 @@ class Agent {
   }
 
   /** The Codex thread behind a UI session, created on first use. */
-  async threadFor(sessionId, provider = null, scope = "butler", eventContext = {}) {
+  async threadFor(sessionId, provider = null, scope = "butler", eventContext = {}, threadSettings = null) {
     const known = this.threads.get(sessionId);
     if (known !== undefined) return known;
     await this.start();
@@ -1586,13 +1556,20 @@ class Agent {
      */
     const safeScope = Object.hasOwn(SCOPE_TOOL_ALLOWLIST, scope) ? scope : "butler";
     const config = { mcp_servers: scopedMcpServers(safeScope) };
+    // The access level a session starts with comes from the same table settings updates use; the env
+    // defaults only apply when the UI never said anything.
+    const preset = threadSettings?.access !== undefined ? accessPreset(threadSettings.access) : null;
     const params = {
       cwd: AGENT_CWD,
-      sandbox: SANDBOX,
-      approvalPolicy: APPROVAL,
+      sandbox: preset !== null ? preset.sandboxSlug : SANDBOX,
+      approvalPolicy: preset !== null ? preset.approvalPolicy : APPROVAL,
       developerInstructions: developerInstructionsFor(safeScope),
       config,
     };
+    // A provider choice overrides the model below (its branch sets `params.model` last).
+    if (typeof threadSettings?.model === "string" && threadSettings.model !== "") {
+      params.model = threadSettings.model;
+    }
     if (provider !== null && provider.baseUrl && provider.model) {
       const key = provider.credentialRef ? resolveCredential(provider.credentialRef)?.value ?? "" : "";
       const id = `shadowroom-${String(provider.id ?? "custom").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -1630,8 +1607,76 @@ class Agent {
     const threadId = started?.thread?.id;
     if (typeof threadId !== "string") throw new Error("thread/start returned no thread id");
     this.threads.set(sessionId, threadId);
+    this.threadProviders.set(sessionId, provider);
     this.info.model = started.model;
     return threadId;
+  }
+
+  /**
+   * Apply model / effort / access to a session's thread and wait for the core to confirm.
+   *
+   * Confirmation is the `thread/settings/updated` notification, not the RPC reply — the reply only
+   * says the request was accepted. Until the notification lands, nothing is "applied". A first call
+   * on an unknown session creates the thread (with the same settings in `thread/start`).
+   *
+   * Updates are serialized per session: rapid clicks queue up and the chain tail is the value that
+   * sticks, so the UI can never show A while the thread actually runs B.
+   */
+  applySettings(sessionId, settings, scope = "butler") {
+    const previous = this.settingsChains.get(sessionId) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(() => this.#applySettingsOnce(sessionId, settings, scope));
+    this.settingsChains.set(sessionId, run);
+    run.finally(() => {
+      if (this.settingsChains.get(sessionId) === run) this.settingsChains.delete(sessionId);
+    }).catch(() => undefined);
+    return run;
+  }
+
+  async #applySettingsOnce(sessionId, settings, scope) {
+    const preset = accessPreset(settings.access);
+    const provider = this.threadProviders.get(sessionId) ?? null;
+    const threadId = await this.threadFor(sessionId, provider, scope, {}, {
+      ...(typeof settings.model === "string" && settings.model !== "" ? { model: settings.model } : {}),
+      access: settings.access,
+    });
+    let teardown = () => undefined;
+    const confirmed = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        teardown();
+        reject(new Error("thread/settings/updated 没有在 15 秒内回来，这次设置不算生效"));
+      }, 15_000);
+      const listener = (message) => {
+        if (message.method !== "thread/settings/updated") return;
+        if (message.params?.threadId !== threadId) return;
+        teardown();
+        // 通知的形状是 {threadId, threadSettings: {…}}——回读的是内层（2026-10-21 实测）。
+        resolve(message.params.threadSettings ?? message.params);
+      };
+      const listeners = this.listeners.get(threadId) ?? new Set();
+      listeners.add(listener);
+      this.listeners.set(threadId, listeners);
+      teardown = () => {
+        clearTimeout(timer);
+        const current = this.listeners.get(threadId);
+        if (current !== undefined) {
+          current.delete(listener);
+          if (current.size === 0) this.listeners.delete(threadId);
+        }
+      };
+    });
+    try {
+      await this.request("thread/settings/update", {
+        threadId,
+        ...(typeof settings.model === "string" && settings.model !== "" ? { model: settings.model } : {}),
+        ...(typeof settings.effort === "string" && settings.effort !== "" ? { effort: settings.effort } : {}),
+        sandboxPolicy: preset.sandboxPolicy,
+        approvalPolicy: preset.approvalPolicy,
+      });
+      return await confirmed;
+    } catch (error) {
+      teardown();
+      throw error;
+    }
   }
 
   /**
@@ -1640,28 +1685,67 @@ class Agent {
    */
   async send(sessionId, text, onEvent, options = {}) {
     const safeScope = Object.hasOwn(SCOPE_TOOL_ALLOWLIST, options.scope ?? "") ? options.scope : "butler";
+    // Only a recognized access level overrides the env defaults — anything else means "not said".
+    const access =
+      typeof options.settings?.access === "string" &&
+      ["read-only", "workspace-write", "danger-full-access"].includes(options.settings.access)
+        ? options.settings.access
+        : undefined;
+    const threadSettings = {
+      ...(options.settings?.model !== undefined ? { model: options.settings.model } : {}),
+      ...(access !== undefined ? { access } : {}),
+    };
+    const settingsPreset = access !== undefined ? accessPreset(access) : null;
     const threadId = await this.threadFor(
       sessionId,
       options.provider ?? null,
       safeScope,
       options.eventContext ?? {},
+      threadSettings,
     );
+    /**
+     * `<think>…</think>` never reaches the answer text: each (thread, item) delta stream runs through
+     * its own splitter, think payloads go out as reasoning events, and the turn's end settles any
+     * tag that was still straddling a chunk. Keys carry the turn so a new turn starts a fresh filter
+     * even when the core reuses an itemId.
+     */
+    const thinkKey = (itemId, turnId) => `${threadId}:${turnId ?? ""}:${itemId}`;
+    const flushThink = (turnId) => {
+      for (const [key, entry] of this.thinkFilters) {
+        if (!key.startsWith(`${threadId}:${turnId ?? ""}:`)) continue;
+        const out = entry.filter.flush();
+        if (out.reasoning !== "") onEvent({ type: "reasoning", itemId: entry.itemId, turnId, text: out.reasoning });
+        if (out.text !== "") onEvent({ type: "delta", text: out.text, itemId: entry.itemId, turnId });
+        this.thinkFilters.delete(key);
+      }
+    };
     const unsubscribeAdapter = subscribeAdapterToolEvents(sessionId, safeScope, onEvent);
     const listener = (message) => {
       const { method, params } = message;
       if (method === "item/agentMessage/delta") {
-        onEvent({ type: "delta", text: params.delta });
+        const itemId = typeof params.itemId === "string" ? params.itemId : "msg";
+        const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+        const key = thinkKey(itemId, turnId);
+        let entry = this.thinkFilters.get(key);
+        if (entry === undefined) {
+          entry = { filter: createThinkFilter(), itemId };
+          this.thinkFilters.set(key, entry);
+        }
+        const out = entry.filter.push(String(params.delta ?? ""));
+        if (out.reasoning !== "") onEvent({ type: "reasoning", itemId, turnId, text: out.reasoning });
+        if (out.text !== "") onEvent({ type: "delta", text: out.text, itemId, turnId });
         return;
       }
       if (method === "item/reasoning/textDelta" || method === "item/reasoning/summaryTextDelta") {
-        onEvent({ type: "reasoning", itemId: params.itemId, text: params.delta });
+        onEvent({ type: "reasoning", itemId: params.itemId, turnId: params.turnId, text: params.delta });
         return;
       }
       if (method === "item/started" || method === "item/completed" || method === "item/updated") {
-        onEvent({ type: "item", phase: method.split("/")[1], item: params.item });
+        onEvent({ type: "item", phase: method.split("/")[1], item: params.item, turnId: params.turnId });
         return;
       }
       if (method === "turn/completed") {
+        flushThink(params.turn?.id);
         unsubscribeAdapter();
         onEvent({ type: "done", turn: params.turn });
         return;
@@ -1705,8 +1789,22 @@ class Agent {
           },
           ...(options.input ?? []),
         ],
-        ...(options.model === undefined ? {} : { model: options.model }),
-        ...(options.effort === undefined ? {} : { effort: options.effort }),
+        // One source of truth now: `settings` carries the session's confirmed model/effort/access.
+        // The bare model/effort options stay accepted so an older caller keeps working.
+        ...(options.settings?.model !== undefined || options.model !== undefined
+          ? { model: options.settings?.model ?? options.model }
+          : {}),
+        ...(options.settings?.effort !== undefined || options.effort !== undefined
+          ? { effort: options.settings?.effort ?? options.effort }
+          : {}),
+        // Same values as thread settings — the turn is the last line of defence against a settings
+        // update that never confirmed (2026-10-20 verified turn/start accepts these).
+        ...(settingsPreset === null
+          ? {}
+          : {
+              sandboxPolicy: settingsPreset.sandboxPolicy,
+              approvalPolicy: settingsPreset.approvalPolicy,
+            }),
       });
       const turnId = started?.turn?.id;
       // The turn runs asynchronously; the SSE stream stays open until turn/completed arrives.
@@ -2621,6 +2719,37 @@ const http = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/agent/settings") {
+      const body = await readBody(request);
+      const sessionId = String(body.sessionId ?? "");
+      if (sessionId === "") {
+        json(response, 400, { error: "sessionId is required" });
+        return;
+      }
+      if (
+        body.access !== "read-only" && body.access !== "workspace-write" && body.access !== "danger-full-access"
+      ) {
+        json(response, 400, { error: "access must be one of read-only | workspace-write | danger-full-access" });
+        return;
+      }
+      const scope = Object.hasOwn(SCOPE_TOOL_ALLOWLIST, body.scope) ? body.scope : "butler";
+      try {
+        const threadSettings = await agent.applySettings(
+          sessionId,
+          {
+            ...(typeof body.model === "string" && body.model !== "" ? { model: body.model } : {}),
+            ...(typeof body.effort === "string" && body.effort !== "" ? { effort: body.effort } : {}),
+            access: body.access,
+          },
+          scope,
+        );
+        json(response, 200, { sessionId, threadSettings });
+      } catch (error) {
+        json(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/agent/send") {
       const body = await readBody(request);
       const sessionId = String(body.sessionId ?? "");
@@ -2662,6 +2791,22 @@ const http = createServer(async (request, response) => {
               ...(typeof body.setId === "string" && body.setId !== "" ? { setId: body.setId } : {}),
             },
             model: typeof body.model === "string" && body.model !== "" ? body.model : undefined,
+            effort: typeof body.effort === "string" && body.effort !== "" ? body.effort : undefined,
+            settings:
+              body.settings !== null && typeof body.settings === "object"
+                ? {
+                    ...(typeof body.settings.model === "string" && body.settings.model !== ""
+                      ? { model: body.settings.model }
+                      : {}),
+                    ...(typeof body.settings.effort === "string" && body.settings.effort !== ""
+                      ? { effort: body.settings.effort }
+                      : {}),
+                    ...(typeof body.settings.access === "string" &&
+                    ["read-only", "workspace-write", "danger-full-access"].includes(body.settings.access)
+                      ? { access: body.settings.access }
+                      : {}),
+                  }
+                : null,
             provider:
               body.provider !== null && typeof body.provider === "object" && typeof body.provider.baseUrl === "string"
                 ? {
@@ -2673,7 +2818,6 @@ const http = createServer(async (request, response) => {
                     headers: body.provider.headers,
                   }
                 : null,
-            effort: typeof body.effort === "string" && body.effort !== "" ? body.effort : undefined,
             input: Array.isArray(body.mentions)
               ? body.mentions
                   .filter((mention) => typeof mention?.name === "string" && typeof mention?.path === "string")
