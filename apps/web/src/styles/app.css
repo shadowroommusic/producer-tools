@@ -3465,13 +3465,13 @@
   transition-duration: 800ms;
 }
 
-/* 通话没建立（failsafe）时的回退收束：≤400ms 快速退回，不演慢动画。 */
+/* 通话没建立（failsafe）时的回退收束：360ms 退回，不演慢动画。 */
 .sr-orb[data-fail-close] {
-  transition-duration: 400ms;
+  transition-duration: 360ms;
 }
 
 .sr-orb[data-fail-close] .sr-orb-ball {
-  transition-duration: 400ms;
+  transition-duration: 360ms;
 }
 
 .sr-orb--active {

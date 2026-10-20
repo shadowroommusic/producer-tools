@@ -43,7 +43,7 @@ const ORB_HIDDEN_KEY = "shadowroom.orb.hidden.v1";
 const OPEN_TRANSITION_MS = 1100;
 const CLOSE_TRANSITION_MS = 800;
 /** 通话没真正建立时的回退收束：≤400ms，快速退回，不再演一遍慢动画。 */
-const FAIL_CLOSE_MS = 400;
+const FAIL_CLOSE_MS = 360;
 const OPENING_FAILSAFE_MS = 3200;
 
 /**

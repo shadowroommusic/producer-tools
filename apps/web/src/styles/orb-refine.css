@@ -33,13 +33,13 @@
     sr-orb-sleep-halo 800ms cubic-bezier(0.32, 0, 0.2, 1) both;
 }
 
-/* Failsafe close (call never established): the 400ms rollback, not another slow farewell. */
+/* Failsafe close (call never established): the 360ms rollback, not another slow farewell. */
 .sr-orb[data-fail-close] .sr-orb-visual {
-  animation-duration: 400ms;
+  animation-duration: 360ms;
 }
 
 .sr-orb[data-fail-close] .sr-orb-visual::after {
-  animation-duration: 7s, 400ms;
+  animation-duration: 7s, 360ms;
 }
 
 .sr-orb-visual::before {
