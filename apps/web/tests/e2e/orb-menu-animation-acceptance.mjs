@@ -73,6 +73,45 @@ const openMenu = async () => {
       ),
     JSON.stringify(menu),
   );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelector(".sr-orb-menu") === null);
+
+  // macOS 触控板的 Control+点击会发 pointerdown(button=0, ctrlKey) + contextmenu。
+  const controlPoint = await page.locator(".sr-orb-ball").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.dispatchEvent(".sr-orb-ball", "pointerdown", {
+    button: 0,
+    buttons: 1,
+    ctrlKey: true,
+    clientX: controlPoint.x,
+    clientY: controlPoint.y,
+    pointerId: 41,
+    pointerType: "mouse",
+  });
+  await page.dispatchEvent(".sr-orb-ball", "contextmenu", {
+    button: 2,
+    ctrlKey: true,
+    clientX: controlPoint.x,
+    clientY: controlPoint.y,
+  });
+  await page.dispatchEvent(".sr-orb-ball", "pointerup", {
+    button: 0,
+    buttons: 0,
+    ctrlKey: true,
+    clientX: controlPoint.x,
+    clientY: controlPoint.y,
+    pointerId: 41,
+    pointerType: "mouse",
+  });
+  await page.waitForSelector(".sr-orb-menu", { timeout: 3000 });
+  check(
+    "①d macOS Control+点击只开菜单，不误触通话",
+    (await page.locator(".sr-orb-menu").count()) === 1 &&
+      (await page.locator(".sr-orb").getAttribute("data-mode")) === "idle",
+    "菜单已打开，球仍为 idle",
+  );
   await page.screenshot({ path: `${SHOTS}/context-menu.png` });
   await page.waitForTimeout(80);
   const focusedFirst = await page.evaluate(() => document.activeElement?.closest('[role="menuitem"]')?.textContent?.trim() ?? "");

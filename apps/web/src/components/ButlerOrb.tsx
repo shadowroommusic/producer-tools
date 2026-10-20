@@ -524,7 +524,12 @@ export function ButlerOrb({
     );
   };
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    /**
+     * macOS 的触控板 Control+点击会先发一个 button=0 的 pointerdown，再发 contextmenu。
+     * 如果这里不排除 ctrlKey，pointerup 会把同一次手势当成左键点击并启动通话，表现为
+     * “右键和左键做了同一件事”。设备发原生 button=2 时也走同一个提前返回。
+     */
+    if (event.button !== 0 || event.ctrlKey) return;
     if (menuOpen) {
       setMenuOpen(false);
       return;
