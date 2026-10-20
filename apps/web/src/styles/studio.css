@@ -12,6 +12,12 @@
 
 /* ------------------------------------------------------------------ 两层顶栏 */
 
+.sr-studio {
+  /* The dock changes Studio's own width while the viewport stays large. Piano-roll layout must
+     respond to this container, not to a viewport media query. */
+  container: studio / inline-size;
+}
+
 .sr-studio .sr-studio-head {
   display: flex;
   flex: none;
@@ -605,6 +611,6 @@
 .sr-studio .sr-studio-timeline-scroll {
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
 }

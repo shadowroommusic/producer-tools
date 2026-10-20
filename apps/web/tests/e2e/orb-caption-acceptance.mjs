@@ -234,7 +234,7 @@ await page.waitForTimeout(300);
 //    挂断走 Esc 而不是点球：点球自 F-1 起是「按当前态」的动作（断了=重连、没听清=重说），
 //    这台环境里浏览器识别必报 network → 通话停在 offline，点球会重连而不是挂断；Esc 永远挂断。
 await page.keyboard.press("Escape");
-await page.waitForTimeout(600);
+await page.waitForTimeout(900);
 const after = await readCaption();
 const orbMode = await page.locator(".sr-orb").getAttribute("data-mode");
 const statusWords = ["在听…", "在想…", "在说…"];

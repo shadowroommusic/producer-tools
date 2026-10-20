@@ -1628,6 +1628,19 @@
 .sr-studio-headers-scroll {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * The timeline is the one vertical scroll source. This list is moved by StudioPage's scroll
+ * handler so section/ruler offsets and every track row stay aligned without a second scrollbar.
+ */
+.sr-studio-track-list {
+  will-change: transform;
+}
+
+.sr-studio-headers[data-sections] .sr-studio-headers-top {
+  height: 54px;
 }
 
 .sr-track-head {
@@ -1795,23 +1808,34 @@
   min-height: 100%;
   /* Bar and beat grid: 56px per bar (BAR_PX), a stronger line every four bars. */
   background-image:
-    repeating-linear-gradient(to right, var(--sr-border-l3) 0 1px, transparent 1px 56px),
-    repeating-linear-gradient(to right, var(--sr-border-l2) 0 1px, transparent 1px 224px);
+    repeating-linear-gradient(to right, var(--sr-border-l3) 0 1px, transparent 1px var(--sr-bar-px, 56px)),
+    repeating-linear-gradient(to right, var(--sr-border-l2) 0 1px, transparent 1px var(--sr-major-px, 224px));
 }
 
 .sr-studio-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   height: 28px;
   border-bottom: var(--sr-shell-border);
+  background: var(--sr-surface);
+}
+
+.sr-studio-grid[data-sections] .sr-studio-ruler {
+  top: 26px;
 }
 
 /* 0 轨空态改成了居中创作起点卡（.sr-studio-hero，见 styles/studio.css）。 */
 
 /* The song's shape: one block per section, sitting on top of the bar ruler. */
 .sr-studio-sections {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 6;
   height: 26px;
   border-bottom: var(--sr-shell-border);
+  background: var(--sr-surface);
 }
 
 .sr-studio-section {
@@ -1962,15 +1986,28 @@
 }
 
 .sr-roll-head {
-  display: flex;
+  display: grid;
   flex: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "identity actions";
   align-items: center;
-  gap: 10px;
+  gap: 6px 12px;
   padding: 6px 12px;
   border-bottom: var(--sr-shell-border);
 }
 
+.sr-roll-heading {
+  grid-area: identity;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .sr-roll-title {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   font-size: var(--sr-text-13);
   font-weight: 500;
@@ -1979,15 +2016,28 @@
 }
 
 .sr-roll-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--sr-label-caption);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sr-roll-actions {
+  grid-area: actions;
   display: flex;
+  flex: none;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
+  min-width: 0;
+}
+
+.sr-roll-actions .sr-btn {
+  flex: none;
+  white-space: nowrap;
 }
 
 .sr-roll-body {
@@ -2046,11 +2096,29 @@
 }
 
 .sr-roll-tag {
+  flex: none;
   padding: 1px 6px;
   border-radius: var(--sr-radius-pill);
   background: var(--sr-hover);
   color: var(--sr-label-caption);
   font-size: 10px;
+  white-space: nowrap;
+}
+
+@container studio (max-width: 800px) {
+  .sr-roll-head {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "identity"
+      "actions";
+    align-items: start;
+  }
+
+  .sr-roll-actions {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 1px;
+  }
 }
 
 .sr-roll-surface {
@@ -3378,6 +3446,16 @@
   transform-origin: center;
 }
 
+.sr-orb[data-call-transition="opening"],
+.sr-orb[data-call-transition="open"],
+.sr-orb[data-call-transition="closing"] {
+  transition:
+    width 880ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 880ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 880ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 880ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .sr-orb--active {
   /* 说话/干活由 --sr-orb-size（112px）接管，不再叠 transform 缩放。 */
   transform: none;
@@ -3385,6 +3463,7 @@
 
 .sr-orb--dragging {
   opacity: 0.7; /* 拖动中 70% 透明（规格） */
+  transition: none !important;
 }
 
 .sr-orb-ball {
@@ -3394,6 +3473,9 @@
   border-radius: 50%;
   cursor: grab;
   pointer-events: auto;
+  transition:
+    width 880ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 880ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .sr-orb-ball:active {
@@ -3922,6 +4004,135 @@
   gap: 8px;
   transform-origin: bottom right;
   animation: sr-orb-panel-in 180ms ease-out;
+}
+
+/* Right-click surface: content is anchored to the orb and flips at the two viewport edges. */
+.sr-orb-menu {
+  position: absolute;
+  z-index: 72;
+  display: grid;
+  width: 208px;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--sr-accent) 18%, var(--sr-border-l3));
+  border-radius: 14px;
+  background:
+    radial-gradient(180px 90px at 0 0, color-mix(in srgb, var(--sr-accent) 7%, transparent), transparent 76%),
+    color-mix(in srgb, var(--sr-surface-elevated) 96%, transparent);
+  box-shadow:
+    0 18px 48px rgb(0 0 0 / 48%),
+    inset 0 1px rgb(255 255 255 / 4%);
+  backdrop-filter: blur(18px) saturate(1.2);
+  pointer-events: auto;
+  animation: sr-orb-menu-in 150ms ease-out;
+}
+
+.sr-orb-menu[data-vertical="below"] {
+  top: calc(100% + 10px);
+}
+
+.sr-orb-menu[data-vertical="above"] {
+  bottom: calc(100% + 10px);
+}
+
+.sr-orb-menu[data-horizontal="right"] {
+  right: 0;
+}
+
+.sr-orb-menu[data-horizontal="left"] {
+  left: 0;
+}
+
+.sr-orb-menu-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--sr-label-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-orb-menu-item:hover:not(:disabled),
+.sr-orb-menu-item:focus-visible {
+  background: color-mix(in srgb, var(--sr-accent) 8%, var(--sr-hover));
+  outline: none;
+}
+
+.sr-orb-menu-item:disabled {
+  color: var(--sr-label-tertiary);
+  cursor: not-allowed;
+}
+
+.sr-orb-menu-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  color: var(--sr-accent);
+  font-family: var(--sr-font-mono);
+  font-size: 12px;
+}
+
+.sr-orb-menu-item--quiet {
+  color: var(--sr-label-secondary);
+}
+
+.sr-orb-menu-item--quiet .sr-orb-menu-mark {
+  color: var(--sr-label-caption);
+}
+
+.sr-orb-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--sr-border-l3);
+}
+
+.sr-orb-restore {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--sr-accent) 26%, var(--sr-border-l3));
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 38% 34%, color-mix(in srgb, var(--sr-accent) 55%, white) 0 8%, transparent 28%),
+    color-mix(in srgb, var(--sr-surface-elevated) 92%, transparent);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 3%),
+    0 5px 18px rgb(0 0 0 / 42%),
+    0 0 18px color-mix(in srgb, var(--sr-accent) 16%, transparent);
+  cursor: pointer;
+}
+
+.sr-orb-restore span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sr-accent);
+  box-shadow: 0 0 8px var(--sr-accent);
+}
+
+.sr-orb-restore:hover,
+.sr-orb-restore:focus-visible {
+  border-color: color-mix(in srgb, var(--sr-accent) 52%, var(--sr-border-l3));
+  outline: none;
+}
+
+@keyframes sr-orb-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
 }
 
 @keyframes sr-orb-panel-in {

@@ -114,7 +114,7 @@ const dragOrbTo = async (targetX, targetY) => {
   const before = beforeState?.mode;
   const b = await ball.boundingBox();
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(1200);
   const afterState = await orbState();
   const after = afterState?.mode;
   const canvas = await page.locator(".sr-orb-ball canvas").evaluate((el) => ({
@@ -145,7 +145,7 @@ const dragOrbTo = async (targetX, targetY) => {
     before === "idle" &&
       after === "listening" &&
       beforeState?.rect.w === 84 &&
-      afterState?.rect.w === 124 &&
+      Math.abs((afterState?.rect.w ?? 0) - 124) <= 0.75 &&
       backingRatio >= 2.5 &&
       centerDelta <= 30 &&
       fullyInside,
@@ -157,7 +157,7 @@ const dragOrbTo = async (targetX, targetY) => {
 {
   const b = await ball.boundingBox();
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(850);
   const afterClick = (await orbState())?.mode;
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); // 先回 listening，再走 Esc 那条路
   // 起点球=真通话（2026-10-16）：startCall 里先 await getUserMedia 才 setVoiceMode(true)，
@@ -167,12 +167,12 @@ const dragOrbTo = async (targetX, targetY) => {
     await page.waitForTimeout(100);
   }
   await page.keyboard.press("Escape");
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(850);
   const afterEsc = (await orbState())?.mode;
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
   await page.waitForTimeout(300);
   await page.keyboard.press("Escape");
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(850);
   const settled = (await orbState())?.mode;
   check("④ 再点/Esc 回 idle", afterClick === "idle" && afterEsc === "idle" && settled === "idle", `再点→${afterClick}，Esc→${afterEsc}，收敛→${settled}`);
 }

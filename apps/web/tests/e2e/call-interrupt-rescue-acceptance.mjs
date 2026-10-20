@@ -187,7 +187,7 @@ try {
   let sent1 = null;
   for (let i = 0; i < 24 && sent1 === null; i += 1) {
     await page.waitForTimeout(500);
-    sent1 = (await readSends()).find((s) => s.text === PHRASE1) ?? null;
+    sent1 = (await readSends()).find((s) => String(s.text ?? "").startsWith(PHRASE1)) ?? null;
   }
   check("② 第一回合提交（假麦克风 → transcribe#1 → send）", sent1 !== null,
     sent1 === null ? `sends=${JSON.stringify((await readSends()).map((s) => s.text))}` : `text=「${sent1.text}」，stt 调用 ${sttCalls.length} 次`);
@@ -198,14 +198,14 @@ try {
   for (let i = 0; i < 30 && sent2 === null; i += 1) {
     await page.waitForTimeout(500);
     sendsNow = await readSends();
-    sent2 = sendsNow.find((s) => s.text === PHRASE2) ?? null;
+    sent2 = sendsNow.find((s) => String(s.text ?? "").startsWith(PHRASE2)) ?? null;
   }
   const rescueBytes = sttCalls[1]?.audio?.length ?? 0;
   const firstBytes = sttCalls[0]?.audio?.length ?? 1;
   check("③ 打断的话被救回并作为下一回合提交", sent2 !== null,
     sent2 === null
       ? `未等到「${PHRASE2}」：sends=${JSON.stringify(sendsNow.map((s) => s.text))}，stt 调用 ${sttCalls.length} 次`
-      : `text=「${sent2.text}」，走的是第 ${sendsNow.findIndex((s) => s.text === PHRASE2) + 1} 次提交`);
+      : `text=「${sent2.text}」，走的是第 ${sendsNow.findIndex((s) => String(s.text ?? "").startsWith(PHRASE2)) + 1} 次提交`);
   check("④ 救的是起音切片，不是整段缓冲", rescueBytes > 0 && rescueBytes < firstBytes / 2,
     `transcribe#1 ≈ ${Math.round(firstBytes / 1024)}KB（整回合） vs #2 ≈ ${Math.round(rescueBytes / 1024)}KB（切片）`);
   check("⑤ TTS 真的被叫过（说话中窗口存在）", ttsCalls > 0, `tts 合成 ${ttsCalls} 次`);

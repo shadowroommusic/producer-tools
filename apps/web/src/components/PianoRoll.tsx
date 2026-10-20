@@ -245,12 +245,14 @@ export function PianoRoll({
   return (
     <section className="sr-roll" aria-label="钢琴卷帘">
       <header className="sr-roll-head">
-        <span className="sr-roll-title">{clipName}</span>
-        <span className="sr-roll-meta sr-mono">
-          {notes.length} 个音符 · {bars} 小节 · 网格 1/{step * 4}
-          {keyParsed !== null && offKeyIds.size > 0 ? ` · 调外 ${offKeyIds.size}` : ""}
-        </span>
-        {drumKit && <span className="sr-roll-tag sr-mono">Drums · 按鼓件编辑</span>}
+        <div className="sr-roll-heading">
+          <span className="sr-roll-title">{clipName}</span>
+          <span className="sr-roll-meta sr-mono">
+            {notes.length} 个音符 · {bars} 小节 · 网格 1/{step * 4}
+            {keyParsed !== null && offKeyIds.size > 0 ? ` · 调外 ${offKeyIds.size}` : ""}
+          </span>
+          {drumKit && <span className="sr-roll-tag sr-mono">Drums · 按鼓件编辑</span>}
+        </div>
         <div className="sr-roll-actions">
           <button
             type="button"

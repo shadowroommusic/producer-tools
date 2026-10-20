@@ -3246,6 +3246,19 @@ export function App() {
         voiceLevel={() => level.current}
         onCallToggle={onOrbCallToggle}
         onCallEnd={hangUp}
+        onOpenHistory={() => {
+          setMainView("conversation");
+          setDockOpen(false);
+        }}
+        onNewConversation={() => {
+          startSession();
+          setMainView("conversation");
+          setDockOpen(false);
+        }}
+        onOpenSettings={() => {
+          setMainView("settings");
+          setDockOpen(false);
+        }}
         caption={
           /*
            * 通话没起来（麦克风被拒等）时也要把话说出来——否则用户点球什么都不发生，

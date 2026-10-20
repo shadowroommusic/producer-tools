@@ -27,6 +27,12 @@ import { GlassSphere } from "./OrbGlass";
 
 /** 球的外观态：单一来源在 lib/orb-states.ts（七态），这里只做别名，别再抄一份字面量。 */
 export type OrbMode = OrbVisualMode;
+type CallTransition = "idle" | "opening" | "open" | "closing";
+
+const ORB_HIDDEN_KEY = "shadowroom.orb.hidden.v1";
+const OPEN_TRANSITION_MS = 880;
+const CLOSE_TRANSITION_MS = 720;
+const OPENING_FAILSAFE_MS = 2400;
 
 /**
  * 尺寸：v6 把主体从容器角落撑满，闲置 84px、通话 124px。再小会牺牲能量核心和语音刻度的清晰度；
@@ -86,6 +92,9 @@ export function ButlerOrb({
   voiceLevel,
   onCallToggle,
   onCallEnd,
+  onOpenHistory,
+  onNewConversation,
+  onOpenSettings,
   caption,
   captionAction,
 }: {
@@ -108,6 +117,10 @@ export function ButlerOrb({
    * 键盘的约定不能跟着状态漂——Esc 永远挂断，与工具提示、AGENTS.md 的说法一致。
    */
   onCallEnd?: () => void;
+  /** 右键菜单里的全局导航；数据和页面切换都仍由 App 掌管。 */
+  onOpenHistory?: () => void;
+  onNewConversation?: () => void;
+  onOpenSettings?: () => void;
   /** 球旁的一行字幕：在听（识别中的话）/ 在想（等待）/ 在说（正在念的那句）。 */
   caption?: string;
   /**
@@ -122,6 +135,15 @@ export function ButlerOrb({
     const stored = loadPosition(window.localStorage);
     return stored === null ? defaultPosition(viewport, controls) : avoidProtected(stored, controls, viewport);
   });
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return window.localStorage.getItem(ORB_HIDDEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const previousSizeRef = useRef(ORB_SIZE);
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -185,8 +207,21 @@ export function ButlerOrb({
   const callOn = externalCall ? voiceMode === true : localCallOn;
   /** 通话五态 → 球外观态：映射在 lib/orb-states.ts（callOrbMode），这里不再就地猜。 */
   const callPhase: OrbMode = externalCall ? callOrbMode(voiceState) : "listening";
+  const [callTransition, setCallTransition] = useState<CallTransition>(callOn ? "open" : "idle");
+  const [closeShrink, setCloseShrink] = useState(false);
+  const lastCallMode = useRef<OrbMode>("listening");
+  const callOnRef = useRef(callOn);
+  const previousCallOn = useRef(callOn);
+  const transitionTimer = useRef<number | null>(null);
+  const openingFailsafe = useRef<number | null>(null);
+  const closeFrame = useRef<number | null>(null);
+  callOnRef.current = callOn;
+  if (callOn && callPhase !== "idle") lastCallMode.current = callPhase;
   const effectiveMode: OrbMode =
-    mode ?? forced ?? (running ? "working" : callOn ? callPhase : "idle");
+    forced ??
+    (callTransition === "closing" || (callTransition === "open" && !callOn)
+      ? lastCallMode.current
+      : mode ?? (running ? "working" : callOn ? callPhase : "idle"));
   // 验收钩子（生产不触发）：qa-orb-progress 只在强制模式下顶替 progress，让「干活」弧可确定性截图。
   const qaProgress =
     forced !== null && typeof window !== "undefined"
@@ -196,8 +231,16 @@ export function ButlerOrb({
         })()
       : undefined;
   const effectiveProgress = progress ?? qaProgress;
-  const active = effectiveMode !== "idle";
-  const size = active ? ACTIVE_SIZE : ORB_SIZE;
+  const active = callOn || callTransition === "opening" || callTransition === "closing" || effectiveMode !== "idle";
+  const size =
+    callTransition === "closing"
+      ? closeShrink
+        ? ORB_SIZE
+        : ACTIVE_SIZE
+      : callOn || callTransition === "opening" || (callTransition === "open" && !callOn) || effectiveMode !== "idle"
+        ? ACTIVE_SIZE
+        : ORB_SIZE;
+  const callBusy = callOn || callTransition !== "idle";
 
   // prefers-reduced-motion。
   useEffect(() => {
@@ -209,6 +252,67 @@ export function ButlerOrb({
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+
+  /**
+   * The call itself remains App-owned. This local state only lets the visual finish opening or
+   * closing even when the underlying state flips immediately.
+   */
+  useEffect(() => {
+    const wasOn = previousCallOn.current;
+    previousCallOn.current = callOn;
+    if (wasOn === callOn) return;
+    if (transitionTimer.current !== null) window.clearTimeout(transitionTimer.current);
+    if (callOn) {
+      if (openingFailsafe.current !== null) {
+        window.clearTimeout(openingFailsafe.current);
+        openingFailsafe.current = null;
+      }
+      setCloseShrink(false);
+      setCallTransition("opening");
+      transitionTimer.current = window.setTimeout(() => {
+        transitionTimer.current = null;
+        setCallTransition("open");
+      }, reducedMotion.current ? 0 : OPEN_TRANSITION_MS);
+    } else if (wasOn) {
+      if (reducedMotion.current) {
+        setCloseShrink(true);
+        setCallTransition("idle");
+      } else {
+        setCloseShrink(false);
+        setCallTransition("closing");
+        if (closeFrame.current !== null) cancelAnimationFrame(closeFrame.current);
+        closeFrame.current = requestAnimationFrame(() => {
+          closeFrame.current = requestAnimationFrame(() => {
+            closeFrame.current = null;
+            setCloseShrink(true);
+          });
+        });
+        transitionTimer.current = window.setTimeout(() => {
+          transitionTimer.current = null;
+          setCallTransition("idle");
+        }, CLOSE_TRANSITION_MS);
+      }
+    }
+    return () => {
+      if (transitionTimer.current !== null) {
+        window.clearTimeout(transitionTimer.current);
+        transitionTimer.current = null;
+      }
+      if (closeFrame.current !== null) {
+        cancelAnimationFrame(closeFrame.current);
+        closeFrame.current = null;
+      }
+    };
+  }, [callOn]);
+
+  useEffect(
+    () => () => {
+      if (transitionTimer.current !== null) window.clearTimeout(transitionTimer.current);
+      if (openingFailsafe.current !== null) window.clearTimeout(openingFailsafe.current);
+      if (closeFrame.current !== null) cancelAnimationFrame(closeFrame.current);
+    },
+    [],
+  );
 
   // 点球即通话：通话开着才持有共享麦克风引用；RMS 喂给玻璃珠。
   useEffect(() => {
@@ -258,6 +362,100 @@ export function ButlerOrb({
     else setLocalCallOn((on) => !on);
   }, [externalCall, onCallToggle]);
 
+  const startCallWithAnimation = useCallback(() => {
+    if (callOn || callTransition === "opening" || callTransition === "closing") return;
+    setExpanded(false);
+    setMenuOpen(false);
+    setCloseShrink(false);
+    setCallTransition("opening");
+    if (openingFailsafe.current !== null) window.clearTimeout(openingFailsafe.current);
+    openingFailsafe.current = window.setTimeout(() => {
+      openingFailsafe.current = null;
+      if (callOnRef.current) return;
+      setCloseShrink(false);
+      setCallTransition("closing");
+      if (closeFrame.current !== null) cancelAnimationFrame(closeFrame.current);
+      closeFrame.current = requestAnimationFrame(() => {
+        closeFrame.current = requestAnimationFrame(() => {
+          closeFrame.current = null;
+          setCloseShrink(true);
+        });
+      });
+      if (transitionTimer.current !== null) window.clearTimeout(transitionTimer.current);
+      transitionTimer.current = window.setTimeout(() => {
+        transitionTimer.current = null;
+        setCallTransition("idle");
+      }, CLOSE_TRANSITION_MS);
+    }, OPENING_FAILSAFE_MS);
+    toggleCall();
+  }, [callOn, callTransition, toggleCall]);
+
+  const resetOrbPosition = useCallback(() => {
+    setMenuOpen(false);
+    setPosition(defaultPosition({ width: window.innerWidth, height: window.innerHeight }, protectedRects(), size));
+  }, [size]);
+
+  const hideOrb = useCallback(() => {
+    if (callOn || callTransition !== "idle") return;
+    setMenuOpen(false);
+    setExpanded(false);
+    setHidden(true);
+    try {
+      window.localStorage.setItem(ORB_HIDDEN_KEY, "1");
+    } catch {
+      // A storage-denied browser can still hide for this session.
+    }
+  }, [callOn, callTransition]);
+
+  const restoreOrb = useCallback(() => {
+    setHidden(false);
+    try {
+      window.localStorage.removeItem(ORB_HIDDEN_KEY);
+    } catch {
+      // Nothing persisted; the current session still restores.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const menu = menuRef.current;
+    const focusables = () =>
+      [...(menu?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+    window.requestAnimationFrame(() => focusables()[0]?.focus());
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && menu?.contains(event.target)) return;
+      setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenuOpen(false);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const items = focusables();
+      if (items.length === 0) return;
+      const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : event.key === "ArrowDown"
+              ? (current + 1 + items.length) % items.length
+              : (current - 1 + items.length) % items.length;
+      items[next]?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [menuOpen]);
+
   // Esc 挂断。
   useEffect(() => {
     if (!callOn) return;
@@ -286,6 +484,10 @@ export function ButlerOrb({
   };
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
     (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
     dragRef.current = { startX: event.clientX, startY: event.clientY, originX: position.x, originY: position.y, moved: false };
   };
@@ -310,8 +512,17 @@ export function ButlerOrb({
     const wasClick = drag?.moved === false && hitBall(event);
     setDragging(false);
     if (wasDrag) setPosition(snapToViewport(position, { width: window.innerWidth, height: window.innerHeight }, protectedRects(), size));
-    if (wasClick && !expanded) toggleCall();
-    else if (wasClick) setExpanded(false);
+    if (!wasClick) return;
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    if (callOn) {
+      if (callTransition === "closing") return;
+      toggleCall();
+      return;
+    }
+    startCallWithAnimation();
   };
 
   useEffect(() => {
@@ -417,10 +628,33 @@ export function ButlerOrb({
     setCaptionGeom({ shift, placement });
   }, [caption, position.x, position.y, size, viewportTick]);
 
+  if (hidden) {
+    const restoreSize = 34;
+    return (
+      <button
+        type="button"
+        className="sr-orb-restore"
+        style={{
+          left: Math.max(8, position.x + (size - restoreSize) / 2),
+          top: Math.max(8, position.y + (size - restoreSize) / 2),
+        }}
+        aria-label="显示悬浮球"
+        title="显示悬浮球"
+        onClick={restoreOrb}
+      >
+        <span aria-hidden="true" />
+      </button>
+    );
+  }
+
+  const menuVertical = position.y + size + 12 + 260 <= window.innerHeight ? "below" : "above";
+  const menuHorizontal = position.x + size - 208 >= 8 ? "right" : "left";
+
   return (
     <div
       className={`sr-orb${expanded ? " sr-orb--expanded" : ""}${dragging ? " sr-orb--dragging" : ""}${active ? " sr-orb--active" : ""}`}
       data-mode={effectiveMode}
+      data-call-transition={callTransition}
       style={{ left: position.x, top: position.y, ["--sr-orb-size" as string]: `${size}px` }}
     >
       {/* 容器不吃事件（fixed 方块盖住内容就是 D2 的病根）；事件只挂在球面上，点空白穿透。 */}
@@ -428,6 +662,8 @@ export function ButlerOrb({
         className="sr-orb-ball"
         role="button"
         tabIndex={0}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
         aria-label={
           !callOn
             ? "开始通话"
@@ -439,24 +675,139 @@ export function ButlerOrb({
         }
         title={
           !callOn
-            ? "点一下开始说话（共享麦克风）· 拖动移动"
+            ? "点一下开始说话 · 右键打开菜单 · 拖动移动"
             : externalCall && voiceState === "unclear"
               ? "没听清：点一下重说 · 或按 Esc 挂断"
               : externalCall && voiceState === "offline"
                 ? "连接断了：点一下重连 · 或按 Esc 挂断"
-                : "通话中：再点一下或按 Esc 挂断"
+            : "通话中：再点一下或按 Esc 挂断 · 右键打开菜单"
         }
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setExpanded(false);
+          setMenuOpen(true);
+        }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") setExpanded((open) => !open);
+          if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+            event.preventDefault();
+            setExpanded(false);
+            setMenuOpen(true);
+            return;
+          }
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setExpanded((open) => !open);
+          }
         }}
       >
         {/* v6 材质分层：CSS 负责高清玻璃/双边缘，canvas 只画粒子和语音细节。 */}
         <GlassSphere size={size} mode={effectiveMode} level={levelRef.current} progress={effectiveProgress} reducedMotion={reducedMotion.current} />
       </div>
+      {menuOpen && (
+        <div
+          ref={menuRef}
+          className="sr-orb-menu"
+          role="menu"
+          aria-label="语音助手菜单"
+          data-vertical={menuVertical}
+          data-horizontal={menuHorizontal}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="sr-orb-menu-item"
+            disabled={callTransition === "opening" || callTransition === "closing"}
+            onClick={() => {
+              setMenuOpen(false);
+              if (callOn) (onCallEnd ?? onCallToggle)?.();
+              else startCallWithAnimation();
+            }}
+          >
+            <span className="sr-orb-menu-mark" aria-hidden="true">{callOn ? "■" : "▶"}</span>
+            <span>
+              {callTransition === "opening"
+                ? "正在连接…"
+                : callTransition === "closing"
+                  ? "正在挂断…"
+                  : callOn
+                    ? "结束通话"
+                    : "开始通话"}
+            </span>
+          </button>
+          {onOpenHistory !== undefined && (
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-orb-menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                onOpenHistory();
+              }}
+            >
+              <span className="sr-orb-menu-mark" aria-hidden="true">⌁</span>
+              <span>聊天记录</span>
+            </button>
+          )}
+          {onNewConversation !== undefined && (
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-orb-menu-item"
+              disabled={callBusy}
+              title={callBusy ? "先结束通话，再新建对话" : undefined}
+              onClick={() => {
+                setMenuOpen(false);
+                onNewConversation();
+              }}
+            >
+              <span className="sr-orb-menu-mark" aria-hidden="true">＋</span>
+              <span>新对话</span>
+            </button>
+          )}
+          <span className="sr-orb-menu-sep" aria-hidden="true" />
+          <button
+            type="button"
+            role="menuitem"
+            className="sr-orb-menu-item"
+            onClick={resetOrbPosition}
+          >
+            <span className="sr-orb-menu-mark" aria-hidden="true">◎</span>
+            <span>重置位置</span>
+          </button>
+          {onOpenSettings !== undefined && (
+            <button
+              type="button"
+              role="menuitem"
+              className="sr-orb-menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                onOpenSettings();
+              }}
+            >
+              <span className="sr-orb-menu-mark" aria-hidden="true">⚙</span>
+              <span>设置</span>
+            </button>
+          )}
+          <span className="sr-orb-menu-sep" aria-hidden="true" />
+          <button
+            type="button"
+            role="menuitem"
+            className="sr-orb-menu-item sr-orb-menu-item--quiet"
+            disabled={callBusy}
+            title={callBusy ? "先结束通话，再隐藏悬浮球" : "隐藏后会留下一个小恢复点"}
+            onClick={hideOrb}
+          >
+            <span className="sr-orb-menu-mark" aria-hidden="true">×</span>
+            <span>关闭悬浮球</span>
+          </button>
+        </div>
+      )}
       {/*
         通话字幕（用户 2026-10：「球看着还行但非常不清晰」）。三态各有一行字：
         在听（识别中的话）/ 在想（等待，含「正在识别…」「没听清」这类可读提示）/ 在说（正在念的句子）。

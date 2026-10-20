@@ -9,7 +9,7 @@
  * Clips with an audio file behind them are *played*: one `<audio>` per clip, started and stopped as
  * the playhead crosses its edges, volume following the track's fader and mute/solo.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StudioScratchPad } from "./StudioScratchPad";
 import { SCRATCH_MIME, removeScratchClip } from "../lib/studio-scratch";
 import { StudioSoundsDrawer } from "./StudioSoundsDrawer";
@@ -97,6 +97,72 @@ function formatClock(seconds: number): string {
   const minutes = Math.floor(safe / 60);
   const rest = safe % 60;
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+/**
+ * A transport number is committed on blur/Enter, not on every keystroke. The old controlled input
+ * clamped "1" to 40 before the user could type the "20" in "120" (measured: 120 → 40 → 220).
+ */
+function CommitNumberInput({
+  value,
+  min,
+  max,
+  className,
+  ariaLabel,
+  title,
+  onCommit,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  className: string;
+  ariaLabel: string;
+  title?: string;
+  onCommit: (next: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  const cancelled = useRef(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [focused, value]);
+
+  const commit = () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      setDraft(String(value));
+      return;
+    }
+    const parsed = Number(draft);
+    const next = Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : value;
+    setDraft(String(next));
+    if (next !== value) onCommit(next);
+  };
+
+  return (
+    <input
+      className={className}
+      value={draft}
+      inputMode="decimal"
+      aria-label={ariaLabel}
+      title={title}
+      onFocus={() => setFocused(true)}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        setFocused(false);
+        commit();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          cancelled.current = true;
+          setDraft(String(value));
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
 }
 
 /** 左抽屉开关的会话记忆键（sessionStorage：本次会话记住，关标签页即忘）。 */
@@ -327,6 +393,16 @@ export function StudioPage({
   /** Authoritative playhead in bars; the state copy is only for rendering. */
   const position = useRef(0);
   const frame = useRef<number | null>(null);
+  /**
+   * One vertical scroll source for both columns. The timeline owns `scrollTop`; the track list is
+   * transformed to match it. Letting each column scroll independently made a header describe lane 2
+   * while the clip it belonged to was off-screen (measured: the first and last rows diverged by 85px).
+   */
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const headersScrollRef = useRef<HTMLDivElement | null>(null);
+  const trackListRef = useRef<HTMLDivElement | null>(null);
+  /** A fader drag is one undo step; only its latest value is committed. */
+  const volumeGesture = useRef<string | null>(null);
 
   const barPx = BAR_PX * zoom;
   const secondsPerBar = 1 / barsPerSecond(project.bpm);
@@ -473,6 +549,58 @@ export function StudioPage({
     return end > 0 ? end : project.bars;
   }, [project.tracks, project.bars]);
 
+  /**
+   * The project has a declared length, but imported MIDI, recorded takes and agent renders can sit
+   * beyond it. The lane surface must still be wide enough to show those clips; otherwise their right
+   * edge disappears outside the scroll container and users cannot select or trim it.
+   */
+  const timelineBars = useMemo(() => {
+    const sectionEnd = (project.sections ?? []).reduce(
+      (end, section) => Math.max(end, section.start + section.bars),
+      0,
+    );
+    return Math.min(
+      maxBarsFor(project.bpm),
+      Math.max(project.bars, Math.ceil(contentEndBars), Math.ceil(sectionEnd)),
+    );
+  }, [project.bars, project.bpm, project.sections, contentEndBars]);
+
+  /**
+   * Track headers follow the timeline rather than owning a second scrollbar. The transform is
+   * written directly in the scroll handler so dragging 20 tracks never forces a React render per
+   * wheel event.
+   */
+  const syncTrackHeaders = useCallback(() => {
+    const timeline = timelineScrollRef.current;
+    const list = trackListRef.current;
+    if (timeline === null || list === null) return;
+    list.style.transform = `translate3d(0, ${-timeline.scrollTop}px, 0)`;
+  }, []);
+
+  useLayoutEffect(() => {
+    syncTrackHeaders();
+  }, [syncTrackHeaders, project.tracks.length, project.sections?.length]);
+
+  useEffect(() => {
+    const timeline = timelineScrollRef.current;
+    const headers = headersScrollRef.current;
+    if (timeline === null || headers === null) return;
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      timeline.scrollTop += event.deltaY;
+      syncTrackHeaders();
+    };
+    headers.addEventListener("wheel", onWheel, { passive: false });
+    const observer = new ResizeObserver(syncTrackHeaders);
+    observer.observe(timeline);
+    if (trackListRef.current !== null) observer.observe(trackListRef.current);
+    return () => {
+      headers.removeEventListener("wheel", onWheel);
+      observer.disconnect();
+    };
+  }, [syncTrackHeaders, project.tracks.length]);
+
   /** 工程调性解析一次（自由文本 → 音阶表）：PianoRoll 高亮与 clip 调外徽标共用。 */
   const projectKeyParsed = useMemo(() => parseProjectKey(project.key), [project.key]);
 
@@ -583,7 +711,7 @@ export function StudioPage({
   };
 
   const seek = (bar: number) => {
-    const clamped = Math.max(0, Math.min(project.bars - 0.001, bar));
+    const clamped = Math.max(0, Math.min(timelineBars - 0.001, bar));
     moveTo(clamped);
     syncPlayers(clamped, playing);
   };
@@ -651,11 +779,18 @@ export function StudioPage({
   }, [project.tracks]);
 
 
-  const updateTrack = (trackId: string, patch: (track: StudioTrack) => StudioTrack) => {
-    onChange((current) => ({
-      ...current,
-      tracks: current.tracks.map((track) => (track.id === trackId ? patch(track) : track)),
-    }));
+  const updateTrack = (
+    trackId: string,
+    patch: (track: StudioTrack) => StudioTrack,
+    options?: { transient?: boolean },
+  ) => {
+    onChange(
+      (current) => ({
+        ...current,
+        tracks: current.tracks.map((track) => (track.id === trackId ? patch(track) : track)),
+      }),
+      options,
+    );
   };
 
   const addClip = (trackId: string, start: number) => {
@@ -1113,7 +1248,7 @@ export function StudioPage({
   const elapsedLabel = formatClock(playhead * secondsPerBar);
   const totalLabel = formatClock(project.bars * secondsPerBar);
   const positionLabel = `${Math.floor(playhead) + 1}.${Math.floor((playhead % 1) * 4) + 1}`;
-  const grid = useMemo(() => Array.from({ length: project.bars }, (_, bar) => bar), [project.bars]);
+  const grid = useMemo(() => Array.from({ length: timelineBars }, (_, bar) => bar), [timelineBars]);
   /** 第一层身份栏的状态读数：轨道/片段数（录音时让位给计时，那是更要紧的状态）。 */
   const clipCount = project.tracks.reduce((count, track) => count + track.clips.length, 0);
   /** 工程名就地提交：空名不落盘（保持旧名），没改名不走撤销栈。 */
@@ -1159,6 +1294,29 @@ export function StudioPage({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [moreOpen]);
+
+  /**
+   * Escape belongs to the topmost floating menu. Previously only the transport ⋯ menu listened, so
+   * track/clip/ruler menus stayed on screen over the timeline and the next click hit the backdrop.
+   * Stopping the native event also prevents the global voice call from hanging up while a Studio
+   * menu is being dismissed.
+   */
+  const contextMenusOpen =
+    trackMenu !== null || headMenu !== null || structureMenu !== null || menu !== null;
+  useEffect(() => {
+    if (!contextMenusOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setTrackMenu(null);
+      setHeadMenu(null);
+      setStructureMenu(null);
+      setMenu(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [contextMenusOpen]);
 
   return (
     <div
@@ -1275,14 +1433,16 @@ export function StudioPage({
         <div className="sr-transport-fields">
           <label className="sr-transport-field">
             <span className="sr-field-label sr-mono">BPM</span>
-            <input
+            <CommitNumberInput
               className="sr-input sr-input--num"
               value={project.bpm}
-              inputMode="numeric"
-              onChange={(event) =>
+              min={40}
+              max={220}
+              ariaLabel="BPM"
+              onCommit={(bpm) =>
                 onChange((current) => ({
                   ...current,
-                  bpm: Math.max(40, Math.min(220, Number(event.target.value) || current.bpm)),
+                  bpm,
                 }))
               }
             />
@@ -1297,15 +1457,17 @@ export function StudioPage({
           </label>
           <label className="sr-transport-field">
             <span className="sr-field-label sr-mono">小节</span>
-            <input
+            <CommitNumberInput
               className="sr-input sr-input--num"
               value={project.bars}
+              min={4}
+              max={maxBarsFor(project.bpm)}
+              ariaLabel="工程小节数"
               title={`最长 ${maxBarsFor(project.bpm)} 小节（10:00 @ ${project.bpm} BPM）`}
-              inputMode="numeric"
-              onChange={(event) =>
+              onCommit={(bars) =>
                 onChange((current) => ({
                   ...current,
-                  bars: Math.max(4, Math.min(maxBarsFor(current.bpm), Number(event.target.value) || current.bars)),
+                  bars: Math.round(bars),
                 }))
               }
             />
@@ -1658,10 +1820,14 @@ export function StudioPage({
         {/* 0 轨时轨道头列整个不渲染：时间线吃满宽，不留一大块无标签的空白列；
             有轨时它是常驻的（轨道头不能被抽屉顶掉，抽屉只盖在上面）。 */}
         {project.tracks.length > 0 && (
-        <div className="sr-studio-headers">
+        <div
+          className="sr-studio-headers"
+          data-sections={project.sections !== undefined && project.sections.length > 0 ? true : undefined}
+        >
           <div className="sr-studio-headers-top" />
-          <div className="sr-studio-headers-scroll sr-scroll">
-            {project.tracks.map((track, trackIndex) => {
+          <div className="sr-studio-headers-scroll" ref={headersScrollRef}>
+            <div className="sr-studio-track-list" ref={trackListRef}>
+              {project.tracks.map((track, trackIndex) => {
               const live = !track.muted && (anySolo ? track.soloed : true);
               const type = trackTypeOf(track);
               const colour = trackColor(track, trackIndex);
@@ -1807,9 +1973,28 @@ export function StudioPage({
                       max={100}
                       value={track.volume}
                       aria-label={`${track.name} 音量`}
-                      onChange={(event) =>
-                        updateTrack(track.id, (current) => ({ ...current, volume: Number(event.target.value) }))
-                      }
+                      onPointerDown={() => {
+                        if (volumeGesture.current !== null) return;
+                        volumeGesture.current = track.id;
+                        onBeginEdit?.();
+                      }}
+                      onChange={(event) => {
+                        const transient = volumeGesture.current === track.id;
+                        updateTrack(
+                          track.id,
+                          (current) => ({ ...current, volume: Number(event.target.value) }),
+                          { transient },
+                        );
+                      }}
+                      onPointerUp={() => {
+                        if (volumeGesture.current === track.id) volumeGesture.current = null;
+                      }}
+                      onPointerCancel={() => {
+                        if (volumeGesture.current === track.id) volumeGesture.current = null;
+                      }}
+                      onLostPointerCapture={() => {
+                        if (volumeGesture.current === track.id) volumeGesture.current = null;
+                      }}
                     />
                     <button
                       type="button"
@@ -1844,18 +2029,27 @@ export function StudioPage({
                   </div>
                 </div>
               );
-            })}
+              })}
+            </div>
           </div>
         </div>
         )}
 
         {/* 外层管定位（空态 hero 铺在可视区上，不随横向滚动跑），内层管滚动。 */}
         <div className="sr-studio-timeline">
-          <div className="sr-studio-timeline-scroll sr-scroll">
+          <div
+            className="sr-studio-timeline-scroll sr-scroll"
+            ref={timelineScrollRef}
+            onScroll={syncTrackHeaders}
+          >
           <div
             className="sr-studio-grid"
             data-sections={project.sections !== undefined && project.sections.length > 0 ? true : undefined}
-            style={{ width: project.bars * barPx }}
+            style={{
+              width: timelineBars * barPx,
+              ["--sr-bar-px" as string]: `${barPx}px`,
+              ["--sr-major-px" as string]: `${barPx * 4}px`,
+            }}
           >
             {/* The song's shape, when the last render named it: intro / drop / break / drop 2 … */}
             {project.sections !== undefined && project.sections.length > 0 && (

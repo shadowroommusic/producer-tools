@@ -32,6 +32,8 @@ export type MidiSong = {
 const DRUM_PITCHES = new Set([35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 53, 54, 56, 57, 59]);
 
 type TempoPoint = { tick: number; usPerQuarter: number };
+/** A note keeps its channel until the format decides how many parts the track becomes. */
+type RawMidiNote = MidiNote & { channel: number };
 
 class Reader {
   index = 0;
@@ -132,7 +134,7 @@ export function parseMidiSong(bytes: Uint8Array): MidiSong {
   }
 
   const tempoPoints: TempoPoint[] = [];
-  const rawTracks: Array<{ name?: string; notes: MidiNote[]; channel: number }> = [];
+  const rawTracks: Array<{ name?: string; notes: RawMidiNote[]; channel: number }> = [];
 
   for (let trackIndex = 0; trackIndex < declaredTracks && !reader.done; trackIndex += 1) {
     if (reader.index + 8 > bytes.length) break;
@@ -147,7 +149,7 @@ export function parseMidiSong(bytes: Uint8Array): MidiSong {
     let tick = 0;
     let runningStatus = 0;
     let name: string | undefined;
-    const notes: MidiNote[] = [];
+    const notes: RawMidiNote[] = [];
     /** Note-ons waiting for their note-off, keyed by channel + pitch; a queue, so repeats behave. */
     const sounding = new Map<string, Array<{ startTick: number; velocity: number }>>();
     let channel = 0;
@@ -194,7 +196,15 @@ export function parseMidiSong(bytes: Uint8Array): MidiSong {
         } else {
           const queue = sounding.get(key) ?? [];
           const started = queue.shift();
-          if (started !== undefined) notes.push({ midi: pitch, start_ms: started.startTick, end_ms: tick, velocity: started.velocity });
+          if (started !== undefined) {
+            notes.push({
+              midi: pitch,
+              start_ms: started.startTick,
+              end_ms: tick,
+              velocity: started.velocity,
+              channel,
+            });
+          }
         }
         continue;
       }
@@ -213,9 +223,17 @@ export function parseMidiSong(bytes: Uint8Array): MidiSong {
      * length — half a beat is the convention every DAW uses for that.
      */
     for (const [key, queue] of sounding) {
-      const pitch = Number(key.split(":")[1]);
+      const [channelText, pitchText] = key.split(":");
+      const pitch = Number(pitchText);
+      const noteChannel = Number(channelText);
       for (const started of queue) {
-        notes.push({ midi: pitch, start_ms: started.startTick, end_ms: tick + 1, velocity: started.velocity });
+        notes.push({
+          midi: pitch,
+          start_ms: started.startTick,
+          end_ms: tick + 1,
+          velocity: started.velocity,
+          channel: noteChannel,
+        });
       }
     }
     if (notes.length > 0 || name !== undefined) rawTracks.push({ name, notes, channel });
@@ -248,9 +266,10 @@ export function parseMidiSong(bytes: Uint8Array): MidiSong {
     const byChannel = new Map<number, MidiNote[]>();
     for (const track of rawTracks) {
       for (const note of track.notes) {
-        const list = byChannel.get(track.channel) ?? [];
-        list.push(note);
-        byChannel.set(track.channel, list);
+        const { channel, ...pitched } = note;
+        const list = byChannel.get(channel) ?? [];
+        list.push(pitched);
+        byChannel.set(channel, list);
       }
     }
     for (const [channel, notes] of [...byChannel.entries()].sort((a, b) => a[0] - b[0])) {
@@ -265,14 +284,23 @@ export function parseMidiSong(bytes: Uint8Array): MidiSong {
     rawTracks
       .filter((track) => track.notes.length > 0)
       .forEach((track, index) => {
-        const drums = looksLikeDrums(track.notes, track.channel);
+        /**
+         * Format 1 normally gives one track one channel, but a malformed or merged export can put
+         * several there. Drum-channel wins because that channel has fixed General MIDI semantics;
+         * otherwise the first note's channel describes the track.
+         */
+        const channel = track.notes.some((note) => note.channel === 9)
+          ? 9
+          : track.notes[0]?.channel ?? track.channel;
+        const pitched = track.notes.map(({ channel: _channel, ...note }) => note);
+        const drums = looksLikeDrums(pitched, channel);
         parts.push({
           /* A nameless drum track is 鼓 — that is what the user would call it, and the studio's own
              drum track is called that too. */
           name: track.name ?? (drums ? "鼓" : `轨道 ${index + 1}`),
-          channel: track.channel,
+          channel,
           drums,
-          notes: track.notes.map((note) => ({ ...note, start_ms: msAtTick(note.start_ms), end_ms: msAtTick(note.end_ms) })),
+          notes: pitched.map((note) => ({ ...note, start_ms: msAtTick(note.start_ms), end_ms: msAtTick(note.end_ms) })),
         });
       });
   }

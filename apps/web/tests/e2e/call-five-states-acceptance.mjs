@@ -253,8 +253,16 @@ try {
     await page.locator(".sr-orb-ball").waitFor({ timeout: 20000 });
     await startCallAndReach(page, "unclear");
     await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.querySelector(".sr-orb")?.getAttribute("data-call-transition") === "closing",
+      undefined,
+      { timeout: 1000 },
+    );
+    const closing = await page.evaluate(() => ({
+      mode: document.querySelector(".sr-orb")?.getAttribute("data-mode"),
+      transition: document.querySelector(".sr-orb")?.getAttribute("data-call-transition"),
+    }));
     const armed = await page.evaluate(() => window.__callProbe?.unclearArmed() ?? null);
-    const idleNow = (await mode(page)) === "idle";
     await page.waitForTimeout(3000);
     const late = await page.evaluate(() => ({
       mode: document.querySelector(".sr-orb")?.getAttribute("data-mode"),
@@ -262,9 +270,14 @@ try {
       caption: document.querySelector("[data-call-caption]")?.textContent ?? "",
     }));
     check(
-      "⑤ unclear 里按 Esc 挂断 → 闹钟立刻清、3s 后不偷跑、提示不残留",
-      armed === false && idleNow && late.mode === "idle" && late.armed === false && late.caption.trim() === "",
-      `挂断瞬间闹钟=${armed} 球=${idleNow ? "idle" : "非 idle"}；3s 后 mode=${late.mode} 闹钟=${late.armed} 字幕=「${late.caption.trim()}」`,
+      "⑤ unclear 里按 Esc 挂断 → 先收束、闹钟立刻清、3s 后不偷跑",
+      armed === false &&
+        closing.transition === "closing" &&
+        closing.mode === "unclear" &&
+        late.mode === "idle" &&
+        late.armed === false &&
+        late.caption.trim() === "",
+      `挂断瞬间 ${closing.mode}/${closing.transition} 闹钟=${armed}；3s 后 mode=${late.mode} 闹钟=${late.armed} 字幕=「${late.caption.trim()}」`,
     );
     await page.context().close();
   }
@@ -278,7 +291,7 @@ try {
     await page.locator(".sr-orb-ball").waitFor({ timeout: 20000 });
     await startCallAndReach(page, "unclear");
     await page.locator("[data-caption-action]").click();
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(900);
     const after = await page.evaluate(() => ({
       mode: document.querySelector(".sr-orb")?.getAttribute("data-mode"),
       focused: document.activeElement?.className ?? "",
