@@ -3495,6 +3495,7 @@
   position: absolute;
   inset: 0;
   isolation: isolate;
+  contain: layout style;
   border-radius: 50%;
   pointer-events: none;
   transition:
@@ -3525,7 +3526,7 @@
   filter: blur(7px);
   mix-blend-mode: screen;
   opacity: calc(0.34 + var(--orb-glow) * 0.24);
-  animation: sr-orb-aura-breathe 4.8s ease-in-out infinite;
+  animation: sr-orb-aura-breathe 7.5s ease-in-out infinite;
   will-change: opacity, transform;
 }
 
@@ -3581,7 +3582,7 @@
     radial-gradient(ellipse at 78% 80%, hsl(calc(var(--orb-hue-b) * 1deg) 100% 80% / 0.08), transparent 20%);
   mix-blend-mode: screen;
   opacity: 0.32;
-  animation: sr-orb-sheen 7s ease-in-out infinite;
+  animation: sr-orb-sheen 11s ease-in-out infinite;
 }
 
 .sr-orb-rim {
@@ -3730,7 +3731,7 @@
 }
 
 .sr-orb-visual[data-mode="listening"] .sr-orb-aura {
-  animation: sr-orb-listen-aura 1.5s ease-in-out infinite;
+  animation: sr-orb-listen-aura 2.2s ease-in-out infinite;
 }
 
 .sr-orb-visual[data-mode="listening"] .sr-orb-rim--outer {
@@ -3742,7 +3743,7 @@
 }
 
 .sr-orb-visual[data-mode="thinking"] .sr-orb-aura {
-  animation: sr-orb-think-aura 0.95s ease-in-out infinite;
+  animation: sr-orb-think-aura 1.6s ease-in-out infinite;
 }
 
 .sr-orb-visual[data-mode="thinking"] .sr-orb-plasma {
@@ -3757,12 +3758,12 @@
   border-width: 1.35px;
   opacity: calc(0.62 + var(--orb-glow) * 0.34);
   filter: drop-shadow(0 0 3px hsl(calc(var(--orb-hue-b) * 1deg) 100% 74% / 0.82));
-  animation: sr-orb-orbit-spin 1.55s linear infinite;
+  animation: sr-orb-orbit-spin 2.6s linear infinite;
 }
 
 .sr-orb-visual[data-mode="thinking"] .sr-orb-orbit--two {
   opacity: 0.82;
-  animation-duration: 2.25s;
+  animation-duration: 3.8s;
   animation-direction: reverse;
 }
 
@@ -3775,7 +3776,7 @@
 }
 
 .sr-orb-visual[data-mode="speaking"] .sr-orb-aura {
-  animation: sr-orb-speak-aura 1.25s ease-in-out infinite;
+  animation: sr-orb-speak-aura 1.9s ease-in-out infinite;
 }
 
 .sr-orb-visual[data-mode="speaking"] .sr-orb-plasma {
@@ -3791,11 +3792,11 @@
 }
 
 .sr-orb-visual[data-mode="speaking"] .sr-orb-ripple {
-  animation: sr-orb-speaking-ripple 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  animation: sr-orb-speaking-ripple 3.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
 }
 
 .sr-orb-visual[data-mode="speaking"] .sr-orb-ripple--two {
-  animation-delay: 1.2s;
+  animation-delay: 1.6s;
 }
 
 .sr-orb-visual[data-mode="working"] .sr-orb-progress {
@@ -3807,11 +3808,11 @@
 }
 
 .sr-orb-visual[data-mode="working"] .sr-orb-aura {
-  animation-duration: 2.3s;
+  animation-duration: 3.4s;
 }
 
 .sr-orb-visual[data-mode="unclear"] .sr-orb-aura {
-  animation: sr-orb-unclear-pulse 1.8s ease-in-out infinite;
+  animation: sr-orb-unclear-pulse 2.6s ease-in-out infinite;
 }
 
 .sr-orb-visual[data-mode="offline"] .sr-orb-aura,
