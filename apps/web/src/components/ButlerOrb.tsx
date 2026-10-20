@@ -42,7 +42,7 @@ const ORB_HIDDEN_KEY = "shadowroom.orb.hidden.v1";
 /** 开合动画（Kimi 主审 2026-10-20）：opening 1100±100ms、closing 800±100ms；reduced-motion 0ms 直接落态。 */
 const OPEN_TRANSITION_MS = 1100;
 const CLOSE_TRANSITION_MS = 800;
-/** 通话没真正建立时的回退收束：≤400ms，快速退回，不再演一遍慢动画。 */
+/** 通话没真正建立时的回退收束：360ms，快速退回，不再演一遍慢动画。 */
 const FAIL_CLOSE_MS = 360;
 const OPENING_FAILSAFE_MS = 3200;
 
@@ -231,7 +231,7 @@ export function ButlerOrb({
   const callPhase: OrbMode = externalCall ? callOrbMode(voiceState) : "listening";
   const [callTransition, setCallTransition] = useState<CallTransition>(callOn ? "open" : "idle");
   const [closeShrink, setCloseShrink] = useState(false);
-  /** 通话没建立起来的收束走 400ms 快路径（data-fail-close），不占用户等一遍慢动画。 */
+  /** 通话没建立起来的收束走 360ms 快路径（data-fail-close），不占用户等一遍慢动画。 */
   const [failClose, setFailClose] = useState(false);
   const lastCallMode = useRef<OrbMode>("listening");
   const callOnRef = useRef(callOn);
