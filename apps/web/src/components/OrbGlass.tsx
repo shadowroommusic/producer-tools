@@ -294,6 +294,8 @@ export function GlassSphere({
       <span className="sr-orb-aura" aria-hidden="true" />
       <span className="sr-orb-ripple sr-orb-ripple--one" aria-hidden="true" />
       <span className="sr-orb-ripple sr-orb-ripple--two" aria-hidden="true" />
+      <span className="sr-orb-arc sr-orb-arc--one" aria-hidden="true" />
+      <span className="sr-orb-arc sr-orb-arc--two" aria-hidden="true" />
       <span className="sr-orb-orbit sr-orb-orbit--one" aria-hidden="true" />
       <span className="sr-orb-orbit sr-orb-orbit--two" aria-hidden="true" />
       <span className="sr-orb-shell" aria-hidden="true" />

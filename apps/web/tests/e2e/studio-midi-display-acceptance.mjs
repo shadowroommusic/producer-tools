@@ -91,6 +91,8 @@ for (const viewport of [
     const heading = document.querySelector(".sr-roll-heading");
     const actions = document.querySelector(".sr-roll-actions");
     const body = document.querySelector(".sr-roll-body");
+    const surface = document.querySelector(".sr-roll-surface");
+    const keys = document.querySelector(".sr-roll-keys");
     const buttons = [...document.querySelectorAll(".sr-roll-actions .sr-btn")];
     const hb = head === null ? null : rect(head);
     const ab = actions === null ? null : rect(actions);
@@ -116,6 +118,8 @@ for (const viewport of [
         clientHeight: body.clientHeight,
         scrollHeight: body.scrollHeight,
       },
+      surface: surface === null ? null : rect(surface),
+      keysWidth: keys === null ? 0 : rect(keys).width,
       buttonHeights: buttons.map((button) => Math.round(button.getBoundingClientRect().height)),
       whiteSpace: buttons.map((button) => getComputedStyle(button).whiteSpace),
       overlaps,
@@ -145,7 +149,9 @@ for (const viewport of [
       metrics.body.clientWidth > 0 &&
       metrics.body.clientHeight > 0 &&
       metrics.body.scrollWidth >= metrics.body.clientWidth &&
-      metrics.body.scrollHeight >= metrics.body.clientHeight,
+      metrics.body.scrollHeight >= metrics.body.clientHeight &&
+      metrics.surface !== null &&
+      metrics.surface.width >= metrics.body.clientWidth - metrics.keysWidth - 2,
     JSON.stringify(metrics.body),
   );
   await page.screenshot({
@@ -155,6 +161,44 @@ for (const viewport of [
 }
 
 check("零 Console error / pageerror", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+
+// Vertical note drags freeze the visible pitch window: the editor and scroll surface must not
+// grow/shrink under the pointer.
+{
+  const context = await browser.newContext({ viewport: { width: 1092, height: 605 } });
+  const page = await context.newPage();
+  await page.addInitScript((seed) => {
+    localStorage.setItem("shadowroom.view", "studio");
+    localStorage.setItem("shadowroom.studio.projects.v1", JSON.stringify({ projects: [seed] }));
+    localStorage.setItem("shadowroom.studio.open", seed.id);
+    localStorage.removeItem("shadowroom.orb.position");
+  }, project);
+  await page.goto(BASE, { waitUntil: "domcontentloaded" });
+  await page.locator('.sr-clip[aria-label="鼓 MIDI"]').waitFor({ timeout: 20000 });
+  await page.locator('.sr-clip[aria-label="鼓 MIDI"]').dblclick();
+  await page.waitForSelector(".sr-roll-note");
+  const before = await page.locator(".sr-roll").boundingBox();
+  const surfaceBefore = await page.locator(".sr-roll-surface").boundingBox();
+  const note = await page.locator(".sr-roll-note").first().boundingBox();
+  if (before === null || surfaceBefore === null || note === null) throw new Error("MIDI geometry missing");
+  await page.mouse.move(note.x + note.width / 2, note.y + note.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(note.x + note.width / 2, Math.max(0, note.y - 140), { steps: 12 });
+  const during = await page.locator(".sr-roll").boundingBox();
+  const surfaceDuring = await page.locator(".sr-roll-surface").boundingBox();
+  await page.mouse.up();
+  const after = await page.locator(".sr-roll").boundingBox();
+  check(
+    "垂直拖动音符不改变 MIDI 窗口/画布尺寸",
+    during !== null && after !== null &&
+      Math.abs(during.height - before.height) <= 1 &&
+      Math.abs((surfaceDuring?.height ?? 0) - surfaceBefore.height) <= 1 &&
+      Math.abs(after.height - before.height) <= 1,
+    `roll ${before.height} → ${during?.height} → ${after?.height}；surface ${surfaceBefore.height} → ${surfaceDuring?.height}`,
+  );
+  await context.close();
+}
+
 await browser.close();
 const failed = results.filter((ok) => !ok).length;
 console.log(`\n${results.length - failed}/${results.length} ${failed === 0 ? "PASS" : "FAIL"}`);

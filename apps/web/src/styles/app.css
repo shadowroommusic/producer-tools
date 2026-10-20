@@ -2124,12 +2124,17 @@
 .sr-roll-surface {
   position: relative;
   flex: none;
+  min-width: calc(100% - 46px);
   /* Bar lines brightest, beats next, sixteenths faintest — the same hierarchy the timeline uses. */
   background-image:
     repeating-linear-gradient(to right, var(--sr-border-l2) 0 1px, transparent 1px calc(var(--sr-roll-beat) * 4)),
     repeating-linear-gradient(to right, var(--sr-border-l3) 0 1px, transparent 1px var(--sr-roll-beat)),
     repeating-linear-gradient(to right, color-mix(in srgb, var(--sr-border-l3) 45%, transparent) 0 1px, transparent 1px calc(var(--sr-roll-beat) / 4)),
     repeating-linear-gradient(to bottom, var(--sr-border-l2) 0 1px, transparent 1px var(--sr-roll-row));
+}
+
+.sr-roll-body[data-kit] .sr-roll-surface {
+  min-width: calc(100% - 96px);
 }
 
 .sr-roll-note {

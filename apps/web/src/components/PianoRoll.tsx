@@ -72,12 +72,19 @@ export function PianoRoll({
   const [zoom, setZoom] = useState(1);
   const [step, setStep] = useState(4); // grid divisions per beat: 4 = sixteenths
   const [selection, setSelection] = useState<string[]>([]);
+  /**
+   * While a pointer drag is active the visible pitch window stays frozen. Recomputing the range
+   * from the moving note made the editor grow/shrink under the pointer.
+   */
+  const [gestureRange, setGestureRange] = useState<{ from: number; to: number } | null>(null);
   const drag = useRef<{
     kind: "move" | "resize" | "velocity";
     ids: string[];
     originX: number;
     originY: number;
     snapshot: StudioNote[];
+    minMidi: number;
+    maxMidi: number;
     pointerId: number;
     element: HTMLElement;
   } | null>(null);
@@ -102,16 +109,17 @@ export function PianoRoll({
    * dead end for anyone who learned a fill from a tutorial.
    */
   const rows = useMemo(() => {
-    if (!drumKit) return Array.from({ length: to - from + 1 }, (_, index) => to - index);
+    const range = gestureRange ?? { from, to };
+    if (!drumKit) return Array.from({ length: range.to - range.from + 1 }, (_, index) => range.to - index);
     const pitches = new Set<number>();
     /* An empty drum clip opens as five rows — a kit, not a keyboard. Once a note exists outside the
        kit (a tom fill someone typed in), its row is added rather than being hidden. */
     if (notes.length > 0) {
-      for (let pitch = from; pitch <= to; pitch += 1) pitches.add(pitch);
+      for (let pitch = range.from; pitch <= range.to; pitch += 1) pitches.add(pitch);
     }
     for (const voice of DRUM_VOICES) pitches.add(voice.midi);
     return [...pitches].sort((a, b) => b - a);
-  }, [drumKit, from, to, notes.length]);
+  }, [drumKit, from, to, gestureRange, notes.length]);
   /** Row index instead of `to - midi`: the drum rows are not contiguous. */
   const rowOf = (midi: number) => {
     const index = rows.indexOf(midi);
@@ -129,6 +137,7 @@ export function PianoRoll({
     const active = drag.current;
     if (active === null) return;
     drag.current = null;
+    setGestureRange(null);
     if (active.element.hasPointerCapture(active.pointerId)) {
       active.element.releasePointerCapture(active.pointerId);
     }
@@ -142,12 +151,15 @@ export function PianoRoll({
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     onBeginEdit();
+    setGestureRange({ from, to });
     drag.current = {
       kind,
       ids,
       originX: event.clientX,
       originY: event.clientY,
       snapshot: notes,
+      minMidi: Math.min(...rows),
+      maxMidi: Math.max(...rows),
       pointerId: event.pointerId,
       element: event.currentTarget,
     };
@@ -175,7 +187,7 @@ export function PianoRoll({
           ...note,
           start_ms: Math.round(start),
           end_ms: Math.round(start + length),
-          midi: Math.max(0, Math.min(127, note.midi + dyRows)),
+          midi: Math.max(active.minMidi, Math.min(active.maxMidi, note.midi + dyRows)),
         };
       }),
     );

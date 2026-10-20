@@ -61,6 +61,8 @@ const SETTLE_MS = 450; // 点击后等 React 提交 + notice 动画
 const REVIEW_NOTES = {
   "studio/从磁盘选取…":
     "罐头网络伪影：按钮唯一效果是 POST /api/agent/pick 后按返回 paths 落轨（StudioPage:1482 pickAndImport），罐头 {ok:true} 无 paths → 静默返回。真桥下会弹选择器，需真桥复核。",
+  "studio/导入音频":
+    "原生文件选择器：按钮只触发隐藏的 input[type=file]，外部对话框不会改变 DOM；Studio 完整走查已验证真实导入。",
   "library/重新学习":
     "有反馈（哈希签名测到 DOM 变化：busy 闪动 + 结果区更新；第一轮长度签名曾漏检）。注意罐头 /api/call 下学习结果为空态文案，真桥数字需真桥复核。",
   "dj/新建 set":

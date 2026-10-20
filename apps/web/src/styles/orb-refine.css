@@ -126,6 +126,38 @@
   opacity: 0;
 }
 
+.sr-orb-arc {
+  position: absolute;
+  z-index: 3;
+  inset: 5%;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 20deg,
+    transparent 0 48%,
+    hsl(calc(var(--orb-hue-b) * 1deg) 100% 76% / 0) 57%,
+    hsl(calc(var(--orb-hue-b) * 1deg) 100% 78% / 0.18) 68%,
+    hsl(calc(var(--orb-hue-a) * 1deg) 100% 82% / 0.78) 76%,
+    hsl(calc(var(--orb-hue-b) * 1deg) 100% 72% / 0.12) 82%,
+    transparent 91%
+  );
+  -webkit-mask: radial-gradient(circle, transparent 62%, #000 63.4%, #000 66%, transparent 67%);
+  mask: radial-gradient(circle, transparent 62%, #000 63.4%, #000 66%, transparent 67%);
+  opacity: 0.32;
+  filter:
+    saturate(1.25)
+    drop-shadow(0 0 3px hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.5));
+  animation: sr-orb-magnetic-trace 10s linear infinite;
+  pointer-events: none;
+}
+
+.sr-orb-arc--two {
+  inset: 13%;
+  opacity: 0.2;
+  animation-duration: 15s;
+  animation-direction: reverse;
+  transform: rotate(122deg) scaleY(0.74);
+}
+
 .sr-orb-orbit {
   inset: 14%;
   opacity: 0.18;
@@ -170,6 +202,10 @@
   scale: calc(1 + var(--orb-voice) * 0.07);
 }
 
+.sr-orb-visual[data-mode="listening"] .sr-orb-arc {
+  opacity: 0.5;
+}
+
 .sr-orb-visual[data-mode="thinking"]::before {
   animation:
     sr-energy-morph 2.4s ease-in-out infinite alternate,
@@ -190,6 +226,10 @@
 
 .sr-orb-visual[data-mode="speaking"] .sr-orb-ripple {
   border-color: hsl(calc(var(--orb-hue-a) * 1deg) 100% 72% / 0.34);
+}
+
+.sr-orb-visual[data-mode="speaking"] .sr-orb-arc {
+  opacity: 0.62;
 }
 
 .sr-orb-visual[data-mode="working"]::before {
@@ -320,6 +360,12 @@
   }
 }
 
+@keyframes sr-orb-magnetic-trace {
+  to {
+    rotate: 1turn;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sr-orb[data-call-transition],
   .sr-orb[data-call-transition] .sr-orb-ball {
@@ -328,6 +374,10 @@
 
   .sr-orb[data-call-transition] .sr-orb-visual,
   .sr-orb[data-call-transition] .sr-orb-visual::after {
+    animation: none !important;
+  }
+
+  .sr-orb-arc {
     animation: none !important;
   }
 
