@@ -54,7 +54,8 @@ import {
 } from "../lib/providerModel";
 import { PROVIDER_PRESETS, presetByBaseUrl, presetById, providerDefaultsFromPreset } from "../lib/providerPresets";
 import { deleteCredential, listCredentials, listProviderModels, saveCredential, testRole, type CredentialInfo } from "../lib/providerApi";
-import { createSystemTTS, type VoiceInfo } from "../lib/tts";
+import { createSystemTTS, playAudioBuffer, type VoiceInfo } from "../lib/tts";
+import { createTTS, planWithVoice, resolveSpeechPlan } from "../lib/speech-plan";
 
 const ENDPOINT_FORMATS: Array<{ id: EndpointFormat; label: string }> = [
   { id: "chat_completions", label: "Chat Completions（OpenAI 兼容）" },
@@ -190,41 +191,26 @@ export function SettingsPage({
   }, []);
 
   /**
-   * 试听：合成走 bridge（key 不出本机），播放走 WebAudio —— 这样「听到的」和通话里用的
-   * 完全是同一条链路，不会出现「试听好听、通话还是系统音」这种幻觉。
+   * 试听：和通话走同一个 plan（同一份端点/协议/模型/音色），不另拼一份请求。
+   *
+   * 以前这里自己 fetch 一次 `/api/agent/providers/tts`，于是"试听成功、通话还是旧音色"——
+   * 形状一旦有两份，迟早会分叉。现在只把 plan 的 voice 换成被点的那个。
    */
   const previewProviderVoice = useCallback(
     async (voiceId: string) => {
-      const tts = roleTarget(settings, "tts");
-      if (tts === undefined) return;
-      const target = capabilityTarget(tts.provider, "tts");
+      if (roleTarget(settings, "tts") === undefined) return;
+      const plan = planWithVoice(resolveSpeechPlan(settings), voiceId === "" ? undefined : voiceId);
       setPreviewing(true);
+      setNotice(null);
       try {
-        const response = await fetch("/api/agent/providers/tts", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "你好，我是 Shadow，这段声音以后就是我在通话里的样子。",
-            baseUrl: target.baseUrl,
-            credentialRef: tts.provider.credentialRef,
-            protocol: target.protocol,
-            model: tts.model,
-            ...(voiceId === "" ? {} : { voice: voiceId }),
-          }),
-        });
-        const payload = (await response.json()) as { audio?: string; error?: string };
-        if (payload.audio === undefined) throw new Error(payload.error ?? "没有音频返回");
-        const binary = atob(payload.audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-        const context = new AudioContext();
-        const buffer = await context.decodeAudioData(bytes.buffer);
-        const source = context.createBufferSource();
-        source.buffer = buffer;
-        source.connect(context.destination);
-        source.start();
-        setNotice(`试听：${tts.provider.name} · ${voiceId === "" ? "默认音色" : voiceId}｜${Math.round(buffer.duration * 10) / 10} 秒`);
+        const buffer = await createTTS(plan).synthesize("你好，我是 Shadow，这段声音以后就是我在通话里的样子。");
+        if (buffer === null) throw new Error("这家供应商没有返回音频");
+        await playAudioBuffer(buffer);
+        setNotice(
+          `试听：${plan.kind === "bridge" ? plan.providerName : "系统音色"} · ${voiceId === "" ? "默认音色" : voiceId}｜${Math.round(buffer.duration * 10) / 10} 秒`,
+        );
       } catch (cause) {
+        // 失败必须说出来：静默就是"换了音色以后它不说话了"。
         setNotice(`试听失败：${cause instanceof Error ? cause.message : String(cause)}`);
       } finally {
         setPreviewing(false);
@@ -578,11 +564,13 @@ export function SettingsPage({
                   type="button"
                   className="sr-btn"
                   disabled={voices.length === 0}
-                  onClick={() =>
-                    createSystemTTS().speak("你好，我是 Shadow，这段声音以后就是我在通话里的样子。", {
-                      voiceId: voiceId === "" ? undefined : voiceId,
-                    })
-                  }
+                  onClick={() => {
+                    // 和通话同一个 plan：系统音色没有音频流，只能走 speak（ADR-019）。
+                    const plan = planWithVoice(resolveSpeechPlan(settings), voiceId === "" ? undefined : voiceId);
+                    createTTS(plan).speak("你好，我是 Shadow，这段声音以后就是我在通话里的样子。", {
+                      onError: (message) => setNotice(`试听失败：${message}`),
+                    });
+                  }}
                 >
                   试听
                 </button>

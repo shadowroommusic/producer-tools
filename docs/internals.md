@@ -129,6 +129,37 @@ What was measured and matters:
 - **Models.** `GET /api/agent/models` proxies `model/list` (cached) so the composer's picker is the
   core's own list; the chosen model and reasoning effort travel with `turn/start`.
 
+## The voice call: what it says, and in what order
+
+The call used to read the whole answer (thinking tags included) and cut sentences off when the next
+delta arrived. Three pure modules now own the parts that can be tested without a microphone:
+
+| Module | Rule |
+| --- | --- |
+| `lib/speech-turn.ts` | Only the assistant message created **for this turn** may be spoken. The effect keys on the last assistant message, and between "user stopped" and `submit` that is still the previous answer — that is how an old long answer got read again. |
+| `lib/speech-text.ts` | The spoken version is derived, not the transcript: `<think>`, fenced code, tables, URLs, absolute paths and tool-log lines are stripped; `brief` = ≤2 sentences / ≤70 chars, `detail` = ≤8 / ≤360 (hard ceiling 420). Over budget it retreats to a clause boundary; with no punctuation at all it clips and ends with `……` — the one place a fragment is allowed, because there is no legal boundary to stop at. |
+| `lib/tts-queue.ts` | One speaker, strictly serial, 120 ms between sentences, `clear()` idempotent. Pushing a sentence never cancels the one playing (that was the truncation); a late `onEnd` after `clear()` cannot start the next one (epoch). A sentence that never calls back times out (30 s) so the call cannot stick in "speaking". |
+
+`lib/speech-plan.ts` answers "which voice" exactly once: `system` reads `shadowroom.voice`, a
+configured TTS role reads `shadowroom.tts.voice`, and the plan's `key` (`bridge:provider:model:credential:voice`)
+is what callers compare to rebuild the provider. Settings' 试听 uses the same plan (with
+`planWithVoice()` for an unselected row), so preview and call cannot diverge again. `speak()` no
+longer cancels implicitly, and synthesis failures surface through `onError` with the provider's
+message instead of a silent `onEnd`.
+
+Not wired yet (next slice, after the conversation-controls branch lands): `App.tsx` still uses the
+old effect, and `[voice_turn]` prompt injection lives in `App.tsx` / `agent-bridge.mjs`.
+
+**Why no framework.** The turn length, the sentence budget and the voice switch are the actual
+complaints; Pipecat/LiveKit would add a Python media service or a LiveKit server and a second turn
+contract, Moshi would replace the Codex brain with a 7B speech model, TEN's licence is unidentified
+(`NOASSERTION`). All were reviewed as references only: `pipecat-ai/pipecat` (BSD-2-Clause),
+`livekit/agents` (Apache-2.0), `kyutai-labs/moshi` (Apache-2.0), `TEN-framework/ten-framework`
+(licence unclear), `huggingface/speech-to-speech` (Apache-2.0), `FireRedChat` (Apache-2.0),
+`KoljaB/RealtimeVoiceChat` (no LICENSE file in the repository — ideas only, no code). **No code was
+copied from any of them.** The interfaces (`STTProvider`, `TTSProvider`, the turn/barge-in detectors)
+stay the seam if a media framework is ever adopted.
+
 ## Browser storage keys
 
 | Key | Owner | Contents |
@@ -142,6 +173,8 @@ What was measured and matters:
 | `shadowroom.studio.open` | `lib/studio.ts` | which project was open last |
 | `shadowroom.view` | `App.tsx` | the page a reload should land on (workbench / conversation / plugins / plugin / studio / dj / library / settings) |
 | `shadowroom.dock.by-view.v1` | `App.tsx` | dock open/closed independently for workbench / studio / dj / library |
+| `shadowroom.voice` | `lib/speech-plan.ts` | system voice for calls (`voiceURI` or name) |
+| `shadowroom.tts.voice` | `lib/speech-plan.ts` | provider voice id; part of the provider instance key |
 
 ## Where things live in the UI
 
