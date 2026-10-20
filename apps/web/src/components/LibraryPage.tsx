@@ -959,7 +959,9 @@ export function LibraryPage({ onContextChange }: { onContextChange?: (context: L
                     <span className="sr-lib-row-title">{track.title ?? track.path.split("/").pop()}</span>
                     {dupBadges.has(track.id) ? <span className="sr-lib-dupbadge">{dupBadges.get(track.id)}</span> : null}
                   </span>
-                  <span className="sr-lib-row-artist">{track.artist ?? "未知艺人"}</span>
+                  <span className="sr-lib-row-artist" title={track.artist ?? "未知艺人"}>
+                    {track.artist ?? "未知艺人"}
+                  </span>
                 </span>
                 <span className="sr-lib-row-bpm">{track.bpm === null ? "—" : `${Math.round(track.bpm * 10) / 10}`}</span>
                 <span className="sr-lib-row-key">{track.camelot ?? track.key ?? "—"}</span>

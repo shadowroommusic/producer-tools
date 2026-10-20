@@ -711,8 +711,13 @@
 
 .sr-lib-row-artist {
   max-width: none;
+  overflow: visible;
   color: var(--sr-label-caption);
   font-size: 10px;
+  line-height: 14px;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .sr-lib-row-bpm,

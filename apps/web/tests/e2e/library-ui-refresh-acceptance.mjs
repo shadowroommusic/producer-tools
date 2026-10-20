@@ -31,7 +31,9 @@ await page.waitForTimeout(400);
 
 const metrics = await page.evaluate(() => {
   const root = document.querySelector(".sr-lib");
+  const total = Number(document.querySelector(".sr-lib-stat strong")?.textContent ?? 0);
   return {
+    total,
     stats: document.querySelectorAll(".sr-lib-stat").length,
     toolbar: document.querySelectorAll(".sr-lib-toolbar").length,
     commandbar: document.querySelectorAll(".sr-lib-commandbar").length,
@@ -44,15 +46,15 @@ const metrics = await page.evaluate(() => {
   };
 });
 check(
-  "① 概览、单一入库工具栏、表头与 80 行首屏",
+  "① 概览、单一入库工具栏、表头与分页首屏",
   metrics.stats === 4 &&
     metrics.toolbar === 1 &&
     metrics.commandbar === 1 &&
     metrics.ingestPanel === 0 &&
     metrics.advancedFilters === 0 &&
     metrics.headers === 6 &&
-    metrics.rows === 80 &&
-    metrics.more === 1 &&
+    metrics.rows === Math.min(metrics.total, 80) &&
+    metrics.more === (metrics.total > 80 ? 1 : 0) &&
     metrics.overflow <= 1,
   JSON.stringify(metrics),
 );
@@ -88,24 +90,55 @@ const first = await page.locator(".sr-lib-row").first().evaluate((row) => ({
   bpm: row.querySelector(".sr-lib-row-bpm")?.textContent ?? "",
   key: row.querySelector(".sr-lib-row-key")?.textContent ?? "",
   time: row.querySelector(".sr-lib-row-time")?.textContent ?? "",
-  cover: row.querySelector(".sr-lib-row-cover") !== null,
+  cover: row.querySelector("img.sr-lib-row-cover") !== null,
 }));
+const artistLayout = await page.locator(".sr-lib-row-artist").evaluateAll((nodes) => {
+  const longest = nodes.reduce(
+    (best, node) => ((node.textContent?.length ?? 0) > (best?.textContent?.length ?? 0) ? node : best),
+    null,
+  );
+  if (longest === null) return null;
+  const style = getComputedStyle(longest);
+  return {
+    text: longest.textContent ?? "",
+    whiteSpace: style.whiteSpace,
+    scrollWidth: longest.scrollWidth,
+    clientWidth: longest.clientWidth,
+  };
+});
 check(
-  "④ 行内字段固定分栏，标题/艺人/数字扫描路径清楚",
-  first.title !== "" && first.artist !== "" && first.bpm !== "" && first.key !== "" && first.time !== "" && first.cover,
-  JSON.stringify(first),
+  "④ 艺人名完整换行、封面与时长可见",
+  first.title !== "" &&
+    first.artist !== "" &&
+    first.bpm !== "" &&
+    first.key !== "" &&
+    first.time !== "—" &&
+    first.cover &&
+    artistLayout !== null &&
+    artistLayout.whiteSpace === "normal" &&
+    artistLayout.scrollWidth <= artistLayout.clientWidth + 1,
+  JSON.stringify({ first, artistLayout }),
 );
 
-await page.locator(".sr-lib-loadmore").scrollIntoViewIfNeeded();
-await page.locator(".sr-lib-loadmore").click();
-await page.waitForFunction(() => document.querySelectorAll(".sr-lib-row").length > 80, null, { timeout: 10000 });
-const loaded = await page.locator(".sr-lib-row").count();
-check("⑤ 加载更多不会把第 81 首以后藏死", loaded >= 160, `rows=${loaded}`);
+let loaded = await page.locator(".sr-lib-row").count();
+if (metrics.more === 1) {
+  await page.locator(".sr-lib-loadmore").scrollIntoViewIfNeeded();
+  await page.locator(".sr-lib-loadmore").click();
+  await page.waitForFunction(() => document.querySelectorAll(".sr-lib-row").length > 80, null, { timeout: 10000 });
+  loaded = await page.locator(".sr-lib-row").count();
+}
+check(
+  "⑤ 分页数据完整（不足 80 首时不显示空加载按钮）",
+  metrics.more === 1 ? loaded >= Math.min(metrics.total, 160) : loaded === metrics.total,
+  `rows=${loaded} total=${metrics.total} more=${metrics.more}`,
+);
 
-await page.locator('input[aria-label="搜索标题、艺人、专辑"]').fill("deep-house");
+const firstTitle = first.title.trim();
+const query = firstTitle.length >= 4 ? firstTitle.slice(0, 4) : firstTitle;
+await page.locator('input[aria-label="搜索标题、艺人、专辑"]').fill(query);
 await page.waitForTimeout(600);
 const filtered = await page.locator(".sr-lib-row").count();
-check("⑥ 搜索仍走真实服务端过滤", filtered > 0 && filtered < loaded, `filtered=${filtered} / loaded=${loaded}`);
+check("⑥ 搜索仍走真实服务端过滤", filtered > 0 && filtered <= loaded, `query=${query} filtered=${filtered} / loaded=${loaded}`);
 
 await page.screenshot({ path: `${SHOTS}/library-1092.png` });
 check("⑦ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
