@@ -227,7 +227,8 @@ const dragOrbTo = async (targetX, targetY) => {
       return el === null || !el.closest(".sr-orb");
     });
   }, corners);
-  // 找一颗中屏按钮，把球拖过去盖住它（球心错开，按钮中心落在容器角区、不在 32px 命中圆内）
+  // 找一颗中屏按钮，把球拖过去盖住它。默认球径 84px：偏 (30,-30) 时距球心约 42.4px，
+  // 已在 39px 球面命中半径外，同时仍落在 84px 方形容器的透明角区。
   const target = await page.evaluate(() => {
     for (const b of document.querySelectorAll("button")) {
       if (b.closest(".sr-orb")) continue;
@@ -236,14 +237,19 @@ const dragOrbTo = async (targetX, targetY) => {
       const cy = rect.y + rect.height / 2;
       if (rect.width < 8 || rect.height < 8) continue;
       if (cx < 360 || cx > innerWidth - 360 || cy < 120 || cy > innerHeight - 220) continue;
-      return { cx, cy, label: (b.textContent || b.getAttribute("aria-label") || "?").trim().slice(0, 24) };
+      return {
+        cx,
+        cy,
+        label: (b.textContent || b.getAttribute("aria-label") || "?").trim().slice(0, 24),
+        className: b.className,
+      };
     }
     return null;
   });
   let clickReceived = false;
   let targetInfo = "(no target button)";
   if (target !== null) {
-    await dragOrbTo(target.cx - 26, target.cy + 26); // 容器角区盖住按钮中心：偏 (26,-26)，距球心 ≈36.8>32
+    await dragOrbTo(target.cx - 30, target.cy + 30);
     const covered = await page.evaluate((t) => {
       const el = document.elementFromPoint(t.cx, t.cy);
       return el !== null && el.closest("button") !== null && !el.closest(".sr-orb");
@@ -260,7 +266,15 @@ const dragOrbTo = async (targetX, targetY) => {
       clickReceived = (await page.evaluate(() => window.__orbPassThrough ?? 0)) === 1;
       targetInfo = `按钮「${target.label}」@(${Math.round(target.cx)},${Math.round(target.cy)})`;
     } else {
-      targetInfo = `目标点未穿透到按钮（elementFromPoint 不在按钮上）`;
+      const hit = await page.evaluate((t) => {
+        const el = document.elementFromPoint(t.cx, t.cy);
+        const orbRect = document.querySelector(".sr-orb")?.getBoundingClientRect();
+        return {
+          element: el === null ? "null" : `${el.tagName}.${String(el.className || "")}`,
+          orb: orbRect ? { x: orbRect.x, y: orbRect.y, w: orbRect.width, h: orbRect.height } : null,
+        };
+      }, target);
+      targetInfo = `目标「${target.label}」(${target.className}) 未穿透；命中=${hit.element} orb=${JSON.stringify(hit.orb)}`;
     }
   }
   check("⑦ 球外点击穿透（含容器四角）", cornerPass.every(Boolean) && clickReceived, `四角穿透=${cornerPass.every(Boolean)}，下层按钮收到 click=${clickReceived}（${targetInfo}）`);

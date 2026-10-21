@@ -3494,6 +3494,8 @@
   width: var(--sr-orb-hit-size, var(--sr-orb-size, 72px));
   height: var(--sr-orb-hit-size, var(--sr-orb-size, 72px));
   border-radius: 50%;
+  /* border-radius 只影响绘制，不影响命中测试；圆形裁切让方形容器的透明角真正穿透。 */
+  clip-path: circle(50%);
   cursor: grab;
   pointer-events: auto;
   /* User size changes are immediate; only the call handshake animates geometry. */

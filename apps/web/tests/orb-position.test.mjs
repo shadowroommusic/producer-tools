@@ -1,6 +1,6 @@
 /**
- * 悬浮球 v5 的位置纯逻辑（lib/orb-position.ts）：夹取/吸附/保护退避/持久化。
- * 离屏可验——viewport 与受保护矩形都由测试喂进来，不碰 window/document。
+ * 悬浮球的位置纯逻辑（lib/orb-position.ts）：夹取/吸附/持久化。
+ * 离屏可验——viewport 与坐标都由测试喂进来，不碰 window/document。
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -51,17 +51,6 @@ test("snapToViewport：离边 <48px 吸到边缘（12px 边距），中间位置
   assert.equal(middle.x, 500, "屏中间不吸");
 });
 
-test("snapToViewport：吸附点压到受保护控件时退让，永不落在控件矩形上", () => {
-  // 左缘吸附点 (12,400) 上有一枚控件，退让后的位置不得再与任何控件相交
-  const controls = [{ x: 0, y: 380, w: 120, h: 48 }];
-  const moved = snapToViewport({ x: 40, y: 400 }, VIEWPORT, controls);
-  const intersects = controls.some(
-    (r) => !(moved.x > r.x + r.w || moved.x + ORB_SIZE < r.x || moved.y > r.y + r.h || moved.y + ORB_SIZE < r.y),
-  );
-  assert.equal(intersects, false, `退让后的位置 ${JSON.stringify(moved)} 仍压控件`);
-  assert.ok(moved.x === 12 || moved.y !== 400, "要么还贴着左缘，要么已垂直让开");
-});
-
 test("位置持久化：存取往返一致；坏 JSON / 缺字段 / 非 JSON 都当没有", () => {
   const storage = memoryStorage();
   savePosition(storage, { x: 88, y: 240 });
@@ -109,31 +98,12 @@ test("通话径按同一档比例缩放；命中圆不随视觉缩小到 32px �
   assert.equal(orbHitSize(orbSizeAtScale(1)), 84);
 });
 
-test("defaultPosition：右下角 24px，不压受保护控件", () => {
-  const plain = defaultPosition(VIEWPORT);
-  assert.deepEqual(plain, { x: VIEWPORT.width - ORB_SIZE - 24, y: VIEWPORT.height - ORB_SIZE - 24 });
-  const cornerControls = [{ x: VIEWPORT.width - 100, y: VIEWPORT.height - 60, w: 100, h: 60 }];
-  const avoided = defaultPosition(VIEWPORT, cornerControls);
-  const intersects = cornerControls.some(
-    (r) => !(avoided.x > r.x + r.w || avoided.x + ORB_SIZE < r.x || avoided.y > r.y + r.h || avoided.y + ORB_SIZE < r.y),
-  );
-  assert.equal(intersects, false, `默认位 ${JSON.stringify(avoided)} 压到了右下角控件`);
-});
-
-test("右下角缩放条：垂直空间被底边夹住时必须横向搜索到无碰撞点", () => {
-  // Studio 的真实几何：悬浮球默认位 (1332,792)，缩放条横跨右下角，最右按钮在 (1343,854)。
-  // 只向下退会立即撞到底边 (maxY=804)，只向右扫描又会从已重叠的 x 开始；两种旧路径都会失败。
-  const zoomButtons = [
-    { x: 1273.39, y: 854, w: 28, h: 28 },
-    { x: 1343, y: 854, w: 28, h: 28 },
-  ];
-  const moved = defaultPosition(VIEWPORT, zoomButtons);
-  const overlaps = zoomButtons.some(
-    (rect) =>
-      !(moved.x > rect.x + rect.w || moved.x + ORB_SIZE < rect.x || moved.y > rect.y + rect.h || moved.y + ORB_SIZE < rect.y),
-  );
-  assert.equal(overlaps, false, `退避后的位置 ${JSON.stringify(moved)} 仍压住缩放按钮`);
-  assert.ok(moved.y + ORB_SIZE <= zoomButtons[0].y, "最近的无碰撞位置应在缩放条上方");
+test("defaultPosition：首次出现在屏幕中下方，之后由用户自由摆放", () => {
+  assert.deepEqual(defaultPosition(VIEWPORT), {
+    x: (VIEWPORT.width - ORB_SIZE) / 2,
+    y: VIEWPORT.height - ORB_SIZE - 140,
+  });
+  assert.deepEqual(defaultPosition({ width: 100, height: 100 }), { x: 12, y: 12 });
 });
 
 test("F-7：通话态 124px 也完整落在视口内（四角吸附 + 越界夹取）", () => {
@@ -148,20 +118,8 @@ test("F-7：通话态 124px 也完整落在视口内（四角吸附 + 越界夹�
     { x: -100, y: 9999 },
     { x: 9999, y: 9999 },
   ]) {
-    const snapped = snapToViewport(corner, VIEWPORT, [], ACTIVE);
+    const snapped = snapToViewport(corner, VIEWPORT, ACTIVE);
     assert.ok(snapped.x >= 12 && snapped.x + ACTIVE <= VIEWPORT.width - 12 + 0.001, JSON.stringify(snapped));
     assert.ok(snapped.y >= 12 && snapped.y + ACTIVE <= VIEWPORT.height - 12 + 0.001, JSON.stringify(snapped));
   }
-});
-
-test("F-7：版本行（受保护矩形）不被球压住", () => {
-  const versionRow = { x: 0, y: VIEWPORT.height - 30, w: 180, h: 30 };
-  const snapped = snapToViewport({ x: 12, y: VIEWPORT.height - 124 - 12 }, VIEWPORT, [versionRow], 124);
-  const overlaps = !(
-    snapped.x > versionRow.x + versionRow.w ||
-    snapped.x + 124 < versionRow.x ||
-    snapped.y > versionRow.y + versionRow.h ||
-    snapped.y + 124 < versionRow.y
-  );
-  assert.equal(overlaps, false, JSON.stringify(snapped));
 });

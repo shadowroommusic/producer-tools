@@ -307,19 +307,6 @@ export function App() {
     [mainView],
   );
   /**
-   * Dock 开合改变的是内容布局，不是视口尺寸——球的 resize 监听不会触发。实测（2026-10-21）
-   * dock 打开后球压在发送/停止按钮上，必须由页面侧主动通知重夹取（`shadowroom:orb-revalidate`
-   * 是悬浮球自己暴露的钩子）。首帧派发时 dock 内容的 rects 尚未定型（实测仍差 31px 压着
-   * 按钮），350ms 后补一次覆盖布局定型；两条派发共用一个清理，不留定时器。
-   */
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent("shadowroom:orb-revalidate"));
-    const settle = window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent("shadowroom:orb-revalidate"));
-    }, 350);
-    return () => window.clearTimeout(settle);
-  }, [dockOpen]);
-  /**
    * Where the sidebar thinks you are is **derived**, not stored.
    *
    * There used to be two states for one question — `workspace` and `mainView` — and they could
@@ -3244,16 +3231,6 @@ export function App() {
    */
   const viewShowsDock = mainView === "workbench" || mainView === "studio" || mainView === "dj" || mainView === "library";
   const chatInDock = dockOpen && viewShowsDock;
-  /**
-   * Dock controls mount after the page switch. Re-measure once they are in the DOM and whenever a
-   * run changes the button from send to stop, so the orb never covers the control it is reporting on.
-   */
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      window.dispatchEvent(new Event("shadowroom:orb-revalidate"));
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [chatInDock, mainView, sessionBusy, butlerBusy, anyRunning]);
   const dockLabel =
     mainView === "studio"
       ? "工程对话"
@@ -4020,7 +3997,6 @@ export function App() {
         worker。两条草稿也分开发，避免在 Studio 里打开球时把管家话术带进工程线程。
       */}
       <ButlerOrb
-        contextKey={mainView}
         draft={drafts.butler}
         onDraftChange={setButlerDraft}
         onSubmit={() => void submit(drafts.butler, { kind: "butler" })}

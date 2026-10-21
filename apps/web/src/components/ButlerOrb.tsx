@@ -17,7 +17,6 @@ import {
   MIN_ORB_SCALE,
   ORB_ACTIVE_SIZE,
   ORB_SCALE_STEP,
-  avoidProtected,
   clampOrbScale,
   clampToViewport,
   defaultPosition,
@@ -28,7 +27,6 @@ import {
   saveOrbScale,
   savePosition,
   snapToViewport,
-  type Rect,
 } from "../lib/orb-position.ts";
 import { callOrbMode, type OrbVisualMode } from "../lib/orb-states.ts";
 import type { CallState } from "../lib/call-states.ts";
@@ -55,62 +53,6 @@ const OPENING_FAILSAFE_MS = 3200;
 const DRAG_THRESHOLD = 4;
 const FINITE = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
 
-/**
- * 受保护控件（吸附点不得压上去）：新建会话/导入/导出/录音/缩放药丸/底部输入框/发送/左栏版本行。
- * 版本行是 Kimi UI 评审 P-8 的实证：浅色主题下球驻左下会盖住「AGPL-3.0 · v0.0.0」。
- */
-const PROTECTED_SELECTORS = [
-  ".sr-new-session",
-  ".sr-studio-import",
-  ".sr-studio-export",
-  ".sr-studio-record",
-  ".sr-transport-zoom button",
-  ".sr-foot-version",
-  ".sr-settings-pane input",
-  ".sr-settings-pane select",
-  ".sr-settings-pane textarea",
-  ".sr-settings-pane button",
-  ".sr-settings-pane",
-  ".sr-provider-card",
-  ".sr-role-row",
-  ".sr-capability-card",
-  ".sr-home-action",
-  ".sr-plugin-card",
-  ".sr-project-new",
-  ".sr-project-card",
-  ".sr-dock-composer",
-  ".sr-page-composer",
-  "textarea",
-  'button[title="发送"]',
-  'button[title="停止这一轮"]',
-];
-
-function protectedRects(): Rect[] {
-  const rects: Rect[] = [];
-  /**
-   * The named selectors stay first for intent, but every visible interactive control is protected
-   * too. A whitelist will always miss the next button added to a page; the orb must never cover the
-   * thing the user needs to click.
-   */
-  const interactive = [
-    ...PROTECTED_SELECTORS,
-    "button",
-    "a[href]",
-    "input",
-    "textarea",
-    "select",
-    '[role="button"]',
-    '[role="menuitem"]',
-  ].join(",");
-  for (const el of document.querySelectorAll(interactive)) {
-    if (el.closest(".sr-orb")) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) continue;
-    rects.push({ x: rect.x, y: rect.y, w: rect.width, h: rect.height });
-  }
-  return rects;
-}
-
 export function ButlerOrb({
   mode,
   progress,
@@ -128,7 +70,6 @@ export function ButlerOrb({
   onOpenSettings,
   caption,
   captionAction,
-  contextKey,
 }: {
   mode?: OrbMode;
   progress?: number;
@@ -160,8 +101,6 @@ export function ButlerOrb({
    * 非语音 fallback 是 W3C 硬要求，不是加分项。只在有 caption 时出现，最多一颗。
    */
   captionAction?: { label: string; onAction: () => void };
-  /** Page identity used to re-check protected controls after navigation, without watching scroll. */
-  contextKey?: string;
 }) {
   const externalCall = onCallToggle !== undefined;
   const [orbScale, setOrbScale] = useState(() => loadOrbScale(window.localStorage));
@@ -171,11 +110,10 @@ export function ButlerOrb({
   const initialSize = initialCallActive ? activeSize : idleSize;
   const [position, setPosition] = useState(() => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const controls = protectedRects();
     const stored = loadPosition(window.localStorage);
     return stored === null
-      ? defaultPosition(viewport, controls, initialSize)
-      : avoidProtected(stored, controls, viewport, initialSize);
+      ? defaultPosition(viewport, initialSize)
+      : clampToViewport(stored.x, stored.y, viewport, initialSize);
   });
   const [hidden, setHidden] = useState(() => {
     try {
@@ -452,7 +390,7 @@ export function ButlerOrb({
 
   const resetOrbPosition = useCallback(() => {
     setMenuOpen(false);
-    setPosition(defaultPosition({ width: window.innerWidth, height: window.innerHeight }, protectedRects(), size));
+    setPosition(defaultPosition({ width: window.innerWidth, height: window.innerHeight }, size));
   }, [size]);
 
   const hideOrb = useCallback(() => {
@@ -576,7 +514,7 @@ export function ButlerOrb({
     const wasDrag = drag?.moved === true;
     const wasClick = drag?.moved === false && hitBall(event);
     setDragging(false);
-    if (wasDrag) setPosition(snapToViewport(position, { width: window.innerWidth, height: window.innerHeight }, protectedRects(), size));
+    if (wasDrag) setPosition(snapToViewport(position, { width: window.innerWidth, height: window.innerHeight }, size));
     if (!wasClick) return;
     if (expanded) {
       setExpanded(false);
@@ -595,34 +533,26 @@ export function ButlerOrb({
     savePosition(window.localStorage, position);
   }, [position, dragging]);
 
-  /**
-   * Re-check only when the page or viewport changes. A capture-phase scroll listener used to react
-   * to every list scroll and could walk the orb across the screen as protected controls moved.
-   * `shadowroom:orb-revalidate` is the page-side hook (App dispatches it on mainView change);
-   * `contextKey` covers the same thing via props for isolated mounts.
-   */
+  /** 窗口缩小可能把已保存的位置留在视口外；只夹回边界，不因页面内容变化移动。 */
   useEffect(() => {
     let frame: number | null = null;
-    const revalidate = () => {
+    const keepVisible = () => {
       if (frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
         setPosition((current) => {
           const viewport = { width: window.innerWidth, height: window.innerHeight };
-          const next = avoidProtected(current, protectedRects(), viewport, size);
+          const next = clampToViewport(current.x, current.y, viewport, size);
           return next.x === current.x && next.y === current.y ? current : next;
         });
       });
     };
-    window.addEventListener("resize", revalidate);
-    window.addEventListener("shadowroom:orb-revalidate", revalidate);
-    revalidate();
+    window.addEventListener("resize", keepVisible);
     return () => {
-      window.removeEventListener("resize", revalidate);
-      window.removeEventListener("shadowroom:orb-revalidate", revalidate);
+      window.removeEventListener("resize", keepVisible);
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [contextKey, size]);
+  }, [size]);
 
 
   // 单 rAF：把 RMS 变成一条看得见的包络（感知映射 + 快攻慢放），交给 Canvas 自己的 rAF 每帧读。
@@ -658,17 +588,15 @@ export function ButlerOrb({
     const previous = previousSizeRef.current;
     previousSizeRef.current = size;
     if (previous === size) return;
-    setPosition((current) =>
-      snapToViewport(
-        {
-          x: current.x - (size - previous) / 2,
-          y: current.y - (size - previous) / 2,
-        },
+    setPosition((current) => {
+      const next = clampToViewport(
+        current.x - (size - previous) / 2,
+        current.y - (size - previous) / 2,
         viewport,
-        protectedRects(),
         size,
-      ),
-    );
+      );
+      return next.x === current.x && next.y === current.y ? current : next;
+    });
   }, [size]);
 
   // 视口变了要重新量字幕（换窗口大小/全屏）。
