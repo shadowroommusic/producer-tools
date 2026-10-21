@@ -67,7 +67,7 @@ export function stepVoiceEnvelope(current: number, raw: number, dtMs: number): n
  * 单调、钳位，不会把粒子推出球外。
  */
 export function voiceShellGain(voice: number): number {
-  return 1 + clamp01(voice) * 0.22;
+  return 1 + clamp01(voice) * 0.34;
 }
 
 /**
@@ -75,12 +75,12 @@ export function voiceShellGain(voice: number): number {
  * 0.16 → 84px 的球上约 13px 的波峰，静默时缩回 1px 刻度。
  */
 export function voiceWaveGain(voice: number): number {
-  return clamp01(voice) * 0.16;
+  return clamp01(voice) * 0.22;
 }
 
 /**
  * 核心亮度增益：球心"接住"声音的亮度变化。
  */
 export function voiceCoreGain(voice: number): number {
-  return clamp01(voice) * 0.2;
+  return clamp01(voice) * 0.34;
 }

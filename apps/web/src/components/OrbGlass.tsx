@@ -202,6 +202,12 @@ export function GlassSphere({
       const coreGain = live ? voiceCoreGain(voice) : 0;
       const shellGain = live ? voiceShellGain(voice) : 1;
       const waveGain = live ? voiceWaveGain(voice) : 0;
+      /**
+       * Listening should visibly breathe with the mic: silence rests at ~78% of its lit body and
+       * every voice peak brings the same organism back to full brightness. This is contrast across
+       * the whole sphere, not a separate meter pasted beside it.
+       */
+      const listeningBase = live ? 0.78 + voice * 0.22 : 1;
       const voiceBlend = m === "speaking" ? smoothstep(current.ripple) : 0;
       const r = size / 2;
       const cx = r;
@@ -223,11 +229,14 @@ export function GlassSphere({
         const x = cx + Math.cos(phase) * plasmaR * (0.18 + i * 0.065);
         const y = cy + Math.sin(phase * 1.13) * plasmaR * (0.15 + i * 0.05);
         const radius = plasmaR * (1.05 + current.glow * 0.24);
-        ctx.globalAlpha = 0.74 + current.glow * 0.18;
+        ctx.globalAlpha = (0.74 + current.glow * 0.18) * listeningBase;
         ctx.drawImage(glowSprite(i === 1 ? hueB : hueA, "lobe"), x - radius, y - radius, radius * 2, radius * 2);
       }
       const coreRadius = plasmaR * (0.96 + coreGain * 1.15);
-      ctx.globalAlpha = Math.min(1, (0.76 + current.glow * 0.2) * (1 - voiceBlend * 0.3) + coreGain * 2.3);
+      ctx.globalAlpha = Math.min(
+        1,
+        (0.76 + current.glow * 0.2) * (1 - voiceBlend * 0.3) * listeningBase + coreGain * 2.3,
+      );
       ctx.drawImage(
         glowSprite(hueA, "core"),
         cx - coreRadius * 1.08,
@@ -330,8 +339,10 @@ export function GlassSphere({
         ctx.fillStyle = PARTICLE_COLORS[hue];
         ctx.globalAlpha = Math.min(
           1,
-          Math.max(0.2, Math.min(1, (0.3 + sparkle * 0.58) * current.rimAlpha)) * (1 - voiceBlend * 0.16) +
-            (live ? voice * 0.26 : 0),
+          Math.max(0.2, Math.min(1, (0.3 + sparkle * 0.58) * current.rimAlpha)) *
+            (1 - voiceBlend * 0.16) *
+            listeningBase +
+            (live ? voice * 0.65 : 0),
         );
         ctx.beginPath();
         ctx.arc(x, y, dot, 0, TAU);
@@ -357,7 +368,7 @@ export function GlassSphere({
           const travel = still ? 0.5 : Math.sin(angle * 3 - motionTime * 2.2) * 0.5 + 0.5;
           const wave = voice * (0.32 + 0.68 * travel);
           const inner = plasmaR * 0.95;
-          const outer = inner + 0.9 + wave * size * 0.17;
+          const outer = inner + 0.9 + wave * size * 0.22;
           ctx.beginPath();
           ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
           ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
@@ -370,8 +381,15 @@ export function GlassSphere({
         if (waveGain > 0.002) {
           ctx.beginPath();
           ctx.arc(0, 0, plasmaR * (1.02 + waveGain * 1.8), 0, TAU);
-          ctx.globalAlpha = 0.1 + voice * 0.46;
-          ctx.lineWidth = 1.6 + voice * size * 0.055;
+          ctx.globalAlpha = 0.18 + voice * 0.8;
+          ctx.lineWidth = 2.4 + voice * size * 0.11;
+          ctx.stroke();
+          // A second, wider pressure ring makes the response read as sound entering the sphere,
+          // even against a bright static core.
+          ctx.beginPath();
+          ctx.arc(0, 0, plasmaR * (1.16 + waveGain * 3.5), 0, TAU);
+          ctx.globalAlpha = 0.1 + voice * 0.44;
+          ctx.lineWidth = 1.5 + voice * size * 0.075;
           ctx.stroke();
         }
         ctx.globalAlpha = 1;

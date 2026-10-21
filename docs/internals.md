@@ -163,7 +163,33 @@ turns (typed turns included — they also go thinking→speaking→listening now
 canvas rAF reads the getter each frame, so a ref-held level actually reaches the pixels (the old
 render-time read never updated). Listening maps the RMS perceptually — `smoothstep(clamp(level*2))`
 — and drives particle brightness/radius, the tick ring, the plasma core and the CSS aura
-(`--orb-voice`); speaking's waveform morph is untouched.
+(`--orb-voice`). Silence rests at 78% of the lit body; speech lifts the whole organism plus two
+pressure rings, so the alpha contrast is measured rather than inferred from the level variable.
+Speaking's waveform morph is untouched.
+
+**Busy and routing are per session (2026-10-21).** `App` keeps running session ids and abort
+controllers in maps, not one window-wide boolean. The butler, Studio, DJ and library can run in
+parallel; each composer and transcript reads only its own busy state, and Stop interrupts only that
+thread. The orb reads the butler thread, never whichever worker happens to be visible.
+
+`route_intent` is a proposal, not a page switch. “打开并继续” persists the originating text and
+`Mention` list on the stored tool row (`routeSource`), creates a steward handoff with a stable
+`butler-route:<routeId>` idempotency key, waits until both the butler and target worker are idle,
+claims it, submits the original request plus attachment paths to the target session, and finishes
+the handoff as done/failed/cancelled. Duplicate clicks and duplicate events share the same route id,
+so they execute once; `routeConsumed` prevents a handled card from returning after reload. A Studio
+handoff without an open project says `project_open: no` and shows a visible notice instead of
+pretending the result entered a timeline.
+
+Steward v2 adds `handoff_create`, `handoff_claim`, `handoff_finish`, `handoff_get` and
+`handoff_list` on top of the event ledger. Handoffs are mutable current work; events remain
+append-only history. `situation_report` includes bounded active/recent handoff summaries, which is
+how the butler can answer “Studio 刚才做了什么” without receiving worker transcripts.
+
+If the bridge/core/provider restarts, the next turn for that UI session receives at most six recent
+user/assistant text messages (1,800 characters total) as `[recent_conversation]`. Reasoning, tools,
+and the longer stored transcript are excluded; later turns rely on the live thread and do not repeat
+the block.
 
 **Why no framework.** The turn length, the sentence budget and the voice switch are the actual
 complaints; Pipecat/LiveKit would add a Python media service or a LiveKit server and a second turn

@@ -104,11 +104,11 @@ test("包络输出恒在 0–1", () => {
 
 test("视觉增益：单调、钳位、幅度足够一眼看见", () => {
   assert.equal(voiceShellGain(0), 1);
-  assert.ok(Math.abs(voiceShellGain(1) - 1.22) < 1e-9, "壳层要能撑开 22%");
-  assert.ok(Math.abs(voiceWaveGain(1) - 0.16) < 1e-9, "声波要能伸到球径的 16%");
-  assert.ok(Math.abs(voiceCoreGain(1) - 0.2) < 1e-9);
+  assert.ok(Math.abs(voiceShellGain(1) - 1.34) < 1e-9, "壳层要能撑开 34%");
+  assert.ok(Math.abs(voiceWaveGain(1) - 0.22) < 1e-9, "声波要能伸到球径的 22%");
+  assert.ok(Math.abs(voiceCoreGain(1) - 0.34) < 1e-9);
   assert.equal(voiceShellGain(-1), 1);
-  assert.equal(voiceWaveGain(2), 0.16);
+  assert.equal(voiceWaveGain(2), 0.22);
   assert.equal(voiceCoreGain(Number.NaN), 0);
 });
 

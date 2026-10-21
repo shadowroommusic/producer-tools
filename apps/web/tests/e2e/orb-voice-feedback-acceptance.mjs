@@ -136,14 +136,20 @@ const samples = await page.evaluate(
           requestAnimationFrame(sample);
           return;
         }
-        const sorted = [...rows].sort((a, b) => a.voice - b.voice);
-        const quiet = sorted.slice(0, 48);
-        const loud = sorted.slice(-48);
+        /**
+         * Compare frames that are actually silent / actually speaking. Taking the bottom 10% by
+         * rank still included quiet speech when the source clip has little tail silence, which made
+         * the ratio depend on clip length rather than on the visual response.
+         */
+        const quiet = rows.filter((row) => row.voice <= 0.05);
+        const loud = rows.filter((row) => row.voice >= 0.75);
         resolve({
           voices: rows.map((row) => row.voice),
           boxes: rows.filter((row) => row.box !== undefined).map((row) => row.box),
-          quietLuma: quiet.reduce((sum, row) => sum + row.sumAlpha, 0) / quiet.length,
-          loudLuma: loud.reduce((sum, row) => sum + row.sumAlpha, 0) / loud.length,
+          quietFrames: quiet.length,
+          loudFrames: loud.length,
+          quietLuma: quiet.length === 0 ? 0 : quiet.reduce((sum, row) => sum + row.sumAlpha, 0) / quiet.length,
+          loudLuma: loud.length === 0 ? 0 : loud.reduce((sum, row) => sum + row.sumAlpha, 0) / loud.length,
         });
       };
       requestAnimationFrame(sample);
@@ -173,7 +179,7 @@ const lumaGrowth = samples.quietLuma > 0 ? samples.loudLuma / samples.quietLuma 
 check(
   "③ 有声/静音帧像素显著变化（亮度总和比 >1.15）",
   samples.quietLuma > 0 && lumaGrowth > 1.15,
-  `quietLuma=${Math.round(samples.quietLuma)} loudLuma=${Math.round(samples.loudLuma)} ratio=${lumaGrowth.toFixed(3)}`,
+  `quiet=${samples.quietFrames}f/${Math.round(samples.quietLuma)} loud=${samples.loudFrames}f/${Math.round(samples.loudLuma)} ratio=${lumaGrowth.toFixed(3)}`,
 );
 
 // ④ 包围盒不漂移：所有帧的球体范围中心抖动 ≤ 4px（响应不位移）。
