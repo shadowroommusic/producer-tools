@@ -191,6 +191,11 @@ user/assistant text messages (1,800 characters total) as `[recent_conversation]`
 and the longer stored transcript are excluded; later turns rely on the live thread and do not repeat
 the block.
 
+The live product acceptance (`tests/e2e/studio-natural-language-live.mjs`) starts with an empty
+Studio project. One sentence creates a 122 BPM, four-bar Drums/Bass/Chords project backed by three
+real audio files and leaves it playable. A second sentence asks to darken and lift only the Bass;
+`regenerate_part` replaces that Bass source while the other sources and track set stay unchanged.
+
 **Why no framework.** The turn length, the sentence budget and the voice switch are the actual
 complaints; Pipecat/LiveKit would add a Python media service or a LiveKit server and a second turn
 contract, Moshi would replace the Codex brain with a 7B speech model, TEN's licence is unidentified
