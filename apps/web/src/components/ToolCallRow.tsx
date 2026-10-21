@@ -22,6 +22,14 @@ export type ToolCall = {
   startedAt?: number;
   finishedAt?: number;
   turnId?: string;
+  /** Request provenance for a completed butler route; stored so confirmation survives reloads. */
+  routeSource?: {
+    text: string;
+    mentions: Array<{ name: string; path: string; label: string }>;
+    sessionId: string;
+  };
+  /** Set the moment the user opens or dismisses the route card, so reload never re-offers it. */
+  routeConsumed?: boolean;
 };
 
 /** Tool results arrive as one long JSON line; readers deserve indentation. */
@@ -98,18 +106,34 @@ function CallSection({ label, text }: { label: string; text: string }) {
 
 export function ToolCallRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(call.status === "error");
-  const [routeDismissed, setRouteDismissed] = useState(false);
   const Chevron = open ? IconChevronDown : IconChevronRight;
-  const route = call.name === "route_intent" && call.status === "ok" ? parseRouteFromCall(call) : null;
+  const parsedRoute = call.name === "route_intent" && call.status === "ok" ? parseRouteFromCall(call) : null;
+  /**
+   * Direct answers and clarification prompts are conversation, not dispatch. A confirmation card
+   * there reads like the manager asking permission to answer its own question; keep those rows
+   * collapsed in the transcript instead.
+   */
+  const route =
+    parsedRoute !== null &&
+    (parsedRoute.target === "studio" || parsedRoute.target === "dj" || parsedRoute.target === "library")
+      ? parsedRoute
+      : null;
   const isShell = call.server === "shell";
   const duration = durationLabel(call);
 
-  if (route !== null && !routeDismissed) {
+  /**
+   * The card is the *offer*, not history: once the user answered it (open or 稍后) the stored
+   * `routeConsumed` flag flips and this row falls back to the normal tool row — one answer for
+   * "was this route handled", shared with the page toast, so a reload never re-offers it.
+   */
+  if (route !== null && call.routeConsumed !== true) {
     return (
       <RouteIntentCard
         route={route}
         onOpen={(next) => window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: next }))}
-        onDismiss={() => setRouteDismissed(true)}
+        onDismiss={() =>
+          window.dispatchEvent(new CustomEvent("shadowroom:route-consumed", { detail: route }))
+        }
       />
     );
   }
@@ -184,6 +208,13 @@ export function parseRouteFromCall(call: ToolCall): RouteIntent | null {
         ? row.missing_context.map((entry) => String(entry)).filter(Boolean)
         : [],
       routeId: call.id,
+      ...(call.routeSource === undefined
+        ? {}
+        : {
+            sourceText: call.routeSource.text,
+            sourceMentions: call.routeSource.mentions,
+            sourceSessionId: call.routeSource.sessionId,
+          }),
     };
   } catch {
     return null;

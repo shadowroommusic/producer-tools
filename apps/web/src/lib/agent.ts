@@ -6,6 +6,8 @@ import type { ToolCall } from "../components/ToolCallRow";
 
 export type AgentHealth = {
   ok: boolean;
+  /** Changes when the bridge process restarts; provider bindings do not survive it. */
+  instanceId?: string;
   threads: number;
   model?: string;
   userAgent?: string;

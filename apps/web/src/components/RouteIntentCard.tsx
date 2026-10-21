@@ -9,6 +9,13 @@ export type RouteIntent = {
   contextSatisfied: boolean;
   missingContext: string[];
   routeId: string;
+  /**
+   * The request that produced this route. Persisted with the tool row so confirmation still works
+   * after a reload and voice recordings are not lost between classification and execution.
+   */
+  sourceText?: string;
+  sourceMentions?: Array<{ name: string; path: string; label: string }>;
+  sourceSessionId?: string;
 };
 
 const TARGET_LABEL: Record<RouteTarget, string> = {

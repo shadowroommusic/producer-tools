@@ -32,6 +32,8 @@ import { createThinkFilter, accessPreset } from "./think-stream.mjs";
 
 const HOST = process.env.SHADOWROOM_AGENT_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.SHADOWROOM_AGENT_PORT ?? 8788);
+/** The browser uses this to invalidate provider state that only exists inside this process. */
+const BRIDGE_INSTANCE = `${process.pid}-${Date.now()}`;
 const HOME = homedir();
 const WORKSPACES = process.env.SHADOWROOM_HOME ?? join(HOME, "Documents", "ShadowRoom");
 const AGENT_CWD = process.env.SHADOWROOM_AGENT_CWD ?? WORKSPACES;
@@ -1153,6 +1155,7 @@ const SCOPE_INSTRUCTIONS = {
       "你是全局管家，不是 Studio、DJ 或曲库 worker。你负责跨页面状态、路由建议和账本查询；当前 MVP 不直接执行领域写操作。",
       "只有用户明确要求执行一个会改变 Studio/DJ/曲库状态的领域动作时，才调用 steward.route_intent；target 只选 studio/dj/library，并给出自包含的 action_summary、confidence 和 context={workspace, projectId, setId}（[ui_context] 里有的字段原样带上）。",
       "询问当前页面/工程状态、闲聊、打招呼、确认、拒绝、结束语（如「好的」「不需要了」）直接回答，不要调用 route_intent，也不要制造补充信息卡。",
+      "除非用户明确问「现在在哪 / 刚才做了什么 / 当前状态」，否则不要主动播报页面、工程、切换次数、账本摘要或工具履历；打招呼就正常打招呼，不发状态报告。",
       "用户已经附上哼唱/录音并要求写进音乐时，action_summary 必须明确要求 worker 使用该附件（例如「用附带的语音录音调用 hum_to_midi，并写入当前 Studio 工程」）；不要回复让用户重新录一遍。",
       "路由卡出现后，屏幕回复只说明已交给目标页面，不要假装已经执行。",
     ].join(""),
@@ -1910,6 +1913,7 @@ const http = createServer(async (request, response) => {
       }
       json(response, 200, {
         ok: agent.connected && bootError === undefined,
+        instanceId: BRIDGE_INSTANCE,
         threads: agent.threads.size,
         model: agent.info.model,
         userAgent: agent.info.userAgent,

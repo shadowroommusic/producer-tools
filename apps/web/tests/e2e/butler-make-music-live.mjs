@@ -27,14 +27,29 @@ try {
     window.localStorage.setItem("shadowroom.view", "studio");
     window.localStorage.setItem("shadowroom.studio.projects.v1", JSON.stringify({ projects: [project] }));
     window.localStorage.setItem("shadowroom.studio.open", project.id);
+    window.localStorage.removeItem("shadowroom.orb.position");
   }, seed);
   await page.goto("http://localhost:5173", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".sr-track-head, .sr-studio-track", { timeout: 20000 }).catch(() => {});
-  const composer = page.locator("textarea").first();
-  await composer.waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "让管家来做" }).waitFor({ timeout: 20000 });
+  await page.getByRole("button", { name: "让管家来做" }).click();
+  const composer = page.getByLabel("给悬浮球的一句话");
+  await composer.waitFor({ timeout: 10000 });
   await composer.fill("做一段 2 小节的鼓放进这个工程，120 BPM。");
-  await page.locator('button[aria-label="发送"]').first().click();
-  console.log("回合已发，等 butler 渲染……");
+  await page.locator(".sr-orb-panel button[type=submit]").click();
+  console.log("管家回合已发，等路由卡……");
+
+  const route = page.locator(".sr-route-card").last();
+  await route.waitFor({ timeout: 300_000 });
+  const continueButton = route.getByRole("button", { name: "打开并继续" });
+  try {
+    await continueButton.waitFor({ timeout: 10_000 });
+  } catch (error) {
+    console.log("ROUTE CARD", (await route.innerText()).replace(/\n+/g, " | "));
+    await page.screenshot({ path: "/Users/lazora/Documents/ShadowRoom/exports/butler-make-music/route-no-execute.png" });
+    throw error;
+  }
+  await continueButton.click();
+  console.log("路由已确认，等 Studio worker 渲染……");
 
   let clips = 0;
   let audioClips = 0;

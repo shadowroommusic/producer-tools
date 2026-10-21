@@ -34,6 +34,8 @@ test("butler routes executable domain work only, not conversational replies", ()
   assert.match(text, /直接回答，不要调用 route_intent/);
   assert.match(text, /使用该附件/);
   assert.match(text, /不要回复让用户重新录一遍/);
+  assert.match(text, /不要主动播报页面、工程、切换次数、账本摘要或工具履历/);
+  assert.match(text, /打招呼就正常打招呼，不发状态报告/);
 });
 
 test("Studio and DJ cannot drift into each other's tools", () => {

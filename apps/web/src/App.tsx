@@ -65,6 +65,7 @@ import {
   type AgentSettings,
 } from "./lib/agent-settings";
 import { appendAssistantDelta, segmentKeyFor } from "./lib/conversation-flow";
+import { conversationRecoveryBlock } from "./lib/conversation-recovery";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import { callTool } from "./lib/mcp";
 
@@ -233,8 +234,13 @@ export function App() {
   const [store, setStore] = useState<SessionStore>(() => loadSessions());
   const [mode, setMode] = useState("标准");
   const [agent, setAgent] = useState<AgentHealth | null>(null);
-  const [running, setRunning] = useState(false);
-  const [controller, setController] = useState<AbortController | null>(null);
+  /**
+   * Busy is per thread, never per window. The butler and a page worker can run independently, and
+   * the dock beside Studio/DJ must not inherit the butler's spinner just because the orb is thinking.
+   */
+  const [runningSessions, setRunningSessions] = useState<Set<string>>(() => new Set());
+  const runningSessionsRef = useRef<Set<string>>(new Set());
+  const controllers = useRef(new Map<string, AbortController>());
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [mainView, setMainView] = useState<MainView>(
     () =>
@@ -316,8 +322,19 @@ export function App() {
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
   const [djContext, setDjContext] = useState<DjAgentContext | null>(null);
   const [libraryContext, setLibraryContext] = useState<LibraryAgentContext | null>(null);
-  const [pendingRoute, setPendingRoute] = useState<RouteIntent | null>(null);
   const [routeSuggestion, setRouteSuggestion] = useState<RouteIntent | null>(null);
+  /**
+   * A route is dispatched at most once. The card unmounts on the first click, but a duplicated
+   * `shadowroom:route-intent` (double dispatch, hydration racing a live event) must not queue a
+   * second handoff of the same request.
+   */
+  const lastRoutedIdRef = useRef<string | null>(null);
+  const [queuedRoute, setQueuedRoute] = useState<{
+    route: RouteIntent;
+    text: string;
+    mentions: Mention[];
+    sourceSessionId: string;
+  } | null>(null);
   /**
    * Undo/redo, **per project**: each project keeps its own past/future, so switching projects never
    * mixes histories (the rule every editor follows, and the one this app got wrong until now).
@@ -713,6 +730,10 @@ export function App() {
    * provider (the transcript in the UI is unaffected).
    */
   const appliedProvider = useRef("");
+  /** Provider bindings live in the bridge process; a restarted bridge starts on the built-in core. */
+  const bridgeInstance = useRef("");
+  /** Sessions whose current bridge/core thread already has their history. */
+  const recoveredSessions = useRef<Set<string>>(new Set());
   useEffect(() => {
     saveModelSettings(modelSettings);
   }, [modelSettings]);
@@ -747,6 +768,11 @@ export function App() {
   const sessionKind = sessionKindForView(mainView);
   const session = sessionForKind(store, sessionKind);
   const butlerSession = sessionForKind(store, "butler");
+  const butlerSessionRef = useRef(butlerSession);
+  butlerSessionRef.current = butlerSession;
+  const anyRunning = runningSessions.size > 0;
+  const sessionBusy = session !== undefined && runningSessions.has(session.id);
+  const butlerBusy = butlerSession !== undefined && runningSessions.has(butlerSession.id);
 
   /**
    * 本会话生效的设置：会话里确认过的字段优先，没确认过的继承全局默认（新会话就是这么
@@ -851,7 +877,14 @@ export function App() {
     const load = () =>
       fetchAgentHealth()
         .then((health) => {
-          if (!cancelled) setAgent(health);
+          if (!cancelled) {
+            if (health.instanceId !== undefined && health.instanceId !== bridgeInstance.current) {
+              bridgeInstance.current = health.instanceId;
+              appliedProvider.current = "";
+              recoveredSessions.current.clear();
+            }
+            setAgent(health);
+          }
         })
         .catch(() => {
           if (!cancelled) setAgent(null);
@@ -892,22 +925,6 @@ export function App() {
     if (kind !== "butler") ensureWorkerSession(kind);
   }, [ensureWorkerSession, mainView]);
 
-  useEffect(() => {
-    const onRoute = (event: Event) => {
-      const route = (event as CustomEvent<RouteIntent>).detail;
-      if (route === undefined) return;
-      if (route.target === "studio" || route.target === "dj" || route.target === "library") {
-        ensureWorkerSession(route.target);
-        setMainView(route.target);
-        setDockByView((current) => ({ ...current, [route.target]: true }));
-        setDraftFor(route.target, route.actionSummary);
-        setPendingRoute(route);
-      }
-    };
-    window.addEventListener("shadowroom:route-intent", onRoute);
-    return () => window.removeEventListener("shadowroom:route-intent", onRoute);
-  }, [ensureWorkerSession, setDraftFor]);
-
   /** Append a message to one session inside the store. */
   const patchSession = useCallback((store_: SessionStore, id: string, patch: (session: Session) => Session) => {
     return {
@@ -916,6 +933,96 @@ export function App() {
       sessions: store_.sessions.map((entry) => (entry.id === id ? capSession(patch(entry)) : entry)),
     };
   }, []);
+
+  /**
+   * Mark the stored `route_intent` row as handled (opened or dismissed). The card itself is
+   * in-memory state; without this marker a reload would re-offer a route the user already answered.
+   * Nothing is removed from the transcript — the row keeps its provenance, only flagged.
+   */
+  const consumeRoute = useCallback(
+    (route: RouteIntent) => {
+      setStore((current) => {
+        // Rows written before route provenance existed still belong to the session that owns the
+        // call id. Resolve that owner from the stored calls instead of leaving "稍后" inert.
+        const sessionId =
+          route.sourceSessionId ??
+          current.sessions.find((entry) => entry.calls.some((call) => call.id === route.routeId))?.id;
+        if (sessionId === undefined) return current;
+        if (!current.sessions.some((entry) => entry.id === sessionId)) return current;
+        return patchSession(current, sessionId, (session) => ({
+          ...session,
+          calls: session.calls.map((call) =>
+            call.id === route.routeId ? { ...call, routeConsumed: true } : call,
+          ),
+        }));
+      });
+    },
+    [patchSession],
+  );
+
+  /**
+   * Re-offer a route the user confirmed-never after a reload. One shot on mount: the newest
+   * butler `route_intent` that still carries its source request (voice WAV included) and was
+   * never answered. Rows without `routeSource` predate this contract and stay as plain tool rows.
+   */
+  const routesHydrated = useRef(false);
+  useEffect(() => {
+    if (routesHydrated.current) return;
+    routesHydrated.current = true;
+    if (routeSuggestion !== null) return;
+    const newest = [...store.sessions].sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    for (const entry of newest) {
+      if (entry.kind !== "butler") continue;
+      const call = [...entry.calls]
+        .reverse()
+        .find((c) => c.name === "route_intent" && c.routeSource !== undefined && c.routeConsumed !== true);
+      if (call === undefined) continue;
+      const parsed = parseRouteFromCall(call);
+      if (
+        parsed !== null &&
+        (parsed.target === "studio" || parsed.target === "dj" || parsed.target === "library")
+      ) {
+        setRouteSuggestion(parsed);
+        return;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store]);
+
+  useEffect(() => {
+    const onRoute = (event: Event) => {
+      const route = (event as CustomEvent<RouteIntent>).detail;
+      if (route === undefined) return;
+      if (route.routeId === lastRoutedIdRef.current) return;
+      if (route.target === "studio" || route.target === "dj" || route.target === "library") {
+        lastRoutedIdRef.current = route.routeId;
+        // Both surfaces (the transcript card and the page toast) land here; answering it once
+        // retires the offer everywhere and is recorded on the stored row.
+        consumeRoute(route);
+        ensureWorkerSession(route.target);
+        setMainView(route.target);
+        setDockByView((current) => ({ ...current, [route.target]: true }));
+        setDraftFor(route.target, route.actionSummary);
+        setQueuedRoute({
+          route,
+          text: route.sourceText ?? route.actionSummary,
+          mentions: route.sourceMentions ?? [],
+          sourceSessionId: route.sourceSessionId ?? butlerSessionRef.current?.id ?? "",
+        });
+      }
+    };
+    /** The transcript card's 稍后 button: retire the offer without executing anything. */
+    const onRouteConsumed = (event: Event) => {
+      const route = (event as CustomEvent<RouteIntent>).detail;
+      if (route !== undefined) consumeRoute(route);
+    };
+    window.addEventListener("shadowroom:route-intent", onRoute);
+    window.addEventListener("shadowroom:route-consumed", onRouteConsumed);
+    return () => {
+      window.removeEventListener("shadowroom:route-intent", onRoute);
+      window.removeEventListener("shadowroom:route-consumed", onRouteConsumed);
+    };
+  }, [consumeRoute, ensureWorkerSession, setDraftFor]);
 
   /* ── 模型 / 思考深度 / 访问权限：确认后才算数 ───────────────────────────────
    *
@@ -961,7 +1068,7 @@ export function App() {
 
   const applyChoice = useCallback(
     async (choice: { modelId?: string; effort?: string; access?: AgentAccess }) => {
-      if (running) return;
+      if (sessionBusy) return;
       const seq = ++settingsSeq.current;
       const next: AgentSettings = { ...agentSettingValues, ...choice };
       setSettingsError(null);
@@ -1006,7 +1113,7 @@ export function App() {
         if (settingsSeq.current === seq) setSettingsPending(null);
       }
     },
-    [agent?.ok, agentSettingValues, modelOptions, persistSettings, running, session, sessionKind],
+    [agent?.ok, agentSettingValues, modelOptions, persistSettings, session, sessionBusy, sessionKind],
   );
 
   const chooseModel = useCallback(
@@ -1025,10 +1132,25 @@ export function App() {
      * Async because the turn may first have to point the Codex core at the chosen provider (a core
      * restart, ~1s). Everything below is unchanged — the awaits are only around that switch.
      */
-    async (override?: string, options: { mentions?: Mention[]; kind?: SessionKind } = {}) => {
+    async (
+      override?: string,
+      options: {
+        mentions?: Mention[];
+        kind?: SessionKind;
+        route?: RouteIntent;
+        /** A visible note attached to this turn (e.g. the no-open-project warning on a routed handoff). */
+        notice?: { title: string; text: string };
+      } = {},
+    ) => {
     const kind = options.kind ?? sessionKindForView(mainView);
     const text = (override ?? drafts[kind]).trim();
-    if (text === "" || running) return;
+    if (text === "") return;
+
+    // Each page owns one endpoint thread: butler topics never impersonate Studio/DJ/library.
+    const known = sessionForKind(store, kind);
+    const fresh = known === undefined ? createSession(kind) : undefined;
+    const sessionId = known?.id ?? fresh?.id ?? createSession(kind).id;
+    if (runningSessionsRef.current.has(sessionId)) return;
     /**
      * 语音回合的开口准备（S5 contract 的另一半在 outgoing 的 [voice_turn] 注入）：
      * mode 按本轮用户话确定性判定（正则，不猜语义），beginVoiceTurn 会按它重建 feeder。
@@ -1051,10 +1173,6 @@ export function App() {
     const mentions = options.mentions ?? attachments;
     if (options.mentions === undefined) setAttachments([]);
 
-    // Each page owns one endpoint thread: butler topics never impersonate Studio/DJ/library.
-    const known = sessionForKind(store, kind);
-    const fresh = known === undefined ? createSession(kind) : undefined;
-    const sessionId = known?.id ?? fresh?.id ?? createSession(kind).id;
     if (known === undefined) {
       const base = fresh ?? createSession(kind);
       const created: Session = {
@@ -1097,7 +1215,13 @@ export function App() {
         ...session,
         title: session.messages.length === 0 ? titleFrom(text) : session.title,
         lastActiveAt: at,
-        messages: [...session.messages, { id: `u-${at}`, role: "user", text, at, scope: messageScope }],
+        messages: [
+          ...session.messages,
+          { id: `u-${at}`, role: "user", text, at, scope: messageScope },
+          ...(options.notice === undefined
+            ? []
+            : [{ id: `n-${at}`, role: "notice" as const, title: options.notice.title, text: options.notice.text, at }]),
+        ],
       })),
     );
 
@@ -1122,8 +1246,9 @@ export function App() {
     }
 
     const abort = new AbortController();
-    setController(abort);
-    setRunning(true);
+    controllers.current.set(sessionId, abort);
+    runningSessionsRef.current.add(sessionId);
+    setRunningSessions(new Set(runningSessionsRef.current));
     setSettingsApplied(null);
     const startedAt = Date.now();
     /** Latest token usage seen for this turn, reported when it finishes. */
@@ -1151,8 +1276,9 @@ export function App() {
       );
     };
     const finishAssistant = () => {
-      setController(null);
-      setRunning(false);
+      controllers.current.delete(sessionId);
+      runningSessionsRef.current.delete(sessionId);
+      setRunningSessions(new Set(runningSessionsRef.current));
     };
 
     /**
@@ -1238,13 +1364,19 @@ export function App() {
           ]
         : [];
     const routeContext =
-      pendingRoute !== null && kind === pendingRoute.target
+      options.route !== undefined && kind === options.route.target
         ? [
             "",
             "[butler_route]",
-            `route_id: ${pendingRoute.routeId}`,
-            `target: ${pendingRoute.target}`,
-            `instruction: ${pendingRoute.actionSummary}`,
+            `route_id: ${options.route.routeId}`,
+            `target: ${options.route.target}`,
+            `instruction: ${options.route.actionSummary}`,
+            ...(kind === "studio" && openProject === undefined
+              ? [
+                  "project_open: no",
+                  "（当前没有打开的工程：能做的先做（如 hum_to_midi 出 MIDI 文件并给出路径），并明确告诉用户新建或打开工程后产物才能落进时间线；不要假装已经写进工程。）",
+                ]
+              : []),
             "[/butler_route]",
             "（这是用户在管家确认卡上刚刚确认的页内请求。按 instruction 执行；不要把它当成 worker 自己新发起的话题。）",
           ]
@@ -1261,6 +1393,8 @@ export function App() {
     const wantedProvider = chosen?.provider.id ?? "";
     if (wantedProvider !== appliedProvider.current) {
       try {
+        // Switching a provider restarts the core, so every UI session needs one bounded recovery injection.
+        recoveredSessions.current.clear();
         await fetch("/api/agent/use-provider", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1289,6 +1423,9 @@ export function App() {
      */
     const brief = kind === "butler" ? await butlerBrief() : "";
     const briefContext = brief === "" ? [] : [brief];
+    const recoveryContext = recoveredSessions.current.has(sessionId)
+      ? []
+      : conversationRecoveryBlock(known?.messages ?? []);
     /**
      * [voice_turn]（S5 response contract）：随语音回合隐藏注入，只进发给智能体的 outgoing，
      * 不写进用户可见消息（消息列表只存 text）。确定性字段：mode 与预算——模型侧契约在
@@ -1306,9 +1443,10 @@ export function App() {
       : [];
     const outgoing =
       (kind !== "studio" || noteContext === null
-        ? [text, ...briefContext, ...butlerUiContext, ...arrangementContext, ...djSetContext, ...libraryPageContext, ...routeContext].join("\n")
+        ? [text, ...recoveryContext, ...briefContext, ...butlerUiContext, ...arrangementContext, ...djSetContext, ...libraryPageContext, ...routeContext].join("\n")
         : [
             text,
+            ...recoveryContext,
             "",
             "[clip_context]",
             `clip_id: ${noteContext.clipId}`,
@@ -1331,8 +1469,6 @@ export function App() {
             ...libraryPageContext,
             ...routeContext,
           ].join("\n")) + (voiceTurnContext.length === 0 ? "" : `\n${voiceTurnContext.join("\n")}`);
-
-    if (routeContext.length > 0) setPendingRoute(null);
 
     void sendTurn(
       sessionId,
@@ -1410,9 +1546,21 @@ export function App() {
                   ...(finishedAt === undefined ? {} : { finishedAt }),
                   ...(callStartedAt.has(call.id) ? { startedAt: callStartedAt.get(call.id) } : {}),
                 };
+          let routed: RouteIntent | null = null;
           if (kind === "butler" && event.phase === "completed" && call.name === "route_intent") {
-            const route = parseRouteFromCall(call);
-            if (route !== null) setRouteSuggestion(route);
+            const parsed = parseRouteFromCall(call);
+            if (
+              parsed !== null &&
+              (parsed.target === "studio" || parsed.target === "dj" || parsed.target === "library")
+            ) {
+              routed = {
+                ...parsed,
+                sourceText: text,
+                sourceMentions: mentions,
+                sourceSessionId: sessionId,
+              };
+              setRouteSuggestion(routed);
+            }
           }
           if (call.name === "regenerate_part") {
             // A render can be over in a fifth of a second, and a badge that flickers is worse than
@@ -1440,14 +1588,25 @@ export function App() {
             openProjectIdRef.current,
           );
           if (event.phase === "completed" && ownsCurrentProject) absorbRef.current(call);
+          const storedCall: ToolCall =
+            routed === null
+              ? timed
+              : {
+                  ...timed,
+                  routeSource: {
+                    text: routed.sourceText ?? text,
+                    mentions: routed.sourceMentions ?? mentions,
+                    sessionId: routed.sourceSessionId ?? sessionId,
+                  },
+                };
           setStore((current) =>
             patchSession(current, sessionId, (session) => {
               const known_ = session.calls.some((entry) => entry.id === timed.id);
               return {
                 ...session,
                 calls: known_
-                  ? session.calls.map((entry) => (entry.id === timed.id ? { ...entry, ...timed } : entry))
-                  : [...session.calls, timed],
+                  ? session.calls.map((entry) => (entry.id === timed.id ? { ...entry, ...storedCall } : entry))
+                  : [...session.calls, storedCall],
                 messages: known_
                   ? session.messages
                   : [...session.messages, { id: `c-${timed.id}`, role: "tool", callId: timed.id, at: Date.now() }],
@@ -1560,6 +1719,9 @@ export function App() {
         })(),
       },
     )
+      .then(() => {
+        recoveredSessions.current.add(sessionId);
+      })
       .catch((error: unknown) => {
         if (abort.signal.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -1610,14 +1772,46 @@ export function App() {
         );
       });
     },
-    [agent, agentSettingValues, attachments, beginVoiceTurn, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, patchSession, pendingRoute, projects, running, setDraftFor, store],
+    [agent, agentSettingValues, attachments, beginVoiceTurn, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, patchSession, projects, setDraftFor, store],
   );
+
+  /**
+   * A confirmed route is an execution handoff, not a page switch.
+   *
+   * Two waits, both of them "keep the queue and retry", never "drop the request": the orb may still
+   * be finishing its acknowledgement (source thread), and the target worker may itself be mid-turn.
+   * When both are idle the original request — voice recording included — goes to the worker with the
+   * route contract attached, exactly once (the queue is emptied before submit runs).
+   */
+  useEffect(() => {
+    if (queuedRoute === null || sessionKind !== queuedRoute.route.target) return;
+    if (queuedRoute.sourceSessionId !== "" && runningSessionsRef.current.has(queuedRoute.sourceSessionId)) {
+      return;
+    }
+    const worker = sessionForKind(store, sessionKind);
+    if (worker === undefined || runningSessionsRef.current.has(worker.id)) return;
+    const next = queuedRoute;
+    setQueuedRoute(null);
+    void submit(next.text, {
+      kind: sessionKind,
+      mentions: next.mentions,
+      route: next.route,
+      ...(sessionKind === "studio" && openProjectId === undefined
+        ? {
+            notice: {
+              title: "工程未打开",
+              text: "Studio 还没有打开的工程：请求会照常执行（比如哼唱转 MIDI），但结果要等你新建或打开工程后才能落进时间线。",
+            },
+          }
+        : {}),
+    });
+  }, [queuedRoute, runningSessions, sessionKind, store, submit, openProjectId]);
 
   const stop = useCallback(() => {
     if (session === undefined) return;
-    controller?.abort();
+    controllers.current.get(session.id)?.abort();
     void interruptTurn(session.id);
-  }, [controller, session]);
+  }, [session]);
 
   /** Answer one approval and record the decision in the transcript. */
   const decide = useCallback(
@@ -1909,8 +2103,11 @@ export function App() {
         speechQueueRef.current?.clear();
         disarmSpeechCeiling();
         const rescued = capture.current?.takeWavSince(sinceMs) ?? null;
-        controller?.abort();
-        if (session !== undefined) void interruptTurn(session.id);
+        const voiceSessionId = butlerSessionRef.current?.id;
+        if (voiceSessionId !== undefined) {
+          controllers.current.get(voiceSessionId)?.abort();
+          void interruptTurn(voiceSessionId);
+        }
         const heard = interruptRef.current.trim();
         interruptRef.current = "";
         heardRef.current = heard === "" ? heardRef.current : heard === heardRef.current ? heard : `${heard} ${heardRef.current}`.trim();
@@ -2150,7 +2347,7 @@ export function App() {
         <Transcript
           messages={session?.messages ?? []}
           calls={session?.calls ?? []}
-          running={running}
+          running={sessionBusy}
           quiet={mode === "极简"}
         />
       </div>
@@ -2175,7 +2372,7 @@ export function App() {
         // (event).trim 直接抛错——真实用户点「发送」按钮于是毫无反应（回车发送不经过这里）。
         onSubmit={() => void submit()}
         onStop={stop}
-        busy={running}
+        busy={sessionBusy}
         mode={mode}
         onModeChange={setMode}
         /*
@@ -2191,7 +2388,7 @@ export function App() {
         onEffortSelect={chooseEffort}
         access={agentSettingValues.access}
         onAccessSelect={chooseAccess}
-        settingsBusy={running || settingsPending !== null}
+        settingsBusy={sessionBusy || settingsPending !== null}
         settingsNotice={settingsError ?? settingsApplied ?? undefined}
         attachments={attachments}
         onAttach={(mention) =>
@@ -2623,12 +2820,12 @@ export function App() {
       }
     };
     void take();
-    const timer = window.setInterval(() => void take(), running ? 2500 : 8000);
+    const timer = window.setInterval(() => void take(), anyRunning ? 2500 : 8000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [running, openProjectId, session?.id]);
+  }, [anyRunning, openProjectId, session?.id]);
 
   const absorbToolResult = useCallback(
     (call: ToolCall) => {
@@ -3543,7 +3740,7 @@ export function App() {
           <Conversation
             messages={session?.messages ?? []}
             calls={session?.calls ?? []}
-            running={running}
+            running={sessionBusy}
             quiet={mode === "极简"}
             suggestions={SUGGESTIONS}
             onSuggestion={setDraft}
@@ -3563,9 +3760,9 @@ export function App() {
           <button
             type="button"
             className="sr-dock-rail-btn"
-            title={viewShowsDock ? (running ? "对话 · 正在运行" : "展开对话") : "去对话"}
+            title={viewShowsDock ? (sessionBusy ? "对话 · 正在运行" : "展开对话") : "去对话"}
             aria-label={viewShowsDock ? "展开对话" : "去对话"}
-            data-busy={running || voiceMode || undefined}
+            data-busy={sessionBusy || voiceMode || undefined}
             onClick={() => {
               // On a page that has no dock, the button takes you to the conversation itself.
               if (viewShowsDock) setDockOpen(true);
@@ -3594,7 +3791,10 @@ export function App() {
               setRouteSuggestion(null);
               window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: route }));
             }}
-            onDismiss={() => setRouteSuggestion(null)}
+            onDismiss={() => {
+              setRouteSuggestion(null);
+              consumeRoute(routeSuggestion);
+            }}
           />
         </div>
       )}
@@ -3607,7 +3807,7 @@ export function App() {
         draft={drafts.butler}
         onDraftChange={setButlerDraft}
         onSubmit={() => void submit(drafts.butler, { kind: "butler" })}
-        running={running}
+        running={butlerBusy}
         voiceMode={voiceMode}
         voiceState={voiceState}
         voiceLevel={() => level.current}
