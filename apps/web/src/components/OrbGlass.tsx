@@ -207,7 +207,7 @@ export function GlassSphere({
        * every voice peak brings the same organism back to full brightness. This is contrast across
        * the whole sphere, not a separate meter pasted beside it.
        */
-      const listeningBase = live ? 0.78 + voice * 0.22 : 1;
+      const listeningBase = live ? 0.66 + voice * 0.34 : 1;
       const voiceBlend = m === "speaking" ? smoothstep(current.ripple) : 0;
       const r = size / 2;
       const cx = r;
