@@ -78,6 +78,8 @@ const PROTECTED_SELECTORS = [
   ".sr-plugin-card",
   ".sr-project-new",
   ".sr-project-card",
+  ".sr-dock-composer",
+  ".sr-page-composer",
   "textarea",
   'button[title="发送"]',
   'button[title="停止这一轮"]',
@@ -85,11 +87,26 @@ const PROTECTED_SELECTORS = [
 
 function protectedRects(): Rect[] {
   const rects: Rect[] = [];
-  for (const selector of PROTECTED_SELECTORS) {
-    for (const el of document.querySelectorAll(selector)) {
-      const rect = el.getBoundingClientRect();
-      rects.push({ x: rect.x, y: rect.y, w: rect.width, h: rect.height });
-    }
+  /**
+   * The named selectors stay first for intent, but every visible interactive control is protected
+   * too. A whitelist will always miss the next button added to a page; the orb must never cover the
+   * thing the user needs to click.
+   */
+  const interactive = [
+    ...PROTECTED_SELECTORS,
+    "button",
+    "a[href]",
+    "input",
+    "textarea",
+    "select",
+    '[role="button"]',
+    '[role="menuitem"]',
+  ].join(",");
+  for (const el of document.querySelectorAll(interactive)) {
+    if (el.closest(".sr-orb")) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    rects.push({ x: rect.x, y: rect.y, w: rect.width, h: rect.height });
   }
   return rects;
 }

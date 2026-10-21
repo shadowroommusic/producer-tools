@@ -121,7 +121,7 @@ check(
 await page.getByRole("button", { name: "Studio", exact: true }).click();
 await page.waitForTimeout(300);
 await page.locator(".sr-dock-rail-btn").click();
-await page.waitForTimeout(250);
+await page.waitForTimeout(450);
 const dockText = await page.locator(".sr-dock").innerText();
 const sendLabel = await page.locator(".sr-dock .sr-send").getAttribute("aria-label");
 check(
@@ -130,6 +130,22 @@ check(
     !dockText.includes("正在运行") &&
     sendLabel === "发送",
   `text=${dockText.replace(/\n+/g, " | ").slice(0, 180)} · send=${sendLabel}`,
+);
+const composerOverlap = await page.evaluate(() => {
+  const orb = document.querySelector(".sr-orb-visual")?.getBoundingClientRect();
+  const composer = document.querySelector(".sr-dock-composer")?.getBoundingClientRect();
+  if (!orb || !composer) return null;
+  return !(
+    orb.right <= composer.left ||
+    orb.left >= composer.right ||
+    orb.bottom <= composer.top ||
+    orb.top >= composer.bottom
+  );
+});
+check(
+  "②b 悬浮球不遮挡右侧输入卡片",
+  composerOverlap === false,
+  `overlap=${composerOverlap}`,
 );
 check(
   "③ 管家 outgoing 只含管家历史，不夹带 Studio worker 正文",
