@@ -66,6 +66,7 @@ import {
 } from "./lib/agent-settings";
 import { appendAssistantDelta, segmentKeyFor } from "./lib/conversation-flow";
 import { conversationRecoveryBlock } from "./lib/conversation-recovery";
+import { routeNeedsConfirmation } from "./lib/route-policy.ts";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import { callTool } from "./lib/mcp";
 
@@ -351,7 +352,7 @@ export function App() {
       setLastWorkspaceView(mainView);
   }, [mainView]);
   const [projects, setProjects] = useState<StudioProject[]>(() => loadProjects());
-  const [openProjectId, setOpenProjectId] = useState<string | undefined>(undefined);
+  const [openProjectId, setOpenProjectId] = useState<string | undefined>(() => lastOpenProject(projects));
   const [djContext, setDjContext] = useState<DjAgentContext | null>(null);
   const [libraryContext, setLibraryContext] = useState<LibraryAgentContext | null>(null);
   const [routeSuggestion, setRouteSuggestion] = useState<RouteIntent | null>(null);
@@ -1001,10 +1002,27 @@ export function App() {
    */
   const openRoute = useCallback(
     (route: RouteIntent) => {
-      if (openingRoutesRef.current.has(route.routeId)) return;
+      const handled = (sessions: Session[]) => sessions.some((session) =>
+        session.calls.some((call) => call.id === route.routeId && call.routeConsumed === true),
+      );
+      if (
+        handled(store.sessions) ||
+        handled(loadSessions().sessions) ||
+        openingRoutesRef.current.has(route.routeId)
+      ) {
+        return;
+      }
       openingRoutesRef.current.add(route.routeId);
       setRouteSuggestion(null);
       consumeRoute(route);
+      let targetProjectId = openProjectId;
+      if (route.target === "studio" && targetProjectId === undefined) {
+        const created = defaultProject();
+        targetProjectId = created.id;
+        setProjects((current) => [created, ...current]);
+        setOpenProjectId(created.id);
+        rememberOpenProject(created.id);
+      }
       void (async () => {
         let next = route;
         try {
@@ -1017,8 +1035,8 @@ export function App() {
               : { source_session_id: route.sourceSessionId }),
             context: {
               workspace: mainView,
-              ...(route.target === "studio" && openProjectId !== undefined
-                ? { projectId: openProjectId }
+              ...(route.target === "studio" && targetProjectId !== undefined
+                ? { projectId: targetProjectId }
                 : {}),
             },
             idempotency_key: `butler-route:${route.routeId}`,
@@ -1033,7 +1051,7 @@ export function App() {
         window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: next }));
       })();
     },
-    [consumeRoute, mainView, openProjectId],
+    [consumeRoute, mainView, openProjectId, store],
   );
 
   /**
@@ -1058,12 +1076,16 @@ export function App() {
         parsed !== null &&
         (parsed.target === "studio" || parsed.target === "dj" || parsed.target === "library")
       ) {
-        setRouteSuggestion(parsed);
+        if (routeNeedsConfirmation(parsed)) {
+          setRouteSuggestion(parsed);
+        } else {
+          window.setTimeout(() => openRoute(parsed), 0);
+        }
         return;
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store]);
+  }, [store, openRoute]);
 
   useEffect(() => {
     const onRoute = (event: Event) => {
@@ -1662,7 +1684,14 @@ export function App() {
                 sourceMentions: mentions,
                 sourceSessionId: sessionId,
               };
-              setRouteSuggestion(routed);
+              if (routeNeedsConfirmation(routed)) {
+                setRouteSuggestion(routed);
+              } else {
+                // High-confidence, reversible work is the assistant doing its job, not a form to
+                // fill in. Defer one task tick so the stored route row exists before it is consumed.
+                const automatic = routed;
+                window.setTimeout(() => openRoute(automatic), 0);
+              }
             }
           }
           if (call.name === "regenerate_part") {
@@ -1903,7 +1932,7 @@ export function App() {
         );
       });
     },
-    [agent, agentSettingValues, attachments, beginVoiceTurn, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, patchSession, projects, setDraftFor, store],
+    [agent, agentSettingValues, attachments, beginVoiceTurn, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, openRoute, patchSession, projects, setDraftFor, store],
   );
 
   /**

@@ -1,6 +1,6 @@
 /**
- * Global butler route-confirmation card: classification stays in the butler thread, execution lands
- * in the chosen page worker only after the user confirms.
+ * Butler routing: safe, confident work executes directly in the chosen page worker; destructive or
+ * ambiguous work remains a confirmation card. Execution keeps the original voice attachment.
  */
 import { chromium } from "/Users/lazora/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs";
 
@@ -158,50 +158,29 @@ await page.route("**/api/**", async (route) => {
 });
 
 await page.addInitScript(({ session, project }) => {
-  localStorage.setItem("shadowroom.view", "workbench");
-  localStorage.setItem("shadowroom.studio.projects.v1", JSON.stringify({ projects: [project] }));
-  localStorage.setItem("shadowroom.studio.open", project.id);
-  localStorage.setItem("shadowroom.sessions.v1", JSON.stringify({
-    sessions: [session],
-    activeButlerId: session.id,
-    activeWorkerIds: {},
-  }));
-  localStorage.removeItem("shadowroom.dock.by-view.v1");
+  if (!sessionStorage.getItem("route-e2e-seeded")) {
+    sessionStorage.setItem("route-e2e-seeded", "1");
+    localStorage.setItem("shadowroom.view", "workbench");
+    localStorage.setItem("shadowroom.studio.projects.v1", JSON.stringify({ projects: [project] }));
+    localStorage.setItem("shadowroom.studio.open", project.id);
+    localStorage.setItem("shadowroom.sessions.v1", JSON.stringify({
+      sessions: [session],
+      activeButlerId: session.id,
+      activeWorkerIds: {},
+    }));
+    localStorage.removeItem("shadowroom.dock.by-view.v1");
+  }
 }, { session: butler, project: studioProject });
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
-await page.waitForTimeout(500);
-await page.locator(".sr-dock-rail-btn").click();
-await page.waitForTimeout(300);
-
-const card = page.locator(".sr-route-card");
-const cardCount = await card.count();
-const cardText = cardCount === 0 ? await page.locator("body").innerText() : await card.innerText();
-if (cardCount === 0) {
-  const stored = await page.evaluate(() => ({
-    sessions: localStorage.getItem("shadowroom.sessions.v1"),
-    view: localStorage.getItem("shadowroom.view"),
-  }));
-  console.log("DEBUG seed", JSON.stringify(stored).slice(0, 1200));
-  await page.screenshot({ path: "/Users/lazora/Documents/ShadowRoom/exports/route-intent-failure.png" });
+for (let index = 0; index < 50 && handedOffCalls.length === 0; index += 1) {
+  await page.waitForTimeout(100);
 }
+await page.waitForTimeout(250);
 check(
-  "① 只为可执行页面显示路由卡；ask_user 留在普通工具行",
-  cardCount === 1 &&
-    cardText.includes("Studio") &&
-    cardText.includes("94%") &&
-    !cardText.includes("需要补充信息"),
-  cardText.replace(/\n+/g, " | ").slice(0, 500),
+  "① 高置信度安全路由无需点击，直接打开 Studio 并执行；ask_user 不生成确认卡",
+  handedOffCalls.length === 1 && (await page.locator(".sr-route-card").count()) === 0,
+  `handoffs=${handedOffCalls.length} cards=${await page.locator(".sr-route-card").count()}`,
 );
-
-if (cardCount === 0) {
-  await browser.close();
-  process.exit(1);
-}
-await card.getByRole("button", { name: "打开并继续" }).evaluate((button) => {
-  button.click();
-  button.click();
-});
-await page.waitForTimeout(450);
 const handedOff = handedOffCalls.at(-1);
 const after = await page.evaluate(() => ({
   view: localStorage.getItem("shadowroom.view"),
@@ -209,7 +188,7 @@ const after = await page.evaluate(() => ({
   studioWorker: JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}").sessions?.find((entry) => entry.kind === "studio")?.id,
 }));
 check(
-  "② 确认后才切到 Studio worker、打开 dock，并自动发起执行",
+  "② 自动切到 Studio worker、打开 dock，并恰好发起一次执行",
   after.view === "studio" &&
     after.docks.studio === true &&
     typeof after.studioWorker === "string" &&
@@ -248,6 +227,27 @@ check(
     source: projectAfter?.tracks?.[0]?.clips?.[0]?.source,
   }),
 );
+const persistedRouteId = await page.evaluate(() => {
+  const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
+  return store.sessions
+    ?.find((entry) => entry.id === "butler-route")
+    ?.calls?.find((call) => call.name === "route_intent" && call.routeSource)?.id;
+});
+await page.evaluate(({ mention, decision, text, routeId }) => {
+  window.dispatchEvent(
+    new CustomEvent("shadowroom:route-open", {
+      detail: {
+        ...decision,
+        actionSummary: decision.action_summary,
+        routeId,
+        sourceText: text,
+        sourceMentions: [mention],
+        sourceSessionId: "butler-route",
+      },
+    }),
+  );
+}, { mention: sourceMention, decision: routeDecision, text: sourceText, routeId: persistedRouteId });
+await page.waitForTimeout(250);
 const consumed = await page.evaluate(() => {
   const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
   return store.sessions
@@ -257,7 +257,7 @@ const consumed = await page.evaluate(() => {
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForTimeout(350);
 check(
-  "⑤ 同一路由双击只执行一次，处理标记落盘且刷新后不再弹卡",
+  "⑤ 重复派发同一路由不执行第二次；处理标记落盘且刷新后不再触发",
   handedOffCalls.length === 1 && consumed === true && (await page.locator(".sr-route-card").count()) === 0,
   `handoffs=${handedOffCalls.length} consumed=${consumed} cards=${await page.locator(".sr-route-card").count()}`,
 );
@@ -375,15 +375,16 @@ await context.close();
 
   await livePage.locator(".sr-composer-input").fill(sourceText);
   await livePage.locator(".sr-composer-input").press("Enter");
-  await livePage.locator(".sr-route-card").waitFor({ state: "visible", timeout: 5000 });
+  for (let index = 0; index < 50 && liveSends.filter((entry) => entry.scope === "studio").length === 0; index += 1) {
+    await livePage.waitForTimeout(100);
+  }
   const butlerSend = liveSends.find((entry) => entry.scope === "butler");
   check(
-    "⑧ 管家回合带着录音发出，live route_intent 落卡",
-    butlerSend?.mentions?.[0]?.path === sourceMention.path && (await livePage.locator(".sr-route-card").count()) === 1,
+    "⑧ 管家回合带着录音发出，安全 live 路由不要求确认卡",
+    butlerSend?.mentions?.[0]?.path === sourceMention.path && (await livePage.locator(".sr-route-card").count()) === 0,
     JSON.stringify({ butlerMentions: butlerSend?.mentions, cards: await livePage.locator(".sr-route-card").count() }),
   );
 
-  await livePage.getByRole("button", { name: "打开并继续" }).click();
   await livePage.evaluate((path) => {
     // 同 routeId 的重复派发（双击/事件重放）不得触发第二次 handoff。
     window.dispatchEvent(
@@ -407,16 +408,19 @@ await context.close();
   const liveAfter = await livePage.evaluate(() => {
     const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
     const studio = store.sessions?.find((entry) => entry.kind === "studio");
+    const projects = JSON.parse(localStorage.getItem("shadowroom.studio.projects.v1") ?? "{}").projects ?? [];
     return {
       view: localStorage.getItem("shadowroom.view"),
       notices: (studio?.messages ?? []).filter((message) => message.role === "notice").map((message) => message.title),
+      projects: projects.length,
+      openProject: localStorage.getItem("shadowroom.studio.open"),
     };
   });
   const studioSend = studioSends[0];
   check(
-    "⑨ 无打开工程：handoff 仍真实执行且恰好一次（重复派发被吸收）",
-    liveAfter.view === "studio" && studioSends.length === 1,
-    JSON.stringify({ view: liveAfter.view, studioSends: studioSends.length }),
+    "⑨ 无打开工程时自动建 Studio 工程并执行且恰好一次（重复派发被吸收）",
+    liveAfter.view === "studio" && studioSends.length === 1 && liveAfter.projects === 1 && liveAfter.openProject !== null,
+    JSON.stringify({ view: liveAfter.view, studioSends: studioSends.length, project: liveAfter.openProject }),
   );
   check(
     "⑩ live 捕获的录音 mention path 等于录音 path，路由契约随行",
@@ -426,9 +430,11 @@ await context.close();
     JSON.stringify({ text: studioSend?.text?.slice(0, 220), mentions: studioSend?.mentions }),
   );
   check(
-    "⑪ 无打开工程时明确提示：请求体 project_open: no，会话出现「工程未打开」",
-    studioSend?.text?.includes("project_open: no") && liveAfter.notices.includes("工程未打开"),
-    JSON.stringify({ projectOpen: studioSend?.text?.includes("project_open: no"), notices: liveAfter.notices }),
+    "⑪ 自动创建的工程已作为真实上下文交给 worker，不再要求用户先建工程",
+    studioSend?.text?.includes("[arrangement_context]") &&
+      !studioSend?.text?.includes("project_open: no") &&
+      !liveAfter.notices.includes("工程未打开"),
+    JSON.stringify({ arrangement: studioSend?.text?.includes("[arrangement_context]"), notices: liveAfter.notices }),
   );
   const create = handoffOps.find((entry) => entry.tool === "handoff_create");
   const claim = handoffOps.find((entry) => entry.tool === "handoff_claim");

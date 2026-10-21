@@ -43,6 +43,8 @@ test("butler routes executable domain work only, not conversational replies", ()
   assert.match(text, /打招呼就正常打招呼，不发状态报告/);
   assert.match(text, /situation_report 里的 handoffs/);
   assert.match(text, /只报结果和仍待办的事/);
+  assert.match(text, /安全、高置信度的路由会由前端直接交给目标 worker/);
+  assert.match(text, /删除、清空、覆盖、移动等破坏性操作才需要确认卡/);
 });
 
 test("Studio and DJ cannot drift into each other's tools", () => {

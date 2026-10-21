@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { IconChevronDown, IconChevronRight, IconTool } from "./icons";
 import { RouteIntentCard, type RouteIntent, type RouteTarget } from "./RouteIntentCard";
+import { routeNeedsConfirmation } from "../lib/route-policy.ts";
 
 export type ToolCall = {
   id: string;
@@ -126,7 +127,7 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
    * `routeConsumed` flag flips and this row falls back to the normal tool row — one answer for
    * "was this route handled", shared with the page toast, so a reload never re-offers it.
    */
-  if (route !== null && call.routeConsumed !== true) {
+  if (route !== null && call.routeConsumed !== true && routeNeedsConfirmation(route)) {
     return (
       <RouteIntentCard
         route={route}

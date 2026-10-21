@@ -172,14 +172,17 @@ controllers in maps, not one window-wide boolean. The butler, Studio, DJ and lib
 parallel; each composer and transcript reads only its own busy state, and Stop interrupts only that
 thread. The orb reads the butler thread, never whichever worker happens to be visible.
 
-`route_intent` is a proposal, not a page switch. “打开并继续” persists the originating text and
-`Mention` list on the stored tool row (`routeSource`), creates a steward handoff with a stable
-`butler-route:<routeId>` idempotency key, waits until both the butler and target worker are idle,
-claims it, submits the original request plus attachment paths to the target session, and finishes
-the handoff as done/failed/cancelled. Duplicate clicks and duplicate events share the same route id,
-so they execute once; `routeConsumed` prevents a handled card from returning after reload. A Studio
-handoff without an open project says `project_open: no` and shows a visible notice instead of
-pretending the result entered a timeline.
+`route_intent` is a proposal, not a page switch. Safe, high-confidence work executes directly:
+the originating text and `Mention` list persist on the stored tool row (`routeSource`), a steward
+handoff gets the stable `butler-route:<routeId>` idempotency key, and the target worker receives the
+original request plus attachment paths as soon as both sessions are idle. No confirmation click is
+required for generation, analysis, export, or ordinary edits. Delete, clear, overwrite, move,
+rename, low-confidence, and missing-target work keeps an explicit `确认执行` card.
+
+Duplicate events share the same route id, so they execute once; `routeConsumed` prevents a handled
+route from replaying after reload. A Studio request with no open project creates a fresh zero-track
+project automatically, then sends its real `projectId` to the worker. That is what makes “生成一首
+歌” work from any page without a setup detour.
 
 Steward v2 adds `handoff_create`, `handoff_claim`, `handoff_finish`, `handoff_get` and
 `handoff_list` on top of the event ledger. Handoffs are mutable current work; events remain

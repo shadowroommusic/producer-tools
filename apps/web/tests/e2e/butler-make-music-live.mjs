@@ -36,20 +36,12 @@ try {
   await composer.waitFor({ timeout: 10000 });
   await composer.fill("做一段 2 小节的鼓放进这个工程，120 BPM。");
   await page.locator(".sr-orb-panel button[type=submit]").click();
-  console.log("管家回合已发，等路由卡……");
-
-  const route = page.locator(".sr-route-card").last();
-  await route.waitFor({ timeout: 300_000 });
-  const continueButton = route.getByRole("button", { name: "打开并继续" });
-  try {
-    await continueButton.waitFor({ timeout: 10_000 });
-  } catch (error) {
-    console.log("ROUTE CARD", (await route.innerText()).replace(/\n+/g, " | "));
-    await page.screenshot({ path: "/Users/lazora/Documents/ShadowRoom/exports/butler-make-music/route-no-execute.png" });
-    throw error;
-  }
-  await continueButton.click();
-  console.log("路由已确认，等 Studio worker 渲染……");
+  console.log("管家回合已发，等待安全路由自动交给 Studio worker……");
+  await page.waitForFunction(
+    () => document.querySelector(".sr-route-card") === null,
+    undefined,
+    { timeout: 20_000 },
+  );
 
   let clips = 0;
   let audioClips = 0;

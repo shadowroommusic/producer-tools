@@ -1,4 +1,5 @@
 import { IconChevronRight } from "./icons";
+import { isNavigableRoute, routeNeedsConfirmation } from "../lib/route-policy.ts";
 
 export type RouteTarget = "studio" | "dj" | "library" | "butler_direct" | "ask_user";
 
@@ -37,8 +38,8 @@ export function RouteIntentCard({
   onOpen: (route: RouteIntent) => void;
   onDismiss: () => void;
 }) {
-  const navigable = route.target === "studio" || route.target === "dj" || route.target === "library";
-  const ready = navigable && route.contextSatisfied && route.confidence >= 0.7;
+  const navigable = isNavigableRoute(route);
+  const ready = navigable && routeNeedsConfirmation(route);
   return (
     <section className="sr-route-card" data-ready={ready || undefined}>
       <span className="sr-route-kicker sr-mono">ROUTE · {Math.round(route.confidence * 100)}%</span>
@@ -57,7 +58,7 @@ export function RouteIntentCard({
         </button>
         {ready && (
           <button type="button" className="sr-btn sr-btn--accent" onClick={() => onOpen(route)}>
-            打开并继续
+            确认执行
             <IconChevronRight size={14} />
           </button>
         )}
