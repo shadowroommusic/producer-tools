@@ -130,7 +130,7 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
     return (
       <RouteIntentCard
         route={route}
-        onOpen={(next) => window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: next }))}
+        onOpen={(next) => window.dispatchEvent(new CustomEvent("shadowroom:route-open", { detail: next }))}
         onDismiss={() =>
           window.dispatchEvent(new CustomEvent("shadowroom:route-consumed", { detail: route }))
         }

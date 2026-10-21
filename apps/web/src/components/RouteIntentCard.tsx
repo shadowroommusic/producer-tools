@@ -16,6 +16,8 @@ export type RouteIntent = {
   sourceText?: string;
   sourceMentions?: Array<{ name: string; path: string; label: string }>;
   sourceSessionId?: string;
+  /** Durable steward handoff created when the user confirms this route. */
+  handoffId?: number;
 };
 
 const TARGET_LABEL: Record<RouteTarget, string> = {

@@ -26,10 +26,16 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 const page = await context.newPage();
 const errors = [];
-let releaseButler;
+const sends = [];
+/** One gate per /api/agent/send, in arrival order: 0 = butler, 1 = studio, 2 = butler again. */
+const sendGates = [];
 let sendStarted;
 const sendStartedPromise = new Promise((resolve) => {
   sendStarted = resolve;
+});
+let studioSendStarted;
+const studioSendStartedPromise = new Promise((resolve) => {
+  studioSendStarted = resolve;
 });
 page.on("pageerror", (error) => errors.push(String(error)));
 page.on("console", (message) => {
@@ -61,17 +67,23 @@ await page.route("**/api/**", async (route) => {
     return;
   }
   if (request.method() === "POST" && url.pathname === "/api/agent/send") {
-    sendStarted();
+    const body = request.postDataJSON();
+    const index = sends.length;
+    sends.push(body);
+    if (index === 0) sendStarted();
+    if (body.scope === "studio") studioSendStarted();
     await new Promise((resolve) => {
-      releaseButler = resolve;
+      sendGates[index] = resolve;
     });
-    await route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body:
-        'data: {"type":"delta","text":"完成","itemId":"answer"}\n\n' +
-        'data: {"type":"done","turn":{"status":"completed"}}\n\n',
-    });
+    await route
+      .fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body:
+          'data: {"type":"delta","text":"完成","itemId":"answer"}\n\n' +
+          'data: {"type":"done","turn":{"status":"completed"}}\n\n',
+      })
+      .catch(() => undefined);
     return;
   }
   if (request.method() === "POST" && url.pathname === "/api/call") {
@@ -120,20 +132,80 @@ check(
   `text=${dockText.replace(/\n+/g, " | ").slice(0, 180)} · send=${sendLabel}`,
 );
 check(
-  "③ 页面切换期间悬浮球仍保持管家线程 working",
+  "③ 管家 outgoing 只含管家历史，不夹带 Studio worker 正文",
+  sends.length === 1 &&
+    sends[0]?.sessionId === "butler-busy" &&
+    sends[0]?.text?.includes("帮我看一下全局状态") &&
+    !sends[0]?.text?.includes("STUDIO-ONLY"),
+  `requests=${sends.length} text=${String(sends[0]?.text ?? "").replace(/\n+/g, " | ").slice(0, 220)}`,
+);
+check(
+  "④ 页面切换期间悬浮球仍保持管家线程 working",
   (await page.locator(".sr-orb").getAttribute("data-mode")) === "working",
   `orb=${await page.locator(".sr-orb").getAttribute("data-mode")}`,
 );
 
-releaseButler();
+// 并行：管家还挂着的时候，Studio worker 也能发起自己的回合（两个线程同时运行）。
+await page.locator(".sr-dock .sr-composer-input").fill("给 Studio 干点活");
+await page.locator(".sr-dock .sr-composer-input").press("Enter");
+await studioSendStartedPromise;
+await page.waitForTimeout(150);
+const studioSend = sends.find((entry) => entry.scope === "studio");
+check(
+  "⑦ 并行：管家运行中 Studio worker 也能开自己的回合，两边互不阻塞",
+  sends.length === 2 &&
+    studioSend?.sessionId === "studio-busy" &&
+    (await page.locator(".sr-dock .sr-send").getAttribute("aria-label")) === "停止这一轮" &&
+    (await page.locator(".sr-orb").getAttribute("data-mode")) === "working" &&
+    !String(studioSend?.text ?? "").includes("帮我看一下全局状态"),
+  JSON.stringify({
+    sends: sends.length,
+    studioSession: studioSend?.sessionId,
+    dockSend: await page.locator(".sr-dock .sr-send").getAttribute("aria-label"),
+    orb: await page.locator(".sr-orb").getAttribute("data-mode"),
+  }),
+);
+
+// 独立停止：停掉 Studio 的回合，管家的 working 不受影响。
+await page.locator(".sr-dock .sr-send").click();
+await page.waitForTimeout(300);
+check(
+  "⑧ 独立停止：Studio 回合被停，管家线程照常 working",
+  (await page.locator(".sr-dock .sr-send").getAttribute("aria-label")) === "发送" &&
+    (await page.locator(".sr-orb").getAttribute("data-mode")) === "working",
+  `dockSend=${await page.locator(".sr-dock .sr-send").getAttribute("aria-label")} orb=${await page.locator(".sr-orb").getAttribute("data-mode")}`,
+);
+
+sendGates[0]?.();
 await page.waitForTimeout(250);
 check(
-  "④ 管家结束后回到 idle，Studio worker 仍无串台状态",
+  "⑤ 管家结束后回到 idle，Studio worker 仍无串台状态",
   (await page.locator(".sr-orb").getAttribute("data-mode")) !== "working" &&
     !(await page.locator(".sr-dock").innerText()).includes("正在运行"),
   `orb=${await page.locator(".sr-orb").getAttribute("data-mode")}`,
 );
-check("⑤ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+
+// worker 历史不进 Butler outgoing：回到管家页再问一句，请求体里不许出现 worker 的任何正文。
+await page.locator(".sr-session-row").filter({ hasText: "帮我看一下全局状态" }).first().click();
+await page.waitForTimeout(300);
+await page.locator(".sr-composer-input").fill("管家第二问");
+await page.locator(".sr-composer-input").press("Enter");
+await page.waitForTimeout(400);
+const butlerSecond = sends.at(-1);
+check(
+  "⑨ worker 历史不进 Butler outgoing（无 STUDIO-ONLY、无 worker 回合正文、无工程上下文）",
+  sends.length === 3 &&
+    butlerSecond?.sessionId === "butler-busy" &&
+    butlerSecond?.text?.includes("管家第二问") &&
+    butlerSecond?.text?.includes("[ui_context]") &&
+    !butlerSecond?.text?.includes("STUDIO-ONLY") &&
+    !butlerSecond?.text?.includes("给 Studio 干点活") &&
+    !butlerSecond?.text?.includes("[arrangement_context]"),
+  `sends=${sends.length} text=${String(butlerSecond?.text ?? "").replace(/\n+/g, " | ").slice(0, 260)}`,
+);
+sendGates[2]?.();
+await page.waitForTimeout(200);
+check("⑥ 零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
 await browser.close();
 const failed = results.filter((ok) => !ok).length;

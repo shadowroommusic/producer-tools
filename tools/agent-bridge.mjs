@@ -1065,7 +1065,18 @@ const PLUGIN_REPOS = [
  */
 export const SCOPE_TOOL_ALLOWLIST = {
   butler: {
-    steward: ["situation_report", "recent_events", "focus_change", "report_done", "route_intent"],
+    steward: [
+      "situation_report",
+      "recent_events",
+      "focus_change",
+      "report_done",
+      "route_intent",
+      "handoff_create",
+      "handoff_claim",
+      "handoff_finish",
+      "handoff_get",
+      "handoff_list",
+    ],
   },
   studio: {
     "shadow-music-generator": [
@@ -1156,6 +1167,7 @@ const SCOPE_INSTRUCTIONS = {
       "只有用户明确要求执行一个会改变 Studio/DJ/曲库状态的领域动作时，才调用 steward.route_intent；target 只选 studio/dj/library，并给出自包含的 action_summary、confidence 和 context={workspace, projectId, setId}（[ui_context] 里有的字段原样带上）。",
       "询问当前页面/工程状态、闲聊、打招呼、确认、拒绝、结束语（如「好的」「不需要了」）直接回答，不要调用 route_intent，也不要制造补充信息卡。",
       "除非用户明确问「现在在哪 / 刚才做了什么 / 当前状态」，否则不要主动播报页面、工程、切换次数、账本摘要或工具履历；打招呼就正常打招呼，不发状态报告。",
+      "用户问「Studio/DJ/曲库刚才做了什么、现在在干嘛」时，先看 situation_report 里的 handoffs；需要更多细节再调 handoff_list，但只报结果和仍待办的事，不复读附件路径或整段指令。",
       "用户已经附上哼唱/录音并要求写进音乐时，action_summary 必须明确要求 worker 使用该附件（例如「用附带的语音录音调用 hum_to_midi，并写入当前 Studio 工程」）；不要回复让用户重新录一遍。",
       "路由卡出现后，屏幕回复只说明已交给目标页面，不要假装已经执行。",
     ].join(""),

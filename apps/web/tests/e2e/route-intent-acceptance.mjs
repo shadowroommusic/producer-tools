@@ -89,7 +89,7 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 const page = await context.newPage();
 const errors = [];
-let handedOff = null;
+const handedOffCalls = [];
 page.on("pageerror", (error) => errors.push(String(error)));
 page.on("console", (message) => {
   if (message.type() === "error") errors.push(message.text());
@@ -119,7 +119,7 @@ await page.route("**/api/**", async (route) => {
     return;
   }
   if (request.method() === "POST" && url.pathname === "/api/agent/send") {
-    handedOff = request.postDataJSON();
+    handedOffCalls.push(request.postDataJSON());
     const hum = {
       midi_path: "/tmp/route-hum.mid",
       notes: [
@@ -197,8 +197,12 @@ if (cardCount === 0) {
   await browser.close();
   process.exit(1);
 }
-await card.getByRole("button", { name: "打开并继续" }).click();
+await card.getByRole("button", { name: "打开并继续" }).evaluate((button) => {
+  button.click();
+  button.click();
+});
 await page.waitForTimeout(450);
+const handedOff = handedOffCalls.at(-1);
 const after = await page.evaluate(() => ({
   view: localStorage.getItem("shadowroom.view"),
   docks: JSON.parse(localStorage.getItem("shadowroom.dock.by-view.v1") ?? "{}"),
@@ -210,8 +214,14 @@ check(
     after.docks.studio === true &&
     typeof after.studioWorker === "string" &&
     handedOff?.scope === "studio" &&
-    handedOff?.sessionId === after.studioWorker,
-  JSON.stringify({ ...after, scope: handedOff?.scope, sessionId: handedOff?.sessionId }),
+    handedOff?.sessionId === after.studioWorker &&
+    handedOffCalls.length === 1,
+  JSON.stringify({
+    ...after,
+    scope: handedOff?.scope,
+    sessionId: handedOff?.sessionId,
+    handoffs: handedOffCalls.length,
+  }),
 );
 check(
   "③ 原始哼唱与录音附件完整交给 Studio worker",
@@ -238,7 +248,203 @@ check(
     source: projectAfter?.tracks?.[0]?.clips?.[0]?.source,
   }),
 );
-check("⑤ 路由确认流程零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+const consumed = await page.evaluate(() => {
+  const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
+  return store.sessions
+    ?.find((entry) => entry.id === "butler-route")
+    ?.calls?.find((call) => call.id === "route-1")?.routeConsumed === true;
+});
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.waitForTimeout(350);
+check(
+  "⑤ 同一路由双击只执行一次，处理标记落盘且刷新后不再弹卡",
+  handedOffCalls.length === 1 && consumed === true && (await page.locator(".sr-route-card").count()) === 0,
+  `handoffs=${handedOffCalls.length} consumed=${consumed} cards=${await page.locator(".sr-route-card").count()}`,
+);
+check("⑥ 路由确认流程零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
+await context.close();
+
+/* ── Part B：live 链路 + 无打开工程。原始 bug 的正反面：
+ *    语音/附件 Mention 在路由时丢失（hum_to_midi 拿不到 path），以及没有打开工程时只填草稿不执行。 ── */
+{
+  const liveContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const livePage = await liveContext.newPage();
+  const liveErrors = [];
+  const liveSends = [];
+  const handoffOps = [];
+  livePage.on("pageerror", (error) => liveErrors.push(String(error)));
+  livePage.on("console", (message) => {
+    if (message.type() === "error") liveErrors.push(message.text());
+  });
+  await livePage.route("**/api/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === "/api/servers") {
+      await route.fulfill({ json: { servers: [], home: "/tmp", workspaces: "/tmp" } });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === "/api/agent/health") {
+      await route.fulfill({
+        json: { ok: true, threads: 0, cwd: "/tmp", sandbox: "workspace-write", approval: "never", plugins: [] },
+      });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === "/api/agent/models") {
+      await route.fulfill({ json: { models: [] } });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname === "/api/agent/send") {
+      const body = request.postDataJSON();
+      liveSends.push(body);
+      const stream =
+        body.scope === "butler"
+          ? `data: ${JSON.stringify({
+              type: "item",
+              phase: "completed",
+              item: {
+                type: "mcpToolCall",
+                id: "route-live-1",
+                server: "steward",
+                tool: "route_intent",
+                arguments: { target: "studio", action_summary: routeDecision.action_summary, confidence: 0.94 },
+                result: { content: [{ type: "text", text: JSON.stringify(routeDecision) }] },
+              },
+            })}\n\n` +
+            'data: {"type":"delta","text":"好的，去 Studio。","itemId":"answer"}\n\n' +
+            'data: {"type":"done","turn":{"status":"completed"}}\n\n'
+          : 'data: {"type":"delta","text":"已开始执行","itemId":"answer"}\n\n' +
+            'data: {"type":"done","turn":{"status":"completed"}}\n\n';
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: stream });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname === "/api/call") {
+      const body = request.postDataJSON();
+      if (body?.server === "steward" && String(body?.tool ?? "").startsWith("handoff_")) {
+        handoffOps.push(body);
+        const result =
+          body.tool === "handoff_create"
+            ? { handoff: { id: 9001, status: "pending" } }
+            : body.tool === "handoff_claim"
+              ? { handoff_id: 9001, claimed: true, status: "running" }
+              : { handoff_id: 9001, ok: true, status: body.args?.status ?? "done" };
+        await route.fulfill({ json: { result: JSON.stringify(result) } });
+        return;
+      }
+      await route.fulfill({ json: { result: "{}" } });
+      return;
+    }
+    await route.fulfill({ status: 204, body: "" });
+  });
+  await livePage.addInitScript(() => {
+    localStorage.setItem("shadowroom.view", "conversation");
+    // 一条历史消息让 composer 落底（空会话的 hero 居中会让「添加」菜单向上溢出视口）。
+    localStorage.setItem("shadowroom.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          id: "butler-live",
+          kind: "butler",
+          scope: { workspaceId: "butler" },
+          title: "哼一段",
+          createdAt: 1,
+          lastActiveAt: 1,
+          messages: [{ id: "m0", role: "user", text: "准备哼唱", at: 1 }],
+          calls: [],
+        },
+      ],
+      activeButlerId: "butler-live",
+      activeWorkerIds: {},
+    }));
+    localStorage.removeItem("shadowroom.studio.projects.v1");
+    localStorage.removeItem("shadowroom.studio.open");
+    localStorage.removeItem("shadowroom.dock.by-view.v1");
+  });
+  await livePage.goto(BASE, { waitUntil: "domcontentloaded" });
+  await livePage.waitForTimeout(400);
+
+  // 附件走真实 UI 入口：+ → 文件和文件夹 → 粘贴路径。与语音回合写入的 Mention 同一形状，
+  // 这一步正是原始 bug 的现场：录音 WAV 必须跟着回合走，而不是停在 composer 里。
+  await livePage.locator('.sr-composer button[aria-label="添加"]').click();
+  await livePage.getByRole("menuitem", { name: /文件和文件夹/ }).click();
+  await livePage.locator(".sr-menu-input").fill(sourceMention.path);
+  await livePage.locator(".sr-menu-input").press("Enter");
+  check(
+    "⑦ 录音路径作为 Mention 附在管家回合上",
+    (await livePage.locator(".sr-ctx-chip").count()) === 1,
+    `chips=${await livePage.locator(".sr-ctx-chip").count()}`,
+  );
+
+  await livePage.locator(".sr-composer-input").fill(sourceText);
+  await livePage.locator(".sr-composer-input").press("Enter");
+  await livePage.locator(".sr-route-card").waitFor({ state: "visible", timeout: 5000 });
+  const butlerSend = liveSends.find((entry) => entry.scope === "butler");
+  check(
+    "⑧ 管家回合带着录音发出，live route_intent 落卡",
+    butlerSend?.mentions?.[0]?.path === sourceMention.path && (await livePage.locator(".sr-route-card").count()) === 1,
+    JSON.stringify({ butlerMentions: butlerSend?.mentions, cards: await livePage.locator(".sr-route-card").count() }),
+  );
+
+  await livePage.getByRole("button", { name: "打开并继续" }).click();
+  await livePage.evaluate((path) => {
+    // 同 routeId 的重复派发（双击/事件重放）不得触发第二次 handoff。
+    window.dispatchEvent(
+      new CustomEvent("shadowroom:route-open", {
+        detail: {
+          target: "studio",
+          actionSummary: "把哼唱转成 MIDI 并写进当前工程",
+          confidence: 0.94,
+          contextSatisfied: true,
+          missingContext: [],
+          routeId: "route-live-1",
+          sourceText: "我给你哼一段，你帮我写进当前 Studio",
+          sourceMentions: [{ name: "hum.wav", path, label: "这段语音" }],
+          sourceSessionId: "duplicate-dispatch",
+        },
+      }),
+    );
+  }, sourceMention.path);
+  await livePage.waitForTimeout(900);
+  const studioSends = liveSends.filter((entry) => entry.scope === "studio");
+  const liveAfter = await livePage.evaluate(() => {
+    const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
+    const studio = store.sessions?.find((entry) => entry.kind === "studio");
+    return {
+      view: localStorage.getItem("shadowroom.view"),
+      notices: (studio?.messages ?? []).filter((message) => message.role === "notice").map((message) => message.title),
+    };
+  });
+  const studioSend = studioSends[0];
+  check(
+    "⑨ 无打开工程：handoff 仍真实执行且恰好一次（重复派发被吸收）",
+    liveAfter.view === "studio" && studioSends.length === 1,
+    JSON.stringify({ view: liveAfter.view, studioSends: studioSends.length }),
+  );
+  check(
+    "⑩ live 捕获的录音 mention path 等于录音 path，路由契约随行",
+    studioSend?.text?.includes(sourceText) &&
+      studioSend?.text?.includes("[butler_route]") &&
+      studioSend?.mentions?.[0]?.path === sourceMention.path,
+    JSON.stringify({ text: studioSend?.text?.slice(0, 220), mentions: studioSend?.mentions }),
+  );
+  check(
+    "⑪ 无打开工程时明确提示：请求体 project_open: no，会话出现「工程未打开」",
+    studioSend?.text?.includes("project_open: no") && liveAfter.notices.includes("工程未打开"),
+    JSON.stringify({ projectOpen: studioSend?.text?.includes("project_open: no"), notices: liveAfter.notices }),
+  );
+  const create = handoffOps.find((entry) => entry.tool === "handoff_create");
+  const claim = handoffOps.find((entry) => entry.tool === "handoff_claim");
+  const finish = handoffOps.find((entry) => entry.tool === "handoff_finish");
+  check(
+    "⑫ steward 持久交接真实走 create→claim→finish，附件和幂等键完整",
+    create?.arguments?.attachments?.[0]?.path === sourceMention.path &&
+      create?.arguments?.idempotency_key === "butler-route:route-live-1" &&
+      claim?.arguments?.handoff_id === 9001 &&
+      finish?.arguments?.handoff_id === 9001 &&
+      finish?.arguments?.status === "done",
+    JSON.stringify(handoffOps.map((entry) => ({ tool: entry.tool, args: entry.arguments }))),
+  );
+  check("⑬ live 链路零 Console error", liveErrors.length === 0, liveErrors.slice(0, 3).join(" | ") || "clean");
+  await liveContext.close();
+}
 
 await browser.close();
 const failed = results.filter((ok) => !ok).length;

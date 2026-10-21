@@ -21,6 +21,11 @@ test("butler sees only the steward ledger", () => {
     "focus_change",
     "report_done",
     "route_intent",
+    "handoff_create",
+    "handoff_claim",
+    "handoff_finish",
+    "handoff_get",
+    "handoff_list",
   ]);
   for (const name of Object.keys(servers).filter((name) => name !== "steward")) {
     assert.equal(servers[name].enabled, false, `${name} must be hidden from butler`);
@@ -36,6 +41,8 @@ test("butler routes executable domain work only, not conversational replies", ()
   assert.match(text, /不要回复让用户重新录一遍/);
   assert.match(text, /不要主动播报页面、工程、切换次数、账本摘要或工具履历/);
   assert.match(text, /打招呼就正常打招呼，不发状态报告/);
+  assert.match(text, /situation_report 里的 handoffs/);
+  assert.match(text, /只报结果和仍待办的事/);
 });
 
 test("Studio and DJ cannot drift into each other's tools", () => {
@@ -72,6 +79,8 @@ test("all nine servers are explicitly projected for every scope", () => {
 
 test("execution-time guard mirrors each scope instead of trusting the exposed schema", () => {
   assert.equal(scopeAllowsTool("butler", "steward", "route_intent"), true);
+  assert.equal(scopeAllowsTool("butler", "steward", "handoff_create"), true);
+  assert.equal(scopeAllowsTool("butler", "steward", "handoff_finish"), true);
   assert.equal(scopeAllowsTool("butler", "shadow-music-generator", "render_song"), false);
   assert.equal(scopeAllowsTool("studio", "shadow-music-generator", "render_song"), true);
   assert.equal(scopeAllowsTool("studio", "set-planner", "plan_set"), false);

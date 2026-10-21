@@ -66,6 +66,16 @@ try {
     clips = snapshot.clips; audioClips = snapshot.audioClips;
     if (clips > 0 && audioClips > 0) break;
   }
+  // Tool completion paints the clip before the model's final `done`. Keep the page alive until the
+  // turn actually settles so the durable steward handoff can move from running to done.
+  await page
+    .waitForFunction(
+      () => document.querySelector(".sr-dock .sr-send")?.getAttribute("aria-label") === "发送",
+      undefined,
+      { timeout: 30_000 },
+    )
+    .catch(() => undefined);
+  await page.waitForTimeout(400);
 
   const after = readdirSync(RECORDINGS).filter((name) => !before.has(name));
   const fresh = after

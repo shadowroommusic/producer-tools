@@ -80,6 +80,7 @@ const PROTECTED_SELECTORS = [
   ".sr-project-card",
   "textarea",
   'button[title="发送"]',
+  'button[title="停止这一轮"]',
 ];
 
 function protectedRects(): Rect[] {

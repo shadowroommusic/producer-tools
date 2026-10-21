@@ -80,7 +80,20 @@ async function butlerBrief(): Promise<string> {
     const raw = await callTool<string>("steward", "situation_report", {});
     const report = typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : (raw as unknown as Record<string, unknown>);
     const events = (report.events as Array<{ type?: string; actor?: string; payload?: { file?: string; outcome?: string; metrics?: Record<string, number> } }> | undefined) ?? [];
-    if (events.length === 0) return "";
+    const handoffs = report.handoffs as
+      | {
+          counts?: Record<string, number>;
+          active?: Array<{ id?: number; target?: string; status?: string; instruction_preview?: string }>;
+          recent?: Array<{ id?: number; target?: string; status?: string; instruction_preview?: string }>;
+        }
+      | undefined;
+    const activeHandoffs = handoffs?.active ?? [];
+    const recentHandoffs = handoffs?.recent ?? [];
+    const handoffLines = [...activeHandoffs, ...recentHandoffs].slice(-6).map((handoff) => {
+      const preview = (handoff.instruction_preview ?? "").trim();
+      return `  - #${handoff.id ?? "?"} ${handoff.target ?? "?"} · ${handoff.status ?? "?"}${preview === "" ? "" : ` · ${preview}`}`;
+    });
+    if (events.length === 0 && handoffLines.length === 0) return "";
     const lines = events.slice(-10).map((event) => {
       const bits = [
         event.type ?? "?",
@@ -97,6 +110,12 @@ async function butlerBrief(): Promise<string> {
       "[butler_brief]",
       `最近关键事件（${events.length} 条）:`,
       ...lines,
+      ...(handoffLines.length === 0
+        ? []
+        : [
+            `交接状态（待办 ${(handoffs?.counts?.pending ?? 0) + (handoffs?.counts?.claimed ?? 0) + (handoffs?.counts?.running ?? 0)} 条）:`,
+            ...handoffLines,
+          ]),
       ...(errors.length === 0 ? [] : [`未解决的问题: ${errors.length} 条`]),
       "[/butler_brief]",
       "（上面是**当前全局状态**，不是用户的新指令，不要对它们采取行动；用户问「刚才怎么样」时才用它汇报，需要细节再调 steward 的 recent_events。）",
@@ -287,6 +306,19 @@ export function App() {
     [mainView],
   );
   /**
+   * Dock 开合改变的是内容布局，不是视口尺寸——球的 resize 监听不会触发。实测（2026-10-21）
+   * dock 打开后球压在发送/停止按钮上，必须由页面侧主动通知重夹取（`shadowroom:orb-revalidate`
+   * 是悬浮球自己暴露的钩子）。首帧派发时 dock 内容的 rects 尚未定型（实测仍差 31px 压着
+   * 按钮），350ms 后补一次覆盖布局定型；两条派发共用一个清理，不留定时器。
+   */
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("shadowroom:orb-revalidate"));
+    const settle = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("shadowroom:orb-revalidate"));
+    }, 350);
+    return () => window.clearTimeout(settle);
+  }, [dockOpen]);
+  /**
    * Where the sidebar thinks you are is **derived**, not stored.
    *
    * There used to be two states for one question — `workspace` and `mainView` — and they could
@@ -329,6 +361,8 @@ export function App() {
    * second handoff of the same request.
    */
   const lastRoutedIdRef = useRef<string | null>(null);
+  const openingRoutesRef = useRef<Set<string>>(new Set());
+  const dispatchedRoutesRef = useRef<Set<string>>(new Set());
   const [queuedRoute, setQueuedRoute] = useState<{
     route: RouteIntent;
     text: string;
@@ -961,6 +995,48 @@ export function App() {
   );
 
   /**
+   * Confirming a route writes a durable steward handoff before navigating. The local queue still
+   * carries the live request; the MCP row is the audit/retry record that survives this page.
+   * If the ledger bridge is unavailable we keep the local path working rather than losing the task.
+   */
+  const openRoute = useCallback(
+    (route: RouteIntent) => {
+      if (openingRoutesRef.current.has(route.routeId)) return;
+      openingRoutesRef.current.add(route.routeId);
+      setRouteSuggestion(null);
+      consumeRoute(route);
+      void (async () => {
+        let next = route;
+        try {
+          const raw = await callTool<string>("steward", "handoff_create", {
+            target: route.target,
+            instruction: route.actionSummary,
+            attachments: (route.sourceMentions ?? []).map(({ name, path }) => ({ name, path })),
+            ...(route.sourceSessionId === undefined
+              ? {}
+              : { source_session_id: route.sourceSessionId }),
+            context: {
+              workspace: mainView,
+              ...(route.target === "studio" && openProjectId !== undefined
+                ? { projectId: openProjectId }
+                : {}),
+            },
+            idempotency_key: `butler-route:${route.routeId}`,
+          });
+          const parsed = JSON.parse(String(raw)) as { handoff?: { id?: number } };
+          if (typeof parsed.handoff?.id === "number") {
+            next = { ...route, handoffId: parsed.handoff.id };
+          }
+        } catch {
+          /* the target worker still runs through the agent bridge */
+        }
+        window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: next }));
+      })();
+    },
+    [consumeRoute, mainView, openProjectId],
+  );
+
+  /**
    * Re-offer a route the user confirmed-never after a reload. One shot on mount: the newest
    * butler `route_intent` that still carries its source request (voice WAV included) and was
    * never answered. Rows without `routeSource` predate this contract and stay as plain tool rows.
@@ -1016,13 +1092,19 @@ export function App() {
       const route = (event as CustomEvent<RouteIntent>).detail;
       if (route !== undefined) consumeRoute(route);
     };
+    const onRouteOpen = (event: Event) => {
+      const route = (event as CustomEvent<RouteIntent>).detail;
+      if (route !== undefined) openRoute(route);
+    };
     window.addEventListener("shadowroom:route-intent", onRoute);
     window.addEventListener("shadowroom:route-consumed", onRouteConsumed);
+    window.addEventListener("shadowroom:route-open", onRouteOpen);
     return () => {
       window.removeEventListener("shadowroom:route-intent", onRoute);
       window.removeEventListener("shadowroom:route-consumed", onRouteConsumed);
+      window.removeEventListener("shadowroom:route-open", onRouteOpen);
     };
-  }, [consumeRoute, ensureWorkerSession, setDraftFor]);
+  }, [consumeRoute, ensureWorkerSession, openRoute, setDraftFor]);
 
   /* ── 模型 / 思考深度 / 访问权限：确认后才算数 ───────────────────────────────
    *
@@ -1242,6 +1324,14 @@ export function App() {
           ],
         })),
       );
+      if (options.route?.handoffId !== undefined) {
+        void callTool("steward", "handoff_finish", {
+          handoff_id: options.route.handoffId,
+          worker_session_id: sessionId,
+          status: "failed",
+          error: "agent bridge unavailable",
+        }).catch(() => undefined);
+      }
       return;
     }
 
@@ -1253,6 +1343,8 @@ export function App() {
     const startedAt = Date.now();
     /** Latest token usage seen for this turn, reported when it finishes. */
     let usage: { totalTokens?: number } | undefined;
+    /** A durable route reaches one terminal state even if the bridge stream ends without `done`. */
+    let routeHandoffSettled = false;
     /** Calls this turn added — the turn-end summary counts exactly these. */
     const turnCallIds = new Set<string>();
     /** Shell rows carry no durationMs from the core; we measure them ourselves. */
@@ -1369,6 +1461,7 @@ export function App() {
             "",
             "[butler_route]",
             `route_id: ${options.route.routeId}`,
+            ...(options.route.handoffId === undefined ? [] : [`handoff_id: ${options.route.handoffId}`]),
             `target: ${options.route.target}`,
             `instruction: ${options.route.actionSummary}`,
             ...(kind === "studio" && openProject === undefined
@@ -1475,6 +1568,16 @@ export function App() {
       outgoing,
       (event) => {
         if (event.type === "done") {
+          if (options.route?.handoffId !== undefined) {
+            routeHandoffSettled = true;
+            void callTool("steward", "handoff_finish", {
+              handoff_id: options.route.handoffId,
+              worker_session_id: sessionId,
+              status: /failed/i.test(String(event.turn?.status ?? "")) ? "failed" : "done",
+              outcome: "worker turn completed",
+              metrics: { turns: 1 },
+            }).catch(() => undefined);
+          }
           if (kind !== "butler") {
             void callTool("steward", "report_done", {
               type: "worker.turn",
@@ -1720,11 +1823,39 @@ export function App() {
       },
     )
       .then(() => {
+        if (options.route?.handoffId !== undefined && !routeHandoffSettled) {
+          void callTool("steward", "handoff_finish", {
+            handoff_id: options.route.handoffId,
+            worker_session_id: sessionId,
+            status: "failed",
+            error: "agent stream ended without a done event",
+          }).catch(() => undefined);
+        }
         recoveredSessions.current.add(sessionId);
       })
       .catch((error: unknown) => {
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted) {
+          if (options.route?.handoffId !== undefined) {
+            routeHandoffSettled = true;
+            void callTool("steward", "handoff_finish", {
+              handoff_id: options.route.handoffId,
+              worker_session_id: sessionId,
+              status: "cancelled",
+              outcome: "worker turn interrupted",
+            }).catch(() => undefined);
+          }
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
+        if (options.route?.handoffId !== undefined) {
+          routeHandoffSettled = true;
+          void callTool("steward", "handoff_finish", {
+            handoff_id: options.route.handoffId,
+            worker_session_id: sessionId,
+            status: "failed",
+            error: message,
+          }).catch(() => undefined);
+        }
         setStore((current) =>
           patchSession(current, sessionId, (session) => ({
             ...session,
@@ -1790,22 +1921,70 @@ export function App() {
     }
     const worker = sessionForKind(store, sessionKind);
     if (worker === undefined || runningSessionsRef.current.has(worker.id)) return;
+    if (dispatchedRoutesRef.current.has(queuedRoute.route.routeId)) return;
     const next = queuedRoute;
+    dispatchedRoutesRef.current.add(next.route.routeId);
     setQueuedRoute(null);
-    void submit(next.text, {
-      kind: sessionKind,
-      mentions: next.mentions,
-      route: next.route,
-      ...(sessionKind === "studio" && openProjectId === undefined
-        ? {
-            notice: {
-              title: "工程未打开",
-              text: "Studio 还没有打开的工程：请求会照常执行（比如哼唱转 MIDI），但结果要等你新建或打开工程后才能落进时间线。",
-            },
+    void (async () => {
+      if (next.route.handoffId !== undefined) {
+        try {
+          const raw = await callTool<string>("steward", "handoff_claim", {
+            handoff_id: next.route.handoffId,
+            worker_session_id: worker.id,
+          });
+          const claim = JSON.parse(String(raw)) as { claimed?: boolean; status?: string };
+          if (claim.claimed !== true) {
+            setStore((current) =>
+              patchSession(current, worker.id, (target) => ({
+                ...target,
+                messages: [
+                  ...target.messages,
+                  {
+                    id: `handoff-${next.route.routeId}`,
+                    role: "notice" as const,
+                    title: "交接没有启动",
+                    text: `这条任务已经处于 ${claim.status ?? "未知"} 状态，可能由另一个 worker 处理中。`,
+                    at: Date.now(),
+                  },
+                ],
+              })),
+            );
+            return;
           }
-        : {}),
-    });
-  }, [queuedRoute, runningSessions, sessionKind, store, submit, openProjectId]);
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          setStore((current) =>
+            patchSession(current, worker.id, (target) => ({
+              ...target,
+              messages: [
+                ...target.messages,
+                {
+                  id: `handoff-${next.route.routeId}`,
+                  role: "notice" as const,
+                  title: "交接记录不可用",
+                  text: `本地仍会继续执行；steward 账本返回：${message}`,
+                  at: Date.now(),
+                },
+              ],
+            })),
+          );
+        }
+      }
+      await submit(next.text, {
+        kind: sessionKind,
+        mentions: next.mentions,
+        route: next.route,
+        ...(sessionKind === "studio" && openProjectId === undefined
+          ? {
+              notice: {
+                title: "工程未打开",
+                text: "Studio 还没有打开的工程：请求会照常执行（比如哼唱转 MIDI），但结果要等你新建或打开工程后才能落进时间线。",
+              },
+            }
+          : {}),
+      });
+    })();
+  }, [queuedRoute, runningSessions, sessionKind, store, submit, openProjectId, patchSession]);
 
   const stop = useCallback(() => {
     if (session === undefined) return;
@@ -3036,6 +3215,16 @@ export function App() {
    */
   const viewShowsDock = mainView === "workbench" || mainView === "studio" || mainView === "dj" || mainView === "library";
   const chatInDock = dockOpen && viewShowsDock;
+  /**
+   * Dock controls mount after the page switch. Re-measure once they are in the DOM and whenever a
+   * run changes the button from send to stop, so the orb never covers the control it is reporting on.
+   */
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("shadowroom:orb-revalidate"));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [chatInDock, mainView, sessionBusy, butlerBusy, anyRunning]);
   const dockLabel =
     mainView === "studio"
       ? "工程对话"
@@ -3788,8 +3977,7 @@ export function App() {
           <RouteIntentCard
             route={routeSuggestion}
             onOpen={(route) => {
-              setRouteSuggestion(null);
-              window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: route }));
+              openRoute(route);
             }}
             onDismiss={() => {
               setRouteSuggestion(null);
