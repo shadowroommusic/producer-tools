@@ -27,6 +27,15 @@ test("butler sees only the steward ledger", () => {
   }
 });
 
+test("butler routes executable domain work only, not conversational replies", () => {
+  const text = developerInstructionsFor("butler");
+  assert.match(text, /只有用户明确要求执行一个会改变 Studio\/DJ\/曲库状态的领域动作/);
+  assert.match(text, /「不需要了」/);
+  assert.match(text, /直接回答，不要调用 route_intent/);
+  assert.match(text, /使用该附件/);
+  assert.match(text, /不要回复让用户重新录一遍/);
+});
+
 test("Studio and DJ cannot drift into each other's tools", () => {
   const studio = scopedMcpServers("studio");
   assert.equal(studio["set-planner"].enabled, false);

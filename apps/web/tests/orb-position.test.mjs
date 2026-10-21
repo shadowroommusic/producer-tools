@@ -120,6 +120,22 @@ test("defaultPosition：右下角 24px，不压受保护控件", () => {
   assert.equal(intersects, false, `默认位 ${JSON.stringify(avoided)} 压到了右下角控件`);
 });
 
+test("右下角缩放条：垂直空间被底边夹住时必须横向搜索到无碰撞点", () => {
+  // Studio 的真实几何：悬浮球默认位 (1332,792)，缩放条横跨右下角，最右按钮在 (1343,854)。
+  // 只向下退会立即撞到底边 (maxY=804)，只向右扫描又会从已重叠的 x 开始；两种旧路径都会失败。
+  const zoomButtons = [
+    { x: 1273.39, y: 854, w: 28, h: 28 },
+    { x: 1343, y: 854, w: 28, h: 28 },
+  ];
+  const moved = defaultPosition(VIEWPORT, zoomButtons);
+  const overlaps = zoomButtons.some(
+    (rect) =>
+      !(moved.x > rect.x + rect.w || moved.x + ORB_SIZE < rect.x || moved.y > rect.y + rect.h || moved.y + ORB_SIZE < rect.y),
+  );
+  assert.equal(overlaps, false, `退避后的位置 ${JSON.stringify(moved)} 仍压住缩放按钮`);
+  assert.ok(moved.y + ORB_SIZE <= zoomButtons[0].y, "最近的无碰撞位置应在缩放条上方");
+});
+
 test("F-7：通话态 124px 也完整落在视口内（四角吸附 + 越界夹取）", () => {
   const ACTIVE = 124;
   // 按闲置尺寸夹到右/下缘的存档坐标，按通话尺寸重夹后不许出界

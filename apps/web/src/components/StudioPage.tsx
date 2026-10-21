@@ -403,6 +403,10 @@ export function StudioPage({
   const trackListRef = useRef<HTMLDivElement | null>(null);
   /** A fader drag is one undo step; only its latest value is committed. */
   const volumeGesture = useRef<string | null>(null);
+  /** Typing a track name is one edit: the first change snapshots, the rest stay transient. */
+  const trackNameEdit = useRef<{ trackId: string; started: boolean } | null>(null);
+  /** The key is a short text field too: one focus/typing gesture must be one undo step. */
+  const keyEdit = useRef<{ active: boolean; started: boolean }>({ active: false, started: false });
 
   const barPx = BAR_PX * zoom;
   const secondsPerBar = 1 / barsPerSecond(project.bpm);
@@ -1452,7 +1456,23 @@ export function StudioPage({
             <input
               className="sr-input sr-input--key"
               value={project.key}
-              onChange={(event) => onChange((current) => ({ ...current, key: event.target.value }))}
+              onFocus={() => {
+                keyEdit.current = { active: true, started: false };
+              }}
+              onBlur={() => {
+                keyEdit.current = { active: false, started: false };
+              }}
+              onChange={(event) => {
+                if (keyEdit.current.active) {
+                  if (!keyEdit.current.started) {
+                    keyEdit.current.started = true;
+                    onBeginEdit?.();
+                  }
+                  onChange((current) => ({ ...current, key: event.target.value }), { transient: true });
+                  return;
+                }
+                onChange((current) => ({ ...current, key: event.target.value }));
+              }}
             />
           </label>
           <label className="sr-transport-field">
@@ -1876,6 +1896,12 @@ export function StudioPage({
                     aria-label="音轨名称"
                     data-type={type}
                     title={`${track.name} · ${type === "drums" ? "鼓轨道" : type === "audio" ? "音频轨道" : "乐器轨道"} · 按住名字上下拖动可排序`}
+                    onFocus={() => {
+                      trackNameEdit.current = { trackId: track.id, started: false };
+                    }}
+                    onBlur={() => {
+                      if (trackNameEdit.current?.trackId === track.id) trackNameEdit.current = null;
+                    }}
                     onPointerDown={(event) => {
                       // Reordering starts on the name only: a clip drag that crosses the header must
                       // never reorder tracks.
@@ -1934,7 +1960,22 @@ export function StudioPage({
                       element.addEventListener("pointerup", onUp);
                       element.addEventListener("pointercancel", onUp);
                     }}
-                    onChange={(event) => updateTrack(track.id, (current) => ({ ...current, name: event.target.value }))}
+                    onChange={(event) => {
+                      const edit = trackNameEdit.current;
+                      if (edit?.trackId === track.id) {
+                        if (!edit.started) {
+                          edit.started = true;
+                          onBeginEdit?.();
+                        }
+                        updateTrack(
+                          track.id,
+                          (current) => ({ ...current, name: event.target.value }),
+                          { transient: true },
+                        );
+                        return;
+                      }
+                      updateTrack(track.id, (current) => ({ ...current, name: event.target.value }));
+                    }}
                   />
                   {track.instrument !== undefined && (
                     <span

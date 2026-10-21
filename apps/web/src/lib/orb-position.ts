@@ -89,35 +89,47 @@ export function avoidProtected(next: Position, protectedRects: Rect[], viewport:
         !(point.x > rect.x + rect.w || point.x + size < rect.x || point.y > rect.y + rect.h || point.y + size < rect.y),
     );
   if (!hits(next)) return next;
-  let nearest = protectedRects[0];
-  let bestDistance = Infinity;
+  const minX = MARGIN;
+  const minY = MARGIN;
+  const maxX = Math.max(minX, viewport.width - size - MARGIN);
+  const maxY = Math.max(minY, viewport.height - size - MARGIN);
+  const xs = new Set<number>([minX, maxX, Math.max(minX, Math.min(maxX, next.x))]);
+  const ys = new Set<number>([minY, maxY, Math.max(minY, Math.min(maxY, next.y))]);
   for (const rect of protectedRects) {
-    const dx = rect.x + rect.w / 2 - (next.x + size / 2);
-    const dy = rect.y + rect.h / 2 - (next.y + size / 2);
-    const distance = dx * dx + dy * dy;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      nearest = rect;
+    xs.add(Math.max(minX, Math.min(maxX, rect.x - size - MARGIN)));
+    xs.add(Math.max(minX, Math.min(maxX, rect.x + rect.w + MARGIN)));
+    ys.add(Math.max(minY, Math.min(maxY, rect.y - size - MARGIN)));
+    ys.add(Math.max(minY, Math.min(maxY, rect.y + rect.h + MARGIN)));
+  }
+  /**
+   * A one-direction escape is not enough: when the only collision sits at the bottom-right
+   * corner (Studio's zoom control), pushing down immediately clamps and the horizontal fallback
+   * starts from the already-overlapping x. Search the small viewport span instead and choose the
+   * nearest collision-free point, so the ball moves just far enough and never parks on a control.
+   */
+  for (let x = minX; x <= maxX; x += 16) xs.add(x);
+  for (let y = minY; y <= maxY; y += 16) ys.add(y);
+  let best: Position | null = null;
+  let bestDistance = Infinity;
+  for (const x of xs) {
+    for (const y of ys) {
+      const candidate = { x, y };
+      if (hits(candidate)) continue;
+      const distance = (x - next.x) ** 2 + (y - next.y) ** 2;
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
     }
   }
-  const awayX = Math.sign(next.x + size / 2 - (nearest.x + nearest.w / 2)) || -1;
-  const awayY = Math.sign(next.y + size / 2 - (nearest.y + nearest.h / 2)) || -1;
-  let candidate = { ...next };
-  // 垂直优先退让，顶住后整行水平扫描。
-  for (let step = 0; step < 24; step += 1) {
-    const moved = clampToViewport(candidate.x, candidate.y + awayY * 24, viewport, size);
-    if (moved.y === candidate.y) break;
-    candidate = moved;
-    if (!hits(candidate)) return candidate;
-  }
-  const scanStart = awayX > 0 ? next.x : viewport.width - size - MARGIN;
-  for (let step = 0; step < 24; step += 1) {
-    const moved = clampToViewport(scanStart + (awayX > 0 ? step : -step) * 32, candidate.y, viewport, size);
-    if (moved.x === candidate.x) continue;
-    candidate = moved;
-    if (!hits(candidate)) return candidate;
-  }
-  return candidate;
+  if (best !== null) return best;
+
+  /**
+   * A page can theoretically cover the whole viewport with protected controls. In that case no
+   * answer can satisfy both "stay visible" and "never overlap"; keep the orb visible at the
+   * nearest edge instead of returning an arbitrary position outside the viewport.
+   */
+  return clampToViewport(next.x, next.y, viewport, size);
 }
 
 /** 松手吸附：离任一边缘不足 48px 时贴到该边缘的 12px 边距处；再对受保护控件做保护性退避。 */
