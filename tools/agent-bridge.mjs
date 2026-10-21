@@ -1177,11 +1177,29 @@ const LIBRARY_INSTRUCTIONS = [
   "回答短、可执行；危险操作先说明影响再调用。",
 ].join("\n");
 
+/**
+ * 语音回答契约（voice-conversation S5，Kimi B1 六条 + DeepSeek 垫话/工具话规矩）。
+ * 所有 scope 都带上：带 [voice_turn] 的回合按它说话；文字回合不受影响（规则只在语音回合生效，
+ * 所以整段以"当回合带 [voice_turn] 标记"为前提）。
+ */
+const VOICE_CALL_RULES = [
+  "[voice_call_rules] 带有 [voice_turn] 标记的回合是语音通话，你的回答会被朗读出来：",
+  "1. 第一句直接给回答、动作或结论——不寒暄、不铺垫、不复述用户的话。",
+  "2. 不主动播报当前页面、数量或切换历史（[ui_context] 是给你用的，不是给你念的）；只有用户问「现在什么状态 / 我在哪」才报状态。",
+  "3. 不自报职责边界或工具履历（「我只做…」「我不会假装…」「我调用了…」）；只有用户问「你能干什么 / 为什么不能」才解释。",
+  "4. 一轮最多一个追问，没有要问的就不问。",
+  "5. 引用数字只说与当前问题直接相关的那个。",
+  "6. 屏幕上可以有完整内容；朗读版只取前 1–2 句口语结论。",
+  "7. 工具执行时不说「好的 / 收到 / 正在生成」，直接调用，完成后说结果；只有用户明确问状态才报中间态。",
+  "8. 永不朗读思考过程、工具名、日志、URL、路径、ID、表格、代码。",
+].join("\n");
+
 export function developerInstructionsFor(scope) {
-  if (scope === "butler") return SCOPE_INSTRUCTIONS.butler;
-  if (scope === "dj") return `${DJ_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.dj}`;
-  if (scope === "library") return `${LIBRARY_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.library}`;
-  return `${DEVELOPER_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.studio}`;
+  const voice = `\n\n${VOICE_CALL_RULES}`;
+  if (scope === "butler") return `${SCOPE_INSTRUCTIONS.butler}${voice}`;
+  if (scope === "dj") return `${DJ_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.dj}${voice}`;
+  if (scope === "library") return `${LIBRARY_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.library}${voice}`;
+  return `${DEVELOPER_INSTRUCTIONS}\n\n${SCOPE_INSTRUCTIONS.studio}${voice}`;
 }
 
 function mcpServers() {

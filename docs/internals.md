@@ -147,8 +147,23 @@ is what callers compare to rebuild the provider. Settings' 试听 uses the same 
 longer cancels implicitly, and synthesis failures surface through `onError` with the provider's
 message instead of a silent `onEnd`.
 
-Not wired yet (next slice, after the conversation-controls branch lands): `App.tsx` still uses the
-old effect, and `[voice_turn]` prompt injection lives in `App.tsx` / `agent-bridge.mjs`.
+**Wired (S4b/S5, 2026-10-21).** The old speaking effect, `currentTTS()`/`currentVoiceId()`,
+`speechText()`, `spokenUpTo`/`speakingToken`/`awaitingSpeakEndRef` are gone — one answer per
+question. The only path into the speaker is this turn's deltas: `feedVoiceDelta` → feeder (stable
+sentences only) → queue. `bind` locks the first itemId; a second segment of the same turn is
+refused. `onIdle` is gated by the submit-in-flight flag, so a momentary queue drain keeps the call
+in speaking; the turn ends only when the model finished *and* the queue is idle
+(`finishVoiceTurn`). A bridge synthesis failure trips one fallback (keyed by plan.key): clear →
+notice with the provider's reason → failed sentence + unplayed remainder re-pushed once on the
+system voice; a system failure only notifies. `submit` injects `[voice_turn] mode/budget` on voice
+turns (typed turns included — they also go thinking→speaking→listening now), and
+`developerInstructionsFor` carries `VOICE_CALL_RULES` for every scope.
+
+**The orb listens live (2026-10-21).** `GlassSphere` takes `level: number | (() => number)`; the
+canvas rAF reads the getter each frame, so a ref-held level actually reaches the pixels (the old
+render-time read never updated). Listening maps the RMS perceptually — `smoothstep(clamp(level*2))`
+— and drives particle brightness/radius, the tick ring, the plasma core and the CSS aura
+(`--orb-voice`); speaking's waveform morph is untouched.
 
 **Why no framework.** The turn length, the sentence budget and the voice switch are the actual
 complaints; Pipecat/LiveKit would add a Python media service or a LiveKit server and a second turn

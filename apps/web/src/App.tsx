@@ -132,7 +132,11 @@ import {
   type TurnDetector,
   type VoiceCapture,
 } from "./lib/voice";
-import { createBridgeTTS, createSystemTTS, splitSentences, type TTSProvider } from "./lib/tts";
+import { createSystemTTS, type TTSProvider } from "./lib/tts";
+import { createTTS, resolveSpeechPlan } from "./lib/speech-plan";
+import { createSpeechQueue, type SpeechQueue, type SpeechQueueSpeaker } from "./lib/tts-queue";
+import { createSpeechTurn } from "./lib/speech-turn";
+import { createSpeechFeeder, SPEECH_TURN_MAX_MS, type SpeechFeeder, type SpeechMode } from "./lib/speech-text";
 import { createBridgeSTT, createBrowserSTT, type STTProvider, type STTSession } from "./lib/stt";
 import { createBargeInDetector, turnSilenceMs, type BargeInDetector } from "./lib/bargein";
 import { CALL_START_HINT, OFFLINE_CAPTION, UNCLEAR_CAPTION, UNCLEAR_HOLD_MS, callWord } from "./lib/call-words";
@@ -140,8 +144,23 @@ import type { CallState } from "./lib/call-states";
 
 declare global {
   interface Window {
-    /** e2e 探针（F-1）：通话态与 unclear 回退闹钟是否还挂着——挂断后的泄漏在 DOM 上看不出来。 */
-    __callProbe?: { state: () => CallState; unclearArmed: () => boolean };
+    /**
+     * e2e 探针（F-1 + S4b）：通话态、unclear 回退闹钟是否还挂着——挂断后的泄漏在 DOM 上看
+     * 不出来；marks 是语音延迟/回退验收的只读读数（时间戳 + 计数，无文本/路径/密钥）。
+     */
+    __callProbe?: {
+      state: () => CallState;
+      unclearArmed: () => boolean;
+      marks: () => {
+        turnEndAt: number;
+        turnSubmitAt: number;
+        firstDeltaAt: number;
+        firstSpeakStartAt: number;
+        lastSpeakEndAt: number;
+        ttsAttempts: number;
+        ttsFallbacks: number;
+      };
+    };
   }
 }
 import {
@@ -353,45 +372,12 @@ export function App() {
     return stt.current;
   };
   /**
-   * Which voice the call speaks with.
-   *
-   * A configured 语音合成 role wins: its audio comes back through the bridge and we play it ourselves,
-   * which is also what gives the desktop build a reference signal for barge-in. With no role configured
-   * the system voice keeps working, so a call is never blocked on settings.
+   * Which voice the call speaks with — the whole chain now lives in the S0–S4a modules
+   * (`speech-plan` / `tts-queue` / `speech-turn` / `speech-text`). What is left here is the wiring:
+   * the queue (created once, with callbacks that own the call's state), the current provider
+   * instance keyed by the plan, and the bridge→system fallback. The old hand-rolled
+   * `currentTTS()`/`currentVoiceId()` pair is gone — see the speech block after `moveVoiceOffline`.
    */
-  const tts = useRef<TTSProvider | null>(null);
-  const ttsKey = useRef("");
-  const currentTTS = (): TTSProvider => {
-    const target = roleTarget(modelSettings, "tts");
-    const key = target === undefined ? "system" : `${target.provider.id}:${target.model}:${target.provider.credentialRef ?? ""}`;
-    if (tts.current === null || ttsKey.current !== key) {
-      if (target === undefined) {
-        tts.current = createSystemTTS();
-      } else {
-        const capability = capabilityTarget(target.provider, "tts");
-        /**
-         * 音色暂时由供应商默认决定：能力配置里只存协议/端点/模型（和 Shadow 的能力形状一致），
-         * 音色选择会跟着「通话与声音」页一起做——那页要列出这家自己的音色。
-         */
-        const voice = window.localStorage.getItem("shadowroom.tts.voice") ?? "";
-        tts.current = createBridgeTTS({
-          baseUrl: capability.baseUrl,
-          credentialRef: target.provider.credentialRef,
-          protocol: capability.protocol,
-          model: target.model,
-          ...(voice === "" ? {} : { voice }),
-        });
-      }
-      ttsKey.current = key;
-    }
-    return tts.current;
-  };
-  /**
-   * The voice is read at speak time, not held in state: it is chosen in 设置 (another view), and a
-   * call that is already up should pick the new voice for its next sentence instead of needing a
-   * reload. `localStorage` is the single place both views agree on.
-   */
-  const currentVoiceId = () => window.localStorage.getItem("shadowroom.voice") ?? undefined;
   /** What the user said *while the answer was playing* — the start of their next turn. */
   const interruptRef = useRef("");
   const capture = useRef<VoiceCapture | null>(null);
@@ -415,15 +401,8 @@ export function App() {
   const endCallRef = useRef<(id: string, patch: Partial<ToolCall>) => void>(() => undefined);
   const voiceModeRef = useRef(false);
   const voiceStateRef = useRef<CallState>("listening");
-  /** The turn's own `running` flag, read from callbacks that were created before it changed. */
-  const runningRef = useRef(false);
   /** When the last sentence finished playing — used to ignore the answer's own tail. */
   const speakEndedAt = useRef(0);
-  runningRef.current = running;
-  /** How much of the current answer has already been handed to the synthesizer. */
-  const spokenUpTo = useRef(0);
-  /** Bumped whenever a new answer starts being spoken, so old callbacks cannot do anything. */
-  const speakingToken = useRef(0);
   voiceModeRef.current = voiceMode;
   /**
    * The call's state lives in the ref (the callbacks below are not re-created on every render), and
@@ -485,6 +464,233 @@ export function App() {
     },
     [moveVoice],
   );
+
+  /* ── 语音朗读链（S4b 接线，实现都在 lib/speech-* 与 lib/tts-queue） ──────────
+   *
+   * 喂句的唯一入口是本轮的 delta 事件（feedVoiceDelta）：稳定句进队列，队列串行播、驱动字幕
+   * （onSentence）、开口切 speaking（onStart）、自然播完回 listening（onIdle）。上一轮的长答案
+   * 从此没有任何入口可以再被念到——旧 effect 读 lastAssistant 的那条重播路彻底删掉了。
+   */
+  const speechTurnRef = useRef(createSpeechTurn());
+  const speechQueueRef = useRef<SpeechQueue | null>(null);
+  const speechPlanKeyRef = useRef("");
+  const speechProviderRef = useRef<TTSProvider | null>(null);
+  /** bridge 熔断挂在 plan.key 上：换音色/换端点（新 key）自动解除（Kimi B3）。 */
+  const bridgeBrokenKeyRef = useRef("");
+  const systemFallbackRef = useRef<TTSProvider | null>(null);
+  const feederRef = useRef<SpeechFeeder | null>(null);
+  const feederModeRef = useRef<SpeechMode>("brief");
+  const speechModeRef = useRef<SpeechMode>("brief");
+  /** 本轮交给过队列的句子全集（fallback 的 repush 从这里切片，不读队列内部——Kimi R2）。 */
+  const turnSentencesRef = useRef<string[]>([]);
+  /**
+   * 已开播句数（队列 onSentence 推进）。与 speech-turn 的 spoken（入队数）语义不同：
+   * fallback 要的是"还没轮到播的"，不是"还没入队的"（Codex 复核 #3）。
+   */
+  const spokenIndexRef = useRef(0);
+  /**
+   * 本轮 submit 是否在途（语音语义，不是全局 running 的第二份——它只在语音回合的开头/finally
+   * 各赋值一次）：在途时 onIdle 不回 listening，句间排空保持 speaking 等下一句。
+   */
+  const voiceTurnActiveRef = useRef(false);
+  const voiceTurnStartedAtRef = useRef(0);
+  /** speaker 工厂读设置：不抓 state 闭包，否则换 provider 的时机会晚一拍。 */
+  const modelSettingsRef = useRef<ModelSettings | null>(null);
+  /** e2e 的延迟/回退读数（__callProbe.marks）：只有时间戳和计数，没有文本/路径/密钥。 */
+  const probeMarksRef = useRef({
+    turnEndAt: 0,
+    turnSubmitAt: 0,
+    firstDeltaAt: 0,
+    firstSpeakStartAt: 0,
+    lastSpeakEndAt: 0,
+    ttsAttempts: 0,
+    ttsFallbacks: 0,
+  });
+  /** 单轮朗读硬顶（SPEECH_TURN_MAX_MS）：预算正常到不了，它是模型失控的安全带。 */
+  const speechCeilingTimer = useRef<number | null>(null);
+  const disarmSpeechCeiling = useCallback(() => {
+    if (speechCeilingTimer.current === null) return;
+    window.clearTimeout(speechCeilingTimer.current);
+    speechCeilingTimer.current = null;
+  }, []);
+
+  /**
+   * 队列的 speaker 来源。plan.key 变化（换音色/换端点/换供应商）时的顺序是硬约束：
+   * **先 queue.clear() 再换实例**——反了会把 cancel 打到新实例、旧音频照播（双音叠轨）。
+   * push 前走 `refreshSpeaker()`；这里的工厂只做读取，保证 speakOnce 拿到的永远是当前实例。
+   */
+  const speakerForQueue = (): SpeechQueueSpeaker => {
+    const plan = resolveSpeechPlan(modelSettingsRef.current ?? loadModelSettings());
+    if (plan.key !== speechPlanKeyRef.current) {
+      speechPlanKeyRef.current = plan.key;
+      bridgeBrokenKeyRef.current = "";
+      speechProviderRef.current = createTTS(plan);
+    }
+    if (bridgeBrokenKeyRef.current === plan.key) {
+      systemFallbackRef.current ??= createSystemTTS();
+      return systemFallbackRef.current;
+    }
+    return speechProviderRef.current ?? createSystemTTS();
+  };
+  const refreshSpeaker = () => {
+    const plan = resolveSpeechPlan(modelSettingsRef.current ?? loadModelSettings());
+    if (plan.key === speechPlanKeyRef.current) return;
+    speechQueueRef.current?.clear();
+    speechPlanKeyRef.current = plan.key;
+    bridgeBrokenKeyRef.current = "";
+    speechProviderRef.current = createTTS(plan);
+    systemFallbackRef.current = null;
+  };
+  /** queue.push 的 voiceId 选项只在 system plan 下传（Kimi R6：bridge 音色是实例属性）。 */
+  const systemVoicePushOptions = () => {
+    const plan = resolveSpeechPlan(modelSettingsRef.current ?? loadModelSettings());
+    const voice =
+      plan.kind === "system"
+        ? plan.voiceId
+        : bridgeBrokenKeyRef.current === plan.key
+          ? window.localStorage.getItem("shadowroom.voice") ?? undefined
+          : undefined;
+    return voice === undefined || voice === "" ? {} : { voiceId: voice };
+  };
+
+  /**
+   * 一次合成失败后的回退（Kimi B3 状态机，顺序是硬约束）：
+   * bridge 且未熔断 → 记熔断 key → queue.clear()（取消旧 provider 播放）→ 提示原文 →
+   * 失败句 + 未播剩余用系统音色 repush 恰好一次。system 失败只提示，绝不重入队。
+   * 重念失败句是安全的：bridge 整段合成完才开口，失败句从未出声，不存在双播。
+   */
+  const handleSpeechError = (message: string, failedSentence: string) => {
+    const plan = resolveSpeechPlan(modelSettingsRef.current ?? loadModelSettings());
+    if (plan.kind === "bridge" && bridgeBrokenKeyRef.current !== plan.key) {
+      bridgeBrokenKeyRef.current = plan.key;
+      /** 未播剩余从**已开播**游标切：失败句自己已计入（onSentence 先于 speak），所以从这里切完正好。 */
+      const remaining = turnSentencesRef.current.slice(spokenIndexRef.current);
+      speechQueueRef.current?.clear();
+      setVoiceNotice(`供应商音色不可用：${message}，已改用系统音色`);
+      const queue = speechQueueRef.current;
+      if (queue !== null) {
+        for (const sentence of [failedSentence, ...remaining]) {
+          probeMarksRef.current.ttsFallbacks += 1;
+          queue.push(sentence, systemVoicePushOptions());
+        }
+      }
+      return;
+    }
+    setVoiceNotice(`语音失败：${message}`);
+  };
+
+  const ensureSpeechQueue = useCallback((): SpeechQueue => {
+    const existing = speechQueueRef.current;
+    if (existing !== null) return existing;
+    const queue = createSpeechQueue({
+      speaker: () => speakerForQueue(),
+      onSentence: (text) => {
+        setSpokenSentence(text);
+        if (text !== null) {
+          /**
+           * 已播游标：队列每开始播一句就推进（pump 在 speak 之前调 onSentence，所以失败句也
+           * 已计入）。fallback 的"未播剩余"从这里切——从入队数切会得到空数组，clear 后已排队
+           * 未播的句子就丢了（Codex 复核 #3）。
+           */
+          spokenIndexRef.current = Math.min(spokenIndexRef.current + 1, turnSentencesRef.current.length);
+        }
+      },
+      onStart: () => {
+        probeMarksRef.current.firstSpeakStartAt ||= performance.now();
+        if (voiceStateRef.current === "thinking") {
+          moveVoice("speaking");
+          bargeRef.current?.start(performance.now());
+        }
+      },
+      onIdle: () => {
+        disarmSpeechCeiling();
+        if (!voiceModeRef.current) return;
+        probeMarksRef.current.lastSpeakEndAt = performance.now();
+        speakEndedAt.current = performance.now();
+        /**
+         * 模型还在写（submit 在途）时的 onIdle 只是"本段暂时播完"：句间排空不代表回合结束，
+         * 保持 speaking 等下一句——提前回 listening 会把麦克风/打断检测错误交接（Codex 复核 #2）。
+         * 真正的收尾由 finishVoiceTurn（submit 的 finally，模型已结束）或最后一句的 onIdle（那
+         * 时 active 已清）走。
+         */
+        if (voiceTurnActiveRef.current) return;
+        capture.current?.takeWav();
+        moveVoice("listening");
+      },
+      onError: (message, text) => handleSpeechError(message, text),
+    });
+    speechQueueRef.current = queue;
+    return queue;
+  }, [disarmSpeechCeiling, moveVoice]);
+
+  /** 一句话入队：push 全集；计数交给队列自己的已播游标（onSentence），不在入队时推进。 */
+  const enqueueSentence = (sentence: string) => {
+    const queue = ensureSpeechQueue();
+    refreshSpeaker();
+    turnSentencesRef.current.push(sentence);
+    probeMarksRef.current.ttsAttempts += 1;
+    queue.push(sentence, systemVoicePushOptions());
+  };
+
+  /**
+   * 本轮 delta 的唯一喂入口。归属是硬约束（Codex 复核 #1）：首个 delta 的 itemId 绑定本轮
+   * 回答；之后**只有** owns 的分段才喂——同一轮里 tool 之后的第二个分段不属于本轮朗读对象
+   * （它有别的视觉呈现），直接 return。itemId 缺失（旧 core）按本轮首段放行（fallback）。
+   */
+  const feedVoiceDelta = (delta: string, itemId?: string) => {
+    if (!voiceModeRef.current) return;
+    if (probeMarksRef.current.firstDeltaAt === 0) probeMarksRef.current.firstDeltaAt = performance.now();
+    const feeder = feederRef.current;
+    if (feeder === null) return;
+    if (itemId !== undefined && itemId !== "") {
+      const candidate = `a-${itemId}`;
+      if (speechTurnRef.current.id() === null) speechTurnRef.current.bind(candidate);
+      else if (!speechTurnRef.current.owns(candidate)) return;
+    }
+    for (const sentence of feeder.push(delta)) enqueueSentence(sentence);
+  };
+
+  /** 回合收尾：尾句冲刷 + 「模型已结束且队列空闲」才回 listening（onIdle 的另一半）。 */
+  const finishVoiceTurn = () => {
+    const feeder = feederRef.current;
+    if (feeder !== null) {
+      for (const sentence of feeder.flush()) enqueueSentence(sentence);
+    }
+    const queue = speechQueueRef.current;
+    const idle = queue === null || (!queue.busy() && queue.pending() === 0);
+    if (!idle) return; // 还有句在播/在排：最后一句的 onIdle（此刻 active 已清）负责收尾。
+    if (voiceStateRef.current === "thinking") {
+      moveVoice("listening");
+      return;
+    }
+    if (voiceStateRef.current === "speaking") {
+      disarmSpeechCeiling();
+      probeMarksRef.current.lastSpeakEndAt ||= performance.now();
+      speakEndedAt.current = performance.now();
+      capture.current?.takeWav();
+      moveVoice("listening");
+    }
+  };
+
+  /** 新回合开始：清上一轮的绑定/句子/读数，装 90 秒硬顶。submit 会按完整用户话重定 mode。 */
+  const beginVoiceTurn = useCallback(() => {
+    speechTurnRef.current.begin();
+    feederRef.current = createSpeechFeeder(speechModeRef.current);
+    feederModeRef.current = speechModeRef.current;
+    turnSentencesRef.current = [];
+    spokenIndexRef.current = 0;
+    voiceTurnStartedAtRef.current = performance.now();
+    probeMarksRef.current.firstDeltaAt = 0;
+    probeMarksRef.current.firstSpeakStartAt = 0;
+    disarmSpeechCeiling();
+    speechCeilingTimer.current = window.setTimeout(() => {
+      speechCeilingTimer.current = null;
+      if (!voiceModeRef.current) return;
+      speechQueueRef.current?.clear();
+      setVoiceNotice("这一轮说太久了，先停在这里");
+      moveVoice("listening");
+    }, SPEECH_TURN_MAX_MS);
+  }, [disarmSpeechCeiling, moveVoice]);
   const [attachments, setAttachments] = useState<Mention[]>([]);
   const [models, setModels] = useState<AgentModel[]>([]);
   /**
@@ -496,6 +702,8 @@ export function App() {
    * as `turn, item×3, delta, usage, done` with the provider's own reply.
    */
   const [modelSettings, setModelSettings] = useState<ModelSettings>(() => loadModelSettings());
+  /** speaker 工厂/回退逻辑读的是 ref：不随渲染重建（见语音朗读链块）。 */
+  modelSettingsRef.current = modelSettings;
   /**
    * Which provider the Codex core is currently running on ("" = the built-in one).
    *
@@ -821,6 +1029,23 @@ export function App() {
     const kind = options.kind ?? sessionKindForView(mainView);
     const text = (override ?? drafts[kind]).trim();
     if (text === "" || running) return;
+    /**
+     * 语音回合的开口准备（S5 contract 的另一半在 outgoing 的 [voice_turn] 注入）：
+     * mode 按本轮用户话确定性判定（正则，不猜语义），beginVoiceTurn 会按它重建 feeder。
+     * begin 在这里再跑一次：打字提交的回合不经 finishTurn，bind/feeder 必须有同一个入口；
+     * 语音路径此前已在 finishTurn 开头 begin 过，此刻还没有任何 delta，幂等无害。
+     * 通话中打字同样要走 thinking→speaking→listening 的状态机——否则球停在「在听…」，
+     * 声音却在响（实测：回退提示也因此从未显示）。
+     */
+    const isVoiceTurn = voiceModeRef.current;
+    if (isVoiceTurn) {
+      speechModeRef.current = /详细说|展开|具体点|全部念|继续/.test(text) ? "detail" : "brief";
+      beginVoiceTurn();
+      /** submit 在途标记（onIdle 的门）：finally 里清，见 finishVoiceTurn 前。 */
+      voiceTurnActiveRef.current = true;
+      probeMarksRef.current.turnSubmitAt = performance.now();
+      if (voiceStateRef.current === "listening" || voiceStateRef.current === "unclear") moveVoice("thinking");
+    }
     setDraftFor(kind, "");
     const at = Date.now();
     const mentions = options.mentions ?? attachments;
@@ -1064,8 +1289,23 @@ export function App() {
      */
     const brief = kind === "butler" ? await butlerBrief() : "";
     const briefContext = brief === "" ? [] : [brief];
+    /**
+     * [voice_turn]（S5 response contract）：随语音回合隐藏注入，只进发给智能体的 outgoing，
+     * 不写进用户可见消息（消息列表只存 text）。确定性字段：mode 与预算——模型侧契约在
+     * agent-bridge 的 VOICE_CALL_RULES，前端这层只声明"这是语音回合 + 口语预算"。
+     */
+    const voiceTurnContext = isVoiceTurn
+      ? [
+          "",
+          "[voice_turn]",
+          `mode: ${speechModeRef.current}`,
+          `budget: ${speechModeRef.current === "brief" ? "2 句 / 70 字" : "8 句 / 360 字"}`,
+          "[/voice_turn]",
+          "（语音通话回合：朗读版只取前 1–2 句口语结论；第一句直接给回答或结论；不播报页面、数量、切换历史；不自报职责边界；最多一个追问；屏幕上可以有完整内容。）",
+        ]
+      : [];
     const outgoing =
-      kind !== "studio" || noteContext === null
+      (kind !== "studio" || noteContext === null
         ? [text, ...briefContext, ...butlerUiContext, ...arrangementContext, ...djSetContext, ...libraryPageContext, ...routeContext].join("\n")
         : [
             text,
@@ -1090,7 +1330,7 @@ export function App() {
             ...djSetContext,
             ...libraryPageContext,
             ...routeContext,
-          ].join("\n");
+          ].join("\n")) + (voiceTurnContext.length === 0 ? "" : `\n${voiceTurnContext.join("\n")}`);
 
     if (routeContext.length > 0) setPendingRoute(null);
 
@@ -1113,6 +1353,7 @@ export function App() {
         }
         if (event.type === "delta") {
           appendDelta(event.text, event.itemId, event.turnId);
+          if (isVoiceTurn) feedVoiceDelta(event.text, event.itemId);
           return;
         }
         if (event.type === "item") {
@@ -1334,6 +1575,11 @@ export function App() {
       })
       .finally(() => {
         finishAssistant();
+        // 语音回合收尾：先清「在途」（onIdle 此刻起允许交接），再冲残句/兜底回聆听。
+        if (isVoiceTurn) {
+          voiceTurnActiveRef.current = false;
+          finishVoiceTurn();
+        }
         const elapsedMs = Date.now() - startedAt;
         const seconds = Math.max(1, Math.round(elapsedMs / 1000));
         const at_ = Date.now();
@@ -1364,7 +1610,7 @@ export function App() {
         );
       });
     },
-    [agent, agentSettingValues, attachments, djContext, drafts, libraryContext, mainView, modelSettings, noteContext, openProjectId, patchSession, pendingRoute, projects, running, setDraftFor, store],
+    [agent, agentSettingValues, attachments, beginVoiceTurn, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, patchSession, pendingRoute, projects, running, setDraftFor, store],
   );
 
   const stop = useCallback(() => {
@@ -1420,7 +1666,6 @@ export function App() {
    * The callbacks go through refs: the speech session outlives renders, but it must always reach the
    * *current* submit (the one that knows which session is active).
    */
-  const lastAssistant = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant");
   const submitRef = useRef(submit);
   submitRef.current = submit;
   const listenRef = useRef<() => void>(() => undefined);
@@ -1447,19 +1692,6 @@ export function App() {
   const bargeRef = useRef<BargeInDetector | null>(null);
   /** Bumped on every interruption, so a canceled answer's `onend` cannot resume the call twice. */
   const answerToken = useRef(0);
-  /**
-   * 回合制识别在途。`moveVoice("thinking")` 与 `await transcribe` 之间有一次渲染（识别提示
-   * 触发的），那时 running 还是 false、答案也还没落地——说话 effect 的空答案检查会把 thinking
-   * 翻回 listening，于是**第一回合的回答永远不会自动开口**（真机上被下一回合的 thinking 顺带
-   * 触发掩盖）。识别在途期间门住那个翻转；识别失败路径本就显式回 listening，语义不变。
-   */
-  const recognizingRef = useRef(false);
-  /**
-   * 有句子交给了 TTS 但还没收到 onEnd。speak() 是异步起播（fetch+decode 完才挂 playing），
-   * effect 因状态切换重跑时 `speaking()` 还查不到——没有这个 ref，「没有下一句」分支会在
-   * 开口 ~200ms 内把 speaking 状态收掉。onEnd 负责清零，也负责真正的收尾交接。
-   */
-  const awaitingSpeakEndRef = useRef(false);
   /**
    * Every listening session carries a token: `SpeechRecognition` fires `onend`/`onresult` from the
    * session that was already replaced, and without this the stale session wrote the previous turn's
@@ -1549,6 +1781,12 @@ export function App() {
 
   /** The user stopped talking: hand the turn over, with the WAV of that phrase attached. */
   const finishTurn = useCallback(async () => {
+    /**
+     * 新回合从「用户停嘴」这一刻开始（Kimi R3）：saveRecording 的 await 窗口里任何路径都不许
+     * 再碰上一轮的回答——bind/feeder/读数在这里全部重置，早于下面的 await。
+     */
+    beginVoiceTurn();
+    probeMarksRef.current.turnEndAt = performance.now();
     let text = [heardRef.current, partialRef.current]
       .map((part) => part.trim())
       .filter((part) => part !== "")
@@ -1566,17 +1804,14 @@ export function App() {
       }
       moveVoice("thinking");
       setVoiceNotice("正在识别…");
-      recognizingRef.current = true;
       let result: Awaited<ReturnType<NonNullable<typeof provider.transcribe>>>;
       try {
         result = await provider.transcribe(wav);
       } catch (cause) {
         /** ④ 异常路径：转写本身抛了（理论上不该发生，实现在内部兜了）也按断线收，绝不留悬空闹钟。 */
-        recognizingRef.current = false;
         moveVoiceOffline(`识别失败：${cause instanceof Error ? cause.message : String(cause)}`);
         return;
       } finally {
-        recognizingRef.current = false;
       }
       if ("error" in result) {
         moveVoiceOffline(result.error);
@@ -1621,7 +1856,7 @@ export function App() {
      * 依赖刻意写全：moveVoiceUnclear 挂着 ④ 异常路径（转写抛错按断线收），少于它的话
      * 闭包里会抓到旧引用——那正是「定时器清理四条路径」最容易漏的一条。
      */
-  }, [moveVoiceOffline, moveVoiceUnclear]);
+  }, [beginVoiceTurn, moveVoiceOffline, moveVoiceUnclear]);
   finishRef.current = () => void finishTurn();
 
   const startCall = useCallback(async () => {
@@ -1670,7 +1905,9 @@ export function App() {
         if (voiceStateRef.current !== "speaking" && voiceStateRef.current !== "thinking") return;
         const turnBased = currentSTT().transcribe !== undefined;
         answerToken.current += 1;
-        currentTTS().cancel();
+        /** 打断 = 立刻静音（cancel 实际在播的实例）+ 停掉硬顶闹钟；interruptTurn 只发一次。 */
+        speechQueueRef.current?.clear();
+        disarmSpeechCeiling();
         const rescued = capture.current?.takeWavSince(sinceMs) ?? null;
         controller?.abort();
         if (session !== undefined) void interruptTurn(session.id);
@@ -1695,11 +1932,9 @@ export function App() {
         const token = answerToken.current;
         moveVoice("thinking");
         setVoiceNotice("正在识别（救回打断的话）…");
-        recognizingRef.current = true;
         void (async () => {
           const provider = currentSTT();
           const result = provider.transcribe === undefined ? { error: "识别器不在" } : await provider.transcribe(rescued);
-          recognizingRef.current = false;
           if (!voiceModeRef.current || answerToken.current !== token || voiceStateRef.current !== "thinking") return;
           const text = "error" in result ? "" : result.text.trim();
           if (text === "") {
@@ -1738,8 +1973,11 @@ export function App() {
       pauseTimer.current = null;
     }
     answerToken.current += 1;
-    speakingToken.current += 1;
-    currentTTS().cancel();
+    /** 挂断：队列清空（取消在播实例）、硬顶闹钟停、feeder 丢弃——三样都在这一条路径上。 */
+    speechQueueRef.current?.clear();
+    disarmSpeechCeiling();
+    feederRef.current = null;
+    setSpokenSentence(null);
     capture.current?.stop();
     capture.current = null;
     turnRef.current = null;
@@ -1763,6 +2001,9 @@ export function App() {
     }
     const state = voiceStateRef.current;
     if (state === "unclear" || state === "offline") {
+      /** 重连路径：残留的朗读一律清掉（规格：打断/hangup/reconnect 都 clear）。 */
+      speechQueueRef.current?.clear();
+      disarmSpeechCeiling();
       moveVoice("listening");
       setVoiceNotice(null);
       heardRef.current = "";
@@ -1797,12 +2038,13 @@ export function App() {
    * 验收钩子（生产不触发，形状照抄 StudioSoundsDrawer 的 __soundsProbe）：
    * 「挂断之后那一刻，unclear 的回退闹钟还挂着没有」在 DOM 上看不出来（挂断后球回 idle，
    * 悬空定时器照样会在 2.5s 后把状态改成 listening），而它正是 AGENTS.md:109 要防的泄漏。
-   * 所以把它开一个只读读数给 e2e。
+   * marks 是延迟/回退验收的读数（S4b）：只有时间戳与计数，只读，不含文本/路径/密钥。
    */
   useEffect(() => {
     window.__callProbe = {
       state: () => voiceStateRef.current,
       unclearArmed: () => unclearTimer.current !== null,
+      marks: () => ({ ...probeMarksRef.current }),
     };
     return () => {
       delete window.__callProbe;
@@ -1828,78 +2070,17 @@ export function App() {
   }, [voiceMode]);
 
   /**
-   * Speaking the answer, sentence by sentence as it streams.
+   * Speaking the answer, sentence by sentence as it streams（S4b 后的真相在这段注释里）：
    *
-   * Waiting for the whole answer is the single biggest latency in a call — the model keeps writing
-   * while the first sentence is already in the user's ear. Each sentence is spoken in order; when the
-   * turn ends, whatever is left (an answer that never ended with punctuation) is spoken too, and then
-   * the call goes back to plain listening.
+   * 朗读链**不再是一个 effect**。旧实现把「读哪条消息、念到哪句、谁在说」全放在这个 effect 里，
+   * 每次渲染重算 `speechText(lastAssistant)`——thinking 窗口里 lastAssistant 还是上一轮的长答案，
+   * 这就是"上一轮回答被重播"的根。现在：
+   * - 喂句的唯一入口是本轮 delta（`feedVoiceDelta` → feeder 稳定句 → `enqueueSentence`）；
+   * - 顺序/取消/句间停顿由 `lib/tts-queue` 拥有；字幕 `onSentence`、开口 `onStart`（切 speaking）、
+   *   自然播完 `onIdle`（回 listening、收音频）；
+   * - 回合边界 `speech-turn` 拥有：finishTurn/submit 开头 begin，首个 delta 的 itemId bind；
+   * - 尾句与空答案由 submit 的 finally（`finishVoiceTurn`）兜底。
    */
-  useEffect(() => {
-    if (!voiceMode) return;
-    if (voiceState === "thinking" && running) return;
-    const answer = lastAssistant?.role === "assistant" ? speechText(lastAssistant.text.trim()) : "";
-    if (answer === "" && voiceState === "thinking" && !recognizingRef.current) {
-      moveVoice("listening");
-      return;
-    }
-    if (answer === "") return;
-
-    if (voiceState === "listening") {
-      // 回到倾听：把上一句字幕擦掉（下一轮的字幕要么是识别结果，要么是「在听…」）。
-      setSpokenSentence(null);
-      return;
-    }
-
-    if (voiceState === "thinking" && !recognizingRef.current) {
-      spokenUpTo.current = 0;
-      speakingToken.current += 1;
-      moveVoice("speaking");
-      bargeRef.current?.start(performance.now());
-    }
-    if (voiceStateRef.current !== "speaking") return;
-
-    const token = speakingToken.current;
-    /** 打断/挂断都会 bump answerToken：迟到的 onended（cancel 触发的事件）不得再走「自然播完」收尾。 */
-    const turnToken = answerToken.current;
-    const sentences = splitSentences(answer);
-    const finished = !running;
-    /** While the model is still writing, the last piece is a half sentence — do not speak it yet. */
-    const speakable = finished ? sentences : sentences.slice(0, Math.max(0, sentences.length - 1));
-    const next = speakable.slice(spokenUpTo.current);
-    if (next.length === 0) {
-      if (!finished) return;
-      /**
-       * 上一句还在放的时候不许在这里收麦克风：本 effect 会因 thinking→speaking 的状态切换
-       * 立刻重跑一次，那时音频刚开始、`spokenUpTo` 却已标记到头——不看 `speaking()` 的话，
-       * 回答会在开口 ~200ms 内被状态层"结束"（音频照放、麦克风已交接、打断检测停喂），
-       * 模型 done 时刻正在播的句子每次都被抢。真放完的收尾由每个 speak 的 onEnd 链负责。
-       */
-      if (currentTTS().speaking() || awaitingSpeakEndRef.current) return;
-      // Nothing left to say (and nothing playing): the turn is over, hand the microphone back.
-      capture.current?.takeWav();
-      moveVoice("listening");
-      speakEndedAt.current = performance.now();
-      return;
-    }
-    spokenUpTo.current = speakable.length;
-    const text = next.join(" ");
-    setSpokenSentence(text);
-    awaitingSpeakEndRef.current = true;
-    currentTTS().speak(text, {
-      voiceId: currentVoiceId(),
-      onEnd: () => {
-        awaitingSpeakEndRef.current = false;
-        if (!voiceModeRef.current || speakingToken.current !== token || answerToken.current !== turnToken) return;
-        /** If that was the last piece of a finished answer, the turn is over. */
-        if (!runningRef.current && spokenUpTo.current >= splitSentences(answer).length) {
-          capture.current?.takeWav();
-          moveVoice("listening");
-          speakEndedAt.current = performance.now();
-        }
-      },
-    });
-  }, [lastAssistant, running, voiceMode, voiceState]);
 
   useEffect(() => () => hangUp(), [hangUp]);
 
@@ -3456,7 +3637,9 @@ export function App() {
            */
           voiceMode
             ? voiceState === "speaking"
-              ? (spokenSentence ?? undefined)
+              ? // 供应商音色回退这类 notice 优先于正在念的句子：声音已经换到系统音色了，
+                // 屏幕上却只滚句子的话，用户不知道刚才那次变调是「出过错」。
+                (voiceNotice ?? spokenSentence ?? undefined)
               : voiceState === "thinking"
                 ? (voiceNotice ?? callWord("thinking"))
                 : voiceState === "unclear"
@@ -3485,42 +3668,12 @@ const SUGGESTIONS = [
   "找出资料库里重复的曲目",
 ];
 
-/**
- * What the call reads out loud: the answer without the parts that only make sense on screen —
- * fenced code, backticks, markdown emphasis, links and list bullets. Spelling "star star four bars
- * star star" out loud is worse than saying nothing.
- * @param text - the assistant's answer as it appears in the transcript.
- * @returns the same answer, spoken-shaped.
- */
-function speechText(text: string): string {
-  return stripThinkForSpeech(text)
-    .replace(/```[\s\S]*?```/g, "（代码略）")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, "链接")
-    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/(^|\s)[*_]([^*_]+)[*_]/g, "$1$2")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-}
-
 /** What the separator's stages are called in the conversation. */
 function stageLabel(stage: string | undefined): string {
   if (stage === "decode") return "解码中";
   if (stage === "separate") return "分离中";
   if (stage === "collect") return "整理分轨";
   return "排队中";
-}
-
-/**
- * TTS 的最后一道兜底：正文里若仍混着 <think>（旧会话数据、或某条旁路写入），朗读前剥掉。
- * bridge 的流式状态机是第一道，历史迁移是第二道——这里是保险丝，三道各管一段入口。
- */
-function stripThinkForSpeech(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "");
 }
 
 /** Part names the synth uses, in the workbench's language. */

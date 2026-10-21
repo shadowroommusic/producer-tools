@@ -104,3 +104,13 @@ test("chat providers receive MCP tools only, never Codex shell or subagent tools
 
 // think 跨 chunk 的剥离已上收到 tools/think-stream.mjs 的流式状态机（bridge 的 delta 出口），
 // adapter 不再做可见文本过滤——同一场景的断言在 tests/think-stream.test.mjs。
+
+test("every scope carries the voice call rules (S5 contract)", () => {
+  for (const scope of ["butler", "studio", "dj", "library"]) {
+    const text = developerInstructionsFor(scope);
+    assert.ok(text.includes("[voice_call_rules]"), `${scope} 缺 voice_call_rules`);
+    assert.ok(text.includes("第一句直接给回答"), `${scope} 缺「先答结论」`);
+    assert.ok(text.includes("不主动播报"), `${scope} 缺「不播报状态」`);
+    assert.ok(text.includes("永不朗读"), `${scope} 缺「不朗读日志」`);
+  }
+});
