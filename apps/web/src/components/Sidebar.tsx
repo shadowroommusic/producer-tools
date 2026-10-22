@@ -15,8 +15,9 @@ import {
   IconStudio,
   IconWorkbench,
 } from "./icons";
+import type { WorkspaceId } from "../lib/butler-command.ts";
 
-export type WorkspaceId = "workbench" | "library" | "studio" | "dj" | "settings";
+export type { WorkspaceId } from "../lib/butler-command.ts";
 
 export type PluginEntry = {
   id: string;

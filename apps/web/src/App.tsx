@@ -34,13 +34,13 @@ import {
 import { StudioProjects, summarize } from "./components/StudioProjects";
 import { Transcript } from "./components/Transcript";
 import { Sidebar, type PluginEntry, type SessionSummary, type WorkspaceId } from "./components/Sidebar";
-import { parseRouteFromCall, type ToolCall } from "./components/ToolCallRow";
+import { type ToolCall } from "./components/ToolCallRow";
 import {
   toolResultBelongsToOpenProject,
   type DjAgentContext,
   type LibraryAgentContext,
 } from "./lib/agent-context";
-import { RouteIntentCard, type RouteIntent } from "./components/RouteIntentCard";
+import { RouteIntentCard } from "./components/RouteIntentCard";
 import {
   answerApproval,
   applyAgentSettings,
@@ -67,6 +67,12 @@ import {
 import { appendAssistantDelta, segmentKeyFor } from "./lib/conversation-flow";
 import { conversationRecoveryBlock } from "./lib/conversation-recovery";
 import { routeNeedsConfirmation } from "./lib/route-policy.ts";
+import {
+  parseButlerCommand,
+  type ButlerCommand,
+  type DispatchRoute,
+  type NavigateCommand,
+} from "./lib/butler-command.ts";
 import { fetchBridge, type ServerInfo } from "./lib/mcp";
 import { callTool } from "./lib/mcp";
 
@@ -342,17 +348,25 @@ export function App() {
   const [openProjectId, setOpenProjectId] = useState<string | undefined>(() => lastOpenProject(projects));
   const [djContext, setDjContext] = useState<DjAgentContext | null>(null);
   const [libraryContext, setLibraryContext] = useState<LibraryAgentContext | null>(null);
-  const [routeSuggestion, setRouteSuggestion] = useState<RouteIntent | null>(null);
+  const [routeSuggestion, setRouteSuggestion] = useState<DispatchRoute | null>(null);
   /**
    * A route is dispatched at most once. The card unmounts on the first click, but a duplicated
    * `shadowroom:route-intent` (double dispatch, hydration racing a live event) must not queue a
    * second handoff of the same request.
    */
-  const lastRoutedIdRef = useRef<string | null>(null);
+  const handledCommandIdsRef = useRef<Set<string>>(new Set());
   const openingRoutesRef = useRef<Set<string>>(new Set());
   const dispatchedRoutesRef = useRef<Set<string>>(new Set());
+  const commandErrorsRef = useRef<Set<string>>(new Set());
+  const activeDispatchIdRef = useRef<string | null>(null);
   const [queuedRoute, setQueuedRoute] = useState<{
-    route: RouteIntent;
+    route: DispatchRoute;
+    text: string;
+    mentions: Mention[];
+    sourceSessionId: string;
+  } | null>(null);
+  const queuedRouteRef = useRef<{
+    route: DispatchRoute;
     text: string;
     mentions: Mention[];
     sourceSessionId: string;
@@ -957,24 +971,23 @@ export function App() {
   }, []);
 
   /**
-   * Mark the stored `route_intent` row as handled (opened or dismissed). The card itself is
-   * in-memory state; without this marker a reload would re-offer a route the user already answered.
-   * Nothing is removed from the transcript — the row keeps its provenance, only flagged.
+   * Mark the stored typed command as handled. Navigation commands must never replay after a reload;
+   * dispatch commands use the same marker so a confirmation card can be retired exactly once.
    */
-  const consumeRoute = useCallback(
-    (route: RouteIntent) => {
+  const consumeCommand = useCallback(
+    (command: Pick<ButlerCommand, "commandId"> & { sourceSessionId?: string }) => {
       setStore((current) => {
         // Rows written before route provenance existed still belong to the session that owns the
         // call id. Resolve that owner from the stored calls instead of leaving "稍后" inert.
         const sessionId =
-          route.sourceSessionId ??
-          current.sessions.find((entry) => entry.calls.some((call) => call.id === route.routeId))?.id;
+          command.sourceSessionId ??
+          current.sessions.find((entry) => entry.calls.some((call) => call.id === command.commandId))?.id;
         if (sessionId === undefined) return current;
         if (!current.sessions.some((entry) => entry.id === sessionId)) return current;
         return patchSession(current, sessionId, (session) => ({
           ...session,
           calls: session.calls.map((call) =>
-            call.id === route.routeId ? { ...call, routeConsumed: true } : call,
+            call.id === command.commandId ? { ...call, routeConsumed: true } : call,
           ),
         }));
       });
@@ -982,26 +995,68 @@ export function App() {
     [patchSession],
   );
 
+  const reportCommandError = useCallback(
+    (sessionId: string | undefined, commandId: string, text: string) => {
+      if (sessionId === undefined || commandErrorsRef.current.has(commandId)) return;
+      commandErrorsRef.current.add(commandId);
+      setStore((current) =>
+        patchSession(current, sessionId, (session) => {
+          const id = `app-command-error-${commandId}`;
+          if (session.messages.some((message) => message.id === id)) return session;
+          return {
+            ...session,
+            messages: [
+              ...session.messages,
+              {
+                id,
+                role: "notice",
+                title: "管家命令未执行",
+                text,
+                at: Date.now(),
+              },
+            ],
+          };
+        }),
+      );
+    },
+    [patchSession],
+  );
+
   /**
-   * Confirming a route writes a durable steward handoff before navigating. The local queue still
-   * carries the live request; the MCP row is the audit/retry record that survives this page.
+   * Page switching is deliberately not a dispatch: no worker turn, no handoff, no confirmation.
+   * The existing focus-change effect records it in the ledger after `mainView` updates.
+   */
+  const applyNavigation = useCallback(
+    (command: NavigateCommand) => {
+      if (handledCommandIdsRef.current.has(command.commandId)) return;
+      handledCommandIdsRef.current.add(command.commandId);
+      consumeCommand(command);
+      setMainView(command.view);
+    },
+    [consumeCommand],
+  );
+
+  /**
+   * A dispatch writes a durable steward handoff before navigating. The local queue still carries
+   * the live request; the MCP row is the audit/retry record that survives this page.
    * If the ledger bridge is unavailable we keep the local path working rather than losing the task.
    */
   const openRoute = useCallback(
-    (route: RouteIntent) => {
+    (route: DispatchRoute) => {
       const handled = (sessions: Session[]) => sessions.some((session) =>
-        session.calls.some((call) => call.id === route.routeId && call.routeConsumed === true),
+        session.calls.some((call) => call.id === route.commandId && call.routeConsumed === true),
       );
       if (
         handled(store.sessions) ||
         handled(loadSessions().sessions) ||
-        openingRoutesRef.current.has(route.routeId)
+        openingRoutesRef.current.has(route.commandId)
       ) {
         return;
       }
-      openingRoutesRef.current.add(route.routeId);
+      openingRoutesRef.current.add(route.commandId);
+      activeDispatchIdRef.current = route.commandId;
       setRouteSuggestion(null);
-      consumeRoute(route);
+      consumeCommand(route);
       let targetProjectId = openProjectId;
       if (route.target === "studio" && targetProjectId === undefined) {
         const created = defaultProject();
@@ -1021,12 +1076,13 @@ export function App() {
               ? {}
               : { source_session_id: route.sourceSessionId }),
             context: {
-              workspace: mainView,
+              workspace: route.target,
               ...(route.target === "studio" && targetProjectId !== undefined
                 ? { projectId: targetProjectId }
                 : {}),
+              ...(route.target === "dj" && djContext !== null ? { setId: djContext.id } : {}),
             },
-            idempotency_key: `butler-route:${route.routeId}`,
+            idempotency_key: `butler-command:${route.commandId}`,
           });
           const parsed = JSON.parse(String(raw)) as { handoff?: { id?: number } };
           if (typeof parsed.handoff?.id === "number") {
@@ -1038,13 +1094,13 @@ export function App() {
         window.dispatchEvent(new CustomEvent("shadowroom:route-intent", { detail: next }));
       })();
     },
-    [consumeRoute, mainView, openProjectId, store],
+    [consumeCommand, djContext, openProjectId, store],
   );
 
   /**
-   * Re-offer a route the user confirmed-never after a reload. One shot on mount: the newest
-   * butler `route_intent` that still carries its source request (voice WAV included) and was
-   * never answered. Rows without `routeSource` predate this contract and stay as plain tool rows.
+   * Restore an unanswered dispatch after a reload. Navigation is intentionally lazy history: it is
+   * consumed once and never replayed, while a destructive/ambiguous dispatch may re-offer its card.
+   * Legacy `route_intent` rows remain readable; new rows use `app_command`.
    */
   const routesHydrated = useRef(false);
   useEffect(() => {
@@ -1056,53 +1112,73 @@ export function App() {
       if (entry.kind !== "butler") continue;
       const call = [...entry.calls]
         .reverse()
-        .find((c) => c.name === "route_intent" && c.routeSource !== undefined && c.routeConsumed !== true);
+        .find(
+          (c) =>
+            (c.name === "app_command" || c.name === "route_intent") &&
+            c.routeSource !== undefined &&
+            c.routeConsumed !== true,
+        );
       if (call === undefined) continue;
-      const parsed = parseRouteFromCall(call);
-      if (
-        parsed !== null &&
-        (parsed.target === "studio" || parsed.target === "dj" || parsed.target === "library")
-      ) {
-        if (routeNeedsConfirmation(parsed)) {
-          setRouteSuggestion(parsed);
+      const parsed = parseButlerCommand(call);
+      if (parsed?.op === "navigate") {
+        handledCommandIdsRef.current.add(parsed.commandId);
+        consumeCommand(parsed);
+        return;
+      }
+      if (parsed?.op === "dispatch") {
+        if (routeNeedsConfirmation(parsed.route)) {
+          activeDispatchIdRef.current = parsed.route.commandId;
+          setRouteSuggestion(parsed.route);
         } else {
-          window.setTimeout(() => openRoute(parsed), 0);
+          window.setTimeout(() => openRoute(parsed.route), 0);
         }
         return;
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, openRoute]);
+  }, [store, openRoute, consumeCommand]);
 
   useEffect(() => {
     const onRoute = (event: Event) => {
-      const route = (event as CustomEvent<RouteIntent>).detail;
+      const route = (event as CustomEvent<DispatchRoute>).detail;
       if (route === undefined) return;
-      if (route.routeId === lastRoutedIdRef.current) return;
-      if (route.target === "studio" || route.target === "dj" || route.target === "library") {
-        lastRoutedIdRef.current = route.routeId;
-        // Both surfaces (the transcript card and the page toast) land here; answering it once
-        // retires the offer everywhere and is recorded on the stored row.
-        consumeRoute(route);
-        ensureWorkerSession(route.target);
-        setMainView(route.target);
-        setDockByView((current) => ({ ...current, [route.target]: true }));
-        setDraftFor(route.target, route.actionSummary);
-        setQueuedRoute({
-          route,
-          text: route.sourceText ?? route.actionSummary,
-          mentions: route.sourceMentions ?? [],
-          sourceSessionId: route.sourceSessionId ?? butlerSessionRef.current?.id ?? "",
-        });
+      if (handledCommandIdsRef.current.has(route.commandId)) return;
+      if (queuedRouteRef.current !== null) {
+        reportCommandError(
+          route.sourceSessionId,
+          route.commandId,
+          "前一个任务还在排队或执行，这条命令没有执行。请等它结束后再发一次。",
+        );
+        consumeCommand(route);
+        return;
       }
+      handledCommandIdsRef.current.add(route.commandId);
+      // Both surfaces (the transcript card and the page toast) land here; answering it once
+      // retires the offer everywhere and is recorded on the stored row.
+      consumeCommand(route);
+      ensureWorkerSession(route.target);
+      setMainView(route.target);
+      setDockByView((current) => ({ ...current, [route.target]: true }));
+      setDraftFor(route.target, route.actionSummary);
+      const queued = {
+        route,
+        text: route.sourceText ?? route.actionSummary,
+        mentions: route.sourceMentions ?? [],
+        sourceSessionId: route.sourceSessionId ?? butlerSessionRef.current?.id ?? "",
+      };
+      queuedRouteRef.current = queued;
+      setQueuedRoute(queued);
     };
     /** The transcript card's 稍后 button: retire the offer without executing anything. */
     const onRouteConsumed = (event: Event) => {
-      const route = (event as CustomEvent<RouteIntent>).detail;
-      if (route !== undefined) consumeRoute(route);
+      const route = (event as CustomEvent<DispatchRoute>).detail;
+      if (route !== undefined) {
+        if (activeDispatchIdRef.current === route.commandId) activeDispatchIdRef.current = null;
+        consumeCommand(route);
+      }
     };
     const onRouteOpen = (event: Event) => {
-      const route = (event as CustomEvent<RouteIntent>).detail;
+      const route = (event as CustomEvent<DispatchRoute>).detail;
       if (route !== undefined) openRoute(route);
     };
     window.addEventListener("shadowroom:route-intent", onRoute);
@@ -1113,7 +1189,7 @@ export function App() {
       window.removeEventListener("shadowroom:route-consumed", onRouteConsumed);
       window.removeEventListener("shadowroom:route-open", onRouteOpen);
     };
-  }, [consumeRoute, ensureWorkerSession, openRoute, setDraftFor]);
+  }, [consumeCommand, ensureWorkerSession, openRoute, reportCommandError, setDraftFor]);
 
   /* ── 模型 / 思考深度 / 访问权限：确认后才算数 ───────────────────────────────
    *
@@ -1228,7 +1304,7 @@ export function App() {
       options: {
         mentions?: Mention[];
         kind?: SessionKind;
-        route?: RouteIntent;
+        route?: DispatchRoute;
         /** A visible note attached to this turn (e.g. the no-open-project warning on a routed handoff). */
         notice?: { title: string; text: string };
       } = {},
@@ -1469,7 +1545,7 @@ export function App() {
         ? [
             "",
             "[butler_route]",
-            `route_id: ${options.route.routeId}`,
+            `command_id: ${options.route.commandId}`,
             ...(options.route.handoffId === undefined ? [] : [`handoff_id: ${options.route.handoffId}`]),
             `target: ${options.route.target}`,
             `instruction: ${options.route.actionSummary}`,
@@ -1658,27 +1734,60 @@ export function App() {
                   ...(finishedAt === undefined ? {} : { finishedAt }),
                   ...(callStartedAt.has(call.id) ? { startedAt: callStartedAt.get(call.id) } : {}),
                 };
-          let routed: RouteIntent | null = null;
-          if (kind === "butler" && event.phase === "completed" && call.name === "route_intent") {
-            const parsed = parseRouteFromCall(call);
-            if (
-              parsed !== null &&
-              (parsed.target === "studio" || parsed.target === "dj" || parsed.target === "library")
-            ) {
-              routed = {
+          let routed: ButlerCommand | null = null;
+          if (
+            kind === "butler" &&
+            event.phase === "completed" &&
+            (call.name === "app_command" || call.name === "route_intent")
+          ) {
+            const parsed = parseButlerCommand(call);
+            if (parsed?.op === "navigate") {
+              const command: NavigateCommand = {
                 ...parsed,
+                sourceText: text,
+                sourceSessionId: sessionId,
+              };
+              routed = command;
+              // The stored call gets one render tick to land before it is consumed, matching the
+              // dispatch path and surviving StrictMode's development replay.
+              window.setTimeout(() => applyNavigation(command), 0);
+            } else if (parsed?.op === "dispatch") {
+              const route: DispatchRoute = {
+                ...parsed.route,
                 sourceText: text,
                 sourceMentions: mentions,
                 sourceSessionId: sessionId,
               };
-              if (routeNeedsConfirmation(routed)) {
-                setRouteSuggestion(routed);
+              routed = {
+                ...parsed,
+                route,
+                reason: route.actionSummary,
+              };
+              if (
+                activeDispatchIdRef.current !== null &&
+                activeDispatchIdRef.current !== route.commandId
+              ) {
+                reportCommandError(
+                  sessionId,
+                  route.commandId,
+                  "前一个任务还在等待确认、排队或执行，这条任务没有提交。",
+                );
+                consumeCommand(route);
               } else {
-                // High-confidence, reversible work is the assistant doing its job, not a form to
-                // fill in. Defer one task tick so the stored route row exists before it is consumed.
-                const automatic = routed;
-                window.setTimeout(() => openRoute(automatic), 0);
+                activeDispatchIdRef.current = route.commandId;
+                if (routeNeedsConfirmation(route)) {
+                  setRouteSuggestion(route);
+                } else {
+                  // A safe task is the assistant doing its job, not a form to fill in.
+                  window.setTimeout(() => openRoute(route), 0);
+                }
               }
+            } else if (call.name === "app_command") {
+              reportCommandError(
+                sessionId,
+                call.id,
+                "命令格式无效或不在白名单内，页面和任务状态都没有改变。",
+              );
             }
           }
           if (call.name === "regenerate_part") {
@@ -1713,9 +1822,13 @@ export function App() {
               : {
                   ...timed,
                   routeSource: {
-                    text: routed.sourceText ?? text,
-                    mentions: routed.sourceMentions ?? mentions,
-                    sessionId: routed.sourceSessionId ?? sessionId,
+                    text:
+                      (routed.op === "navigate" ? routed.sourceText : routed.route.sourceText) ??
+                      text,
+                    mentions: routed.op === "dispatch" ? (routed.route.sourceMentions ?? []) : [],
+                    sessionId:
+                      (routed.op === "navigate" ? routed.sourceSessionId : routed.route.sourceSessionId) ??
+                      sessionId,
                   },
                 };
           setStore((current) =>
@@ -1919,7 +2032,7 @@ export function App() {
         );
       });
     },
-    [agent, agentSettingValues, attachments, beginVoiceTurn, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, openRoute, patchSession, projects, setDraftFor, store],
+    [agent, agentSettingValues, applyNavigation, attachments, beginVoiceTurn, consumeCommand, djContext, drafts, libraryContext, mainView, modelSettings, moveVoice, noteContext, openProjectId, openRoute, patchSession, projects, reportCommandError, setDraftFor, store],
   );
 
   /**
@@ -1931,15 +2044,21 @@ export function App() {
    * route contract attached, exactly once (the queue is emptied before submit runs).
    */
   useEffect(() => {
-    if (queuedRoute === null || sessionKind !== queuedRoute.route.target) return;
+    if (queuedRoute === null) return;
     if (queuedRoute.sourceSessionId !== "" && runningSessionsRef.current.has(queuedRoute.sourceSessionId)) {
       return;
     }
-    const worker = sessionForKind(store, sessionKind);
-    if (worker === undefined || runningSessionsRef.current.has(worker.id)) return;
-    if (dispatchedRoutesRef.current.has(queuedRoute.route.routeId)) return;
+    const worker = sessionForKind(store, queuedRoute.route.target);
+    if (worker === undefined) {
+      ensureWorkerSession(queuedRoute.route.target);
+      return;
+    }
+    if (runningSessionsRef.current.has(worker.id)) return;
+    if (dispatchedRoutesRef.current.has(queuedRoute.route.commandId)) return;
     const next = queuedRoute;
-    dispatchedRoutesRef.current.add(next.route.routeId);
+    dispatchedRoutesRef.current.add(next.route.commandId);
+    queuedRouteRef.current = null;
+    activeDispatchIdRef.current = null;
     setQueuedRoute(null);
     void (async () => {
       if (next.route.handoffId !== undefined) {
@@ -1956,7 +2075,7 @@ export function App() {
                 messages: [
                   ...target.messages,
                   {
-                    id: `handoff-${next.route.routeId}`,
+                    id: `handoff-${next.route.commandId}`,
                     role: "notice" as const,
                     title: "交接没有启动",
                     text: `这条任务已经处于 ${claim.status ?? "未知"} 状态，可能由另一个 worker 处理中。`,
@@ -1975,7 +2094,7 @@ export function App() {
               messages: [
                 ...target.messages,
                 {
-                  id: `handoff-${next.route.routeId}`,
+                  id: `handoff-${next.route.commandId}`,
                   role: "notice" as const,
                   title: "交接记录不可用",
                   text: `本地仍会继续执行；steward 账本返回：${message}`,
@@ -1987,10 +2106,10 @@ export function App() {
         }
       }
       await submit(next.text, {
-        kind: sessionKind,
+        kind: next.route.target,
         mentions: next.mentions,
         route: next.route,
-        ...(sessionKind === "studio" && openProjectId === undefined
+        ...(next.route.target === "studio" && openProjectId === undefined
           ? {
               notice: {
                 title: "工程未打开",
@@ -2000,7 +2119,7 @@ export function App() {
           : {}),
       });
     })();
-  }, [queuedRoute, runningSessions, sessionKind, store, submit, openProjectId, patchSession]);
+  }, [ensureWorkerSession, queuedRoute, runningSessions, store, submit, openProjectId, patchSession]);
 
   const stop = useCallback(() => {
     if (session === undefined) return;
@@ -3987,7 +4106,10 @@ export function App() {
             }}
             onDismiss={() => {
               setRouteSuggestion(null);
-              consumeRoute(routeSuggestion);
+              if (activeDispatchIdRef.current === routeSuggestion.commandId) {
+                activeDispatchIdRef.current = null;
+              }
+              consumeCommand(routeSuggestion);
             }}
           />
         </div>

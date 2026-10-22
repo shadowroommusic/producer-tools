@@ -1,32 +1,13 @@
 import { IconChevronRight } from "./icons";
-import { isNavigableRoute, routeNeedsConfirmation } from "../lib/route-policy.ts";
+import { routeNeedsConfirmation } from "../lib/route-policy.ts";
+import type { DispatchRoute, WorkerTarget } from "../lib/butler-command.ts";
 
-export type RouteTarget = "studio" | "dj" | "library" | "butler_direct" | "ask_user";
+export type RouteIntent = DispatchRoute;
 
-export type RouteIntent = {
-  target: RouteTarget;
-  actionSummary: string;
-  confidence: number;
-  contextSatisfied: boolean;
-  missingContext: string[];
-  routeId: string;
-  /**
-   * The request that produced this route. Persisted with the tool row so confirmation still works
-   * after a reload and voice recordings are not lost between classification and execution.
-   */
-  sourceText?: string;
-  sourceMentions?: Array<{ name: string; path: string; label: string }>;
-  sourceSessionId?: string;
-  /** Durable steward handoff created when the user confirms this route. */
-  handoffId?: number;
-};
-
-const TARGET_LABEL: Record<RouteTarget, string> = {
+const TARGET_LABEL: Record<WorkerTarget, string> = {
   studio: "Studio",
   dj: "DJ",
   library: "曲目库",
-  butler_direct: "管家直接处理",
-  ask_user: "需要补充信息",
 };
 
 export function RouteIntentCard({
@@ -38,8 +19,7 @@ export function RouteIntentCard({
   onOpen: (route: RouteIntent) => void;
   onDismiss: () => void;
 }) {
-  const navigable = isNavigableRoute(route);
-  const ready = navigable && routeNeedsConfirmation(route);
+  const ready = routeNeedsConfirmation(route);
   return (
     <section className="sr-route-card" data-ready={ready || undefined}>
       <span className="sr-route-kicker sr-mono">ROUTE · {Math.round(route.confidence * 100)}%</span>

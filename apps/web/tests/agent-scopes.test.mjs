@@ -20,7 +20,7 @@ test("butler sees only the steward ledger", () => {
     "recent_events",
     "focus_change",
     "report_done",
-    "route_intent",
+    "app_command",
     "handoff_create",
     "handoff_claim",
     "handoff_finish",
@@ -34,9 +34,14 @@ test("butler sees only the steward ledger", () => {
 
 test("butler routes executable domain work only, not conversational replies", () => {
   const text = developerInstructionsFor("butler");
-  assert.match(text, /只有用户明确要求执行一个会改变 Studio\/DJ\/曲库状态的领域动作/);
+  assert.match(text, /steward\.app_command/);
+  assert.match(text, /用户只想打开\/切换页面.*op=navigate/s);
+  assert.match(text, /用户要改变 Studio\/DJ\/曲库里的东西时，用 op=dispatch/);
+  assert.match(text, /同一句既换页又干活时只发 dispatch/);
+  assert.match(text, /一轮最多一个 dispatch/);
+  assert.match(text, /navigate 成功后只回一句/);
   assert.match(text, /「不需要了」/);
-  assert.match(text, /直接回答，不要调用 route_intent/);
+  assert.match(text, /直接回答，不要调用 app_command/);
   assert.match(text, /使用该附件/);
   assert.match(text, /不要回复让用户重新录一遍/);
   assert.match(text, /不要主动播报页面、工程、切换次数、账本摘要或工具履历/);
@@ -80,7 +85,8 @@ test("all nine servers are explicitly projected for every scope", () => {
 });
 
 test("execution-time guard mirrors each scope instead of trusting the exposed schema", () => {
-  assert.equal(scopeAllowsTool("butler", "steward", "route_intent"), true);
+  assert.equal(scopeAllowsTool("butler", "steward", "app_command"), true);
+  assert.equal(scopeAllowsTool("butler", "steward", "route_intent"), false);
   assert.equal(scopeAllowsTool("butler", "steward", "handoff_create"), true);
   assert.equal(scopeAllowsTool("butler", "steward", "handoff_finish"), true);
   assert.equal(scopeAllowsTool("butler", "shadow-music-generator", "render_song"), false);
@@ -117,11 +123,11 @@ test("chat providers receive MCP tools only, never Codex shell or subagent tools
     {
       type: "namespace",
       name: "mcp__steward",
-      tools: [{ type: "function", name: "route_intent", parameters: { type: "object" } }],
+      tools: [{ type: "function", name: "app_command", parameters: { type: "object" } }],
     },
   ]);
-  assert.deepEqual(tools.map((tool) => tool.function.name), ["mcp__steward__route_intent"]);
-  assert.deepEqual(nameMap.get("mcp__steward__route_intent"), { server: "steward", tool: "route_intent" });
+  assert.deepEqual(tools.map((tool) => tool.function.name), ["mcp__steward__app_command"]);
+  assert.deepEqual(nameMap.get("mcp__steward__app_command"), { server: "steward", tool: "app_command" });
 });
 
 // think 跨 chunk 的剥离已上收到 tools/think-stream.mjs 的流式状态机（bridge 的 delta 出口），

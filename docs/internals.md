@@ -172,17 +172,21 @@ controllers in maps, not one window-wide boolean. The butler, Studio, DJ and lib
 parallel; each composer and transcript reads only its own busy state, and Stop interrupts only that
 thread. The orb reads the butler thread, never whichever worker happens to be visible.
 
-`route_intent` is a proposal, not a page switch. Safe, high-confidence work executes directly:
-the originating text and `Mention` list persist on the stored tool row (`routeSource`), a steward
-handoff gets the stable `butler-route:<routeId>` idempotency key, and the target worker receives the
-original request plus attachment paths as soon as both sessions are idle. No confirmation click is
-required for generation, analysis, export, or ordinary edits. Delete, clear, overwrite, move,
-rename, low-confidence, and missing-target work keeps an explicit `确认执行` card.
+`steward.app_command` is the butler's one typed app-command entry. Its `navigate` variant changes only
+the active view (`workbench`, `conversation`, `plugins`, `studio`, `dj`, `library`, or `settings`);
+it sends no worker turn, creates no handoff, does not open a Studio project, and never replays after a
+reload. Its `dispatch` variant carries the validated Studio/DJ/library route and reuses the durable
+handoff path: the originating text and `Mention` list persist on the stored tool row (`routeSource`),
+the handoff gets the stable `butler-command:<commandId>` idempotency key, and the target worker
+receives the original request plus attachment paths as soon as both sessions are idle. Safe,
+high-confidence dispatch executes directly; delete, clear, overwrite, move, rename, and low-confidence
+work keeps an explicit `确认执行` card. Historical `route_intent` rows remain read-compatible, but the
+butler no longer has that tool.
 
-Duplicate events share the same route id, so they execute once; `routeConsumed` prevents a handled
-route from replaying after reload. A Studio request with no open project creates a fresh zero-track
-project automatically, then sends its real `projectId` to the worker. That is what makes “生成一首
-歌” work from any page without a setup detour.
+Duplicate command ids execute once, and `routeConsumed` prevents a handled command from replaying
+after reload. A dispatched Studio request with no open project creates a fresh zero-track project
+automatically, then sends its real `projectId` to the worker. A queued dispatch waits for the target
+worker itself rather than whichever page happens to be visible; changing pages cannot strand it.
 
 Steward v2 adds `handoff_create`, `handoff_claim`, `handoff_finish`, `handoff_get` and
 `handoff_list` on top of the event ledger. Handoffs are mutable current work; events remain
@@ -255,8 +259,9 @@ stay the seam if a media framework is ever adopted.
   speaking waveform remain.
 - **Dock** — the current page's worker conversation plus its composer. Studio / DJ / library are
   collapsed on first visit; each page remembers its own state. Collapsed it becomes a 44px rail.
-  A global butler route suggestion appears as a temporary route card on the current page; confirming
-  it is what opens the target page's dock and fills that worker's draft.
+  A pure butler navigation changes only the centre page. A dispatch opens the target page's dock,
+  fills that worker's draft, and submits the original request; destructive work shows a route card
+  before either navigation or dispatch happens.
 - **Plugin panels** are pages in the centre column (`PluginPanelPage`), opened from the plugins page.
 - **Agent-driven UI side effects** — when `hum_to_midi` completes in a session, `App.absorbMelody`
   reads the tool result and appends a clip (with its notes) to the open Studio project. That is the

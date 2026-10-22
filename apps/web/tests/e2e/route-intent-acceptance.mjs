@@ -227,26 +227,26 @@ check(
     source: projectAfter?.tracks?.[0]?.clips?.[0]?.source,
   }),
 );
-const persistedRouteId = await page.evaluate(() => {
+const persistedCommandId = await page.evaluate(() => {
   const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
   return store.sessions
     ?.find((entry) => entry.id === "butler-route")
     ?.calls?.find((call) => call.name === "route_intent" && call.routeSource)?.id;
 });
-await page.evaluate(({ mention, decision, text, routeId }) => {
+await page.evaluate(({ mention, decision, text, commandId }) => {
   window.dispatchEvent(
     new CustomEvent("shadowroom:route-open", {
       detail: {
         ...decision,
         actionSummary: decision.action_summary,
-        routeId,
+        commandId,
         sourceText: text,
         sourceMentions: [mention],
         sourceSessionId: "butler-route",
       },
     }),
   );
-}, { mention: sourceMention, decision: routeDecision, text: sourceText, routeId: persistedRouteId });
+}, { mention: sourceMention, decision: routeDecision, text: sourceText, commandId: persistedCommandId });
 await page.waitForTimeout(250);
 const consumed = await page.evaluate(() => {
   const store = JSON.parse(localStorage.getItem("shadowroom.sessions.v1") ?? "{}");
@@ -395,7 +395,7 @@ await context.close();
           confidence: 0.94,
           contextSatisfied: true,
           missingContext: [],
-          routeId: "route-live-1",
+          commandId: "route-live-1",
           sourceText: "我给你哼一段，你帮我写进当前 Studio",
           sourceMentions: [{ name: "hum.wav", path, label: "这段语音" }],
           sourceSessionId: "duplicate-dispatch",
@@ -442,7 +442,7 @@ await context.close();
   check(
     "⑫ steward 持久交接真实走 create→claim→finish，附件和幂等键完整",
     create?.arguments?.attachments?.[0]?.path === sourceMention.path &&
-      create?.arguments?.idempotency_key === "butler-route:route-live-1" &&
+      create?.arguments?.idempotency_key === "butler-command:route-live-1" &&
       claim?.arguments?.handoff_id === 9001 &&
       finish?.arguments?.handoff_id === 9001 &&
       finish?.arguments?.status === "done",

@@ -8,8 +8,9 @@
  */
 import { useState } from "react";
 import { IconChevronDown, IconChevronRight, IconTool } from "./icons";
-import { RouteIntentCard, type RouteIntent, type RouteTarget } from "./RouteIntentCard";
+import { RouteIntentCard, type RouteIntent } from "./RouteIntentCard";
 import { routeNeedsConfirmation } from "../lib/route-policy.ts";
+import { parseButlerCommand } from "../lib/butler-command.ts";
 
 export type ToolCall = {
   id: string;
@@ -108,17 +109,12 @@ function CallSection({ label, text }: { label: string; text: string }) {
 export function ToolCallRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(call.status === "error");
   const Chevron = open ? IconChevronDown : IconChevronRight;
-  const parsedRoute = call.name === "route_intent" && call.status === "ok" ? parseRouteFromCall(call) : null;
+  const parsedCommand = call.status === "ok" ? parseButlerCommand(call) : null;
   /**
-   * Direct answers and clarification prompts are conversation, not dispatch. A confirmation card
-   * there reads like the manager asking permission to answer its own question; keep those rows
-   * collapsed in the transcript instead.
+   * Navigation is an effect, not an offer. Only a dispatch that needs authorization grows into a
+   * confirmation card; a page switch stays a compact tool row after it has already happened.
    */
-  const route =
-    parsedRoute !== null &&
-    (parsedRoute.target === "studio" || parsedRoute.target === "dj" || parsedRoute.target === "library")
-      ? parsedRoute
-      : null;
+  const route = parsedCommand?.op === "dispatch" ? parsedCommand.route : null;
   const isShell = call.server === "shell";
   const duration = durationLabel(call);
 
@@ -185,39 +181,6 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
 }
 
 export function parseRouteFromCall(call: ToolCall): RouteIntent | null {
-  try {
-    const envelope = JSON.parse(call.detail ?? "{}") as Record<string, unknown>;
-    let result = envelope.result;
-    if (result !== null && typeof result === "object" && Array.isArray((result as { content?: unknown[] }).content)) {
-      const text = (result as { content: Array<{ text?: unknown }> }).content
-        .map((entry) => (typeof entry.text === "string" ? entry.text : ""))
-        .join("");
-      if (text !== "") result = JSON.parse(text);
-    }
-    if (typeof result === "string") result = JSON.parse(result);
-    if (result === null || typeof result !== "object") return null;
-    const row = result as Record<string, unknown>;
-    const valid = new Set<RouteTarget>(["studio", "dj", "library", "butler_direct", "ask_user"]);
-    const target = String(row.target ?? "") as RouteTarget;
-    if (!valid.has(target)) return null;
-    return {
-      target,
-      actionSummary: String(row.action_summary ?? ""),
-      confidence: typeof row.confidence === "number" ? row.confidence : 0,
-      contextSatisfied: row.context_satisfied === true,
-      missingContext: Array.isArray(row.missing_context)
-        ? row.missing_context.map((entry) => String(entry)).filter(Boolean)
-        : [],
-      routeId: call.id,
-      ...(call.routeSource === undefined
-        ? {}
-        : {
-            sourceText: call.routeSource.text,
-            sourceMentions: call.routeSource.mentions,
-            sourceSessionId: call.routeSource.sessionId,
-          }),
-    };
-  } catch {
-    return null;
-  }
+  const command = parseButlerCommand(call);
+  return command?.op === "dispatch" ? command.route : null;
 }

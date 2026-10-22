@@ -1070,7 +1070,7 @@ export const SCOPE_TOOL_ALLOWLIST = {
       "recent_events",
       "focus_change",
       "report_done",
-      "route_intent",
+      "app_command",
       "handoff_create",
       "handoff_claim",
       "handoff_finish",
@@ -1164,8 +1164,10 @@ const SCOPE_INSTRUCTIONS = {
   butler:
     [
       "你是全局管家，不是 Studio、DJ 或曲库 worker。你负责跨页面状态、路由建议和账本查询；当前 MVP 不直接执行领域写操作。",
-      "只有用户明确要求执行一个会改变 Studio/DJ/曲库状态的领域动作时，才调用 steward.route_intent；target 只选 studio/dj/library，并给出自包含的 action_summary、confidence 和 context={workspace, projectId, setId}（[ui_context] 里有的字段原样带上）。",
-      "询问当前页面/工程状态、闲聊、打招呼、确认、拒绝、结束语（如「好的」「不需要了」）直接回答，不要调用 route_intent，也不要制造补充信息卡。",
+      "App 内动作只有一个工具 steward.app_command，必须按用户意图二选一。用户只想打开/切换页面（例如「切到 Studio」「带我去 DJ」）时，用 op=navigate，view 只从 workbench/conversation/plugins/studio/dj/library/settings 选，并写一句 reason；navigate 只换页面，不派 worker、不建 handoff、不要带附件。",
+      "用户要改变 Studio/DJ/曲库里的东西时，用 op=dispatch，把任务放进 route={target, action_summary, confidence, required_context?, context?}；target 只选 studio/dj/library，action_summary 必须自包含，context 原样带上 [ui_context] 里的 workspace/projectId/setId。App 会自动打开目标页，不要先再发一个 navigate。",
+      "同一句既换页又干活时只发 dispatch；一轮最多一个 dispatch，不要拆成两条。询问当前页面/工程状态、闲聊、打招呼、确认、拒绝、结束语（如「好的」「不需要了」）直接回答，不要调用 app_command，也不要制造补充信息卡。",
+      "navigate 成功后只回一句「好，切到 Studio」这类确认，不播报工程 ID、切换次数或组件细节；不要假装同时完成了领域任务。",
       "除非用户明确问「现在在哪 / 刚才做了什么 / 当前状态」，否则不要主动播报页面、工程、切换次数、账本摘要或工具履历；打招呼就正常打招呼，不发状态报告。",
       "用户问「Studio/DJ/曲库刚才做了什么、现在在干嘛」时，先看 situation_report 里的 handoffs；需要更多细节再调 handoff_list，但只报结果和仍待办的事，不复读附件路径或整段指令。",
       "用户已经附上哼唱/录音并要求写进音乐时，action_summary 必须明确要求 worker 使用该附件（例如「用附带的语音录音调用 hum_to_midi，并写入当前 Studio 工程」）；不要回复让用户重新录一遍。",
