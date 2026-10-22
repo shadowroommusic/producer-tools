@@ -1,15 +1,38 @@
 # Producer Tools
 
-The desktop application that bundles the ShadowRoom MCP servers into one product for DJs and
-producers.
+The desktop application and integration hub for the **nine** open-source ShadowRoom MCP servers.
 
-把 ShadowRoom 的四个 MCP 服务器打包成一个面向 DJ / 制作人的桌面应用。
+把九个开源的 ShadowRoom MCP 服务器连接成一套面向 DJ / 制作人的桌面体验，同时保持每个服务器都可被
+任意 MCP 客户端独立调用。
 
 [中文说明](README.zh-CN.md) · License: [AGPL-3.0](LICENSE)
 
+## MCP ecosystem
+
+Each capability is a separate public stdio MCP server. Use
+[`mcp/manifest.json`](mcp/manifest.json) for machine-readable discovery and
+[`docs/mcp-integration.md`](docs/mcp-integration.md) for generic client setup.
+
+| MCP server | Capability | License |
+| --- | --- | --- |
+| [converter](https://github.com/shadowroommusic/rekordbox-serato-bridge) | Rekordbox ⇄ Serato playlists, cues, loops, colors | AGPL-3.0 |
+| [audio analysis](https://github.com/shadowroommusic/audio-analysis-dedupe) | analysis, tempo/key, humming, duplicate detection | AGPL-3.0 |
+| [set planner](https://github.com/shadowroommusic/set-planner) | set timing and harmonic next-track planning | AGPL-3.0 |
+| [music generator](https://github.com/shadowroommusic/shadow-music-generator) | synthesis, arrangements, MIDI, and renders | AGPL-3.0 |
+| [stem splitter](https://github.com/shadowroommusic/stem-splitter) | vocals, drums, bass, and other stems | AGPL-3.0 |
+| [SoundFont renderer](https://github.com/shadowroommusic/soundfont-renderer) | MIDI rendered through real instruments | AGPL-3.0 |
+| [steward](https://github.com/shadowroommusic/steward) | durable memory, summaries, and agent handoffs | AGPL-3.0 |
+| [library](https://github.com/shadowroommusic/library) | indexing, metadata, covers, crates, and cues | AGPL-3.0 |
+| [ShadowMusicGrabber](https://github.com/shadowroommusic/ShadowMusicGrabber) | probing, decrypting, transcoding, downloading | MIT |
+
+```sh
+node tools/bootstrap-ecosystem.mjs
+node tools/print-mcp-config.mjs > shadowroom-mcp.json
+```
+
 ## Status
 
-Work in progress. The web UI shell renders today, with the layout and interaction patterns of
+The desktop application and its web surface are functional. The UI follows the interaction patterns of
 DeepSeek Harness: a three-column frame (sidebar with the workspace list and the plugins, the
 work surface in the middle, and the conversation dock on the right), built on our own `--sr-*` tokens
 — dark by default, light on request. The brand files come straight from
@@ -17,16 +40,16 @@ work surface in the middle, and the conversation dock on the right), built on ou
 
 The core asks before it leaves its sandbox: command and file-change approvals show up as a card above
 the composer (**拒绝 / 本次会话都允许 / 允许一次**), which is the same surface DeepSeek Harness uses.
-Without `pnpm serve:agent` a submit only records the request and adds a 内核未启动 notice. Still
-missing: a UI for `stage_serato_cues` and packaging the app as `apps/desktop`. The UI/frontend
-reference lives in [docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek
-Harness).
+Without `pnpm serve:agent` a submit only records the request and adds a 内核未启动 notice. macOS
+arm64 packaging is implemented; Windows packaging and signed/notarized public releases are still
+being finished. The UI/frontend reference lives in
+[docs/ui-reference.md](docs/ui-reference.md) (patterns borrowed from DeepSeek Harness).
 
 ## Run it
 
 ```sh
 pnpm install
-pnpm serve        # MCP bridge: spawns the four ShadowRoom MCP servers, /api on 127.0.0.1:8787
+pnpm serve        # MCP bridge: spawns the nine ShadowRoom MCP servers, /api on 127.0.0.1:8787
 pnpm serve:agent  # agent bridge: drives `codex app-server`, /api/agent on 127.0.0.1:8788
 pnpm dev          # the web UI on http://localhost:5173 (proxies /api and /api/agent)
 ```
@@ -34,7 +57,7 @@ pnpm dev          # the web UI on http://localhost:5173 (proxies /api and /api/a
 With both bridges running the composer runs a real agent turn: the message goes to the Codex core,
 the answer streams into the transcript, and every tool the agent calls appears as a row right where
 it happened (the same rows listed under **轨迹**), next to the model's folded 思考 rows and a
-per-turn token/time line. The four plugins are injected into each thread, so the agent drives the
+per-turn token/time line. The nine MCP servers are injected into each thread, so the agent drives the
 tools the panels also call by hand.
 
 The composer is the generic agent shape: attach context from **+** (a file or folder path, or a
@@ -93,37 +116,39 @@ across reloads.
 pnpm test    # the voice call's two detectors (turn end + barge-in) against synthetic loudness traces
 ```
 
-| Panel | What it does |
+| MCP server | What it does |
 | --- | --- |
 | `rekordbox-serato-bridge` | reads both libraries, previews a conversion (read-only), converts a playlist into an output folder, or writes back to Rekordbox (dry-run by default) |
 | `set-planner` | times an ordered set: cue segments, overlaps, warnings, total runtime |
 | `audio-analysis-dedupe` | analysis of one file, or a duplicate scan of a folder (read-only) |
 | `shadow-music-generator` | queues a generation job (dry-run — no model is executed) and reads it back |
+| `stem-splitter` | separates a finished song into vocals, drums, bass, and other |
+| `soundfont-renderer` | renders notes or MIDI through real SoundFont instruments |
+| `steward` | durable event ledger, summaries, and agent handoffs |
+| `library` | fingerprint-incremental indexing, BPM/key metadata, crates, and cues |
+| `ShadowMusicGrabber` | probes, decrypts, transcodes, and downloads audio |
 
 The bridge finds the plugin checkouts under `~/Documents/ShadowRoom` by default; set
 `SHADOWROOM_HOME` if yours live elsewhere. `SHADOWROOM_PYTHON`, `SHADOWROOM_BRIDGE_PORT` and
 `SHADOWROOM_CALL_TIMEOUT_MS` are also configurable — see [docs/internals.md](docs/internals.md).
 
-## What it will contain
+## Direct MCP use
 
-| Tool | Surface |
-| --- | --- |
-| `rekordbox-serato-bridge` | Conversion & preview: playlists, cues/loops/colors, dry-run reports |
-| `audio-analysis-dedupe` | Library analysis and duplicate groups |
-| `set-planner` | Set timeline and next-track suggestions |
-| `shadow-music-generator` | Generation jobs: queue, stages, artifacts, licenses |
+Every server remains independently usable. Clone the ecosystem into sibling directories, generate a
+standard `mcpServers` configuration, and point Codex, Claude Desktop, Cursor, Cline, Roo Code, or any
+other MCP client at it. See [docs/mcp-integration.md](docs/mcp-integration.md) and the
+[machine-readable manifest](mcp/manifest.json).
 
-Every tool stays available as a standalone MCP server; this app is the shell that installs them,
-keeps their settings and gives DJs one place to work.
+The product already spans Studio, DJ, Library, conversion, split-stem work, agent handoffs, and the
+floating butler. See [docs/mcp-integration.md](docs/mcp-integration.md) for using each server outside
+this application.
 
 ## Plan
 
-1. UI layer, following the reference in `docs/ui-reference.md`. ← *in progress*
-2. Bridge the four MCP servers (`pnpm serve`) so the panels run real jobs. ✅ *(all four panels are
-   wired; `stage_serato_cues` still has no UI)*
-3. Wire the Codex harness (bundled `codex` binary + `app-server` protocol) and register the four
-   MCP servers with it.
-4. Desktop shell (`apps/desktop`).
+1. Integrate all nine MCP servers behind one desktop surface. ✅
+2. Studio, DJ, library, conversion, generation, and agent workflows. ✅
+3. Generic MCP discovery and client configuration. ✅
+4. Signed macOS and Windows public releases. ← *in progress*
 
 ## License
 

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/shadowroommusic/producer-tools/main/mcp/manifest.schema.json",
+  "schemaVersion": 1,
+  "name": "ShadowRoom MCP Ecosystem",
+  "homepage": "https://github.com/shadowroommusic/producer-tools",
+  "transport": "stdio",
+  "servers": [
+    {
+      "id": "converter",
+      "name": "ShadowRoom Converter",
+      "repository": "https://github.com/shadowroommusic/rekordbox-serato-bridge",
+      "repo": "rekordbox-serato-bridge",
+      "entrypoint": "mcp_server.py",
+      "description": "Convert Rekordbox and Serato playlists, cues, loops and colors.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "analysis",
+      "name": "ShadowRoom Audio Analysis",
+      "repository": "https://github.com/shadowroommusic/audio-analysis-dedupe",
+      "repo": "audio-analysis-dedupe",
+      "entrypoint": "mcp_server.py",
+      "description": "Analyze audio, detect tempo and key, transcribe humming, and find duplicates.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "planner",
+      "name": "ShadowRoom Set Planner",
+      "repository": "https://github.com/shadowroommusic/set-planner",
+      "repo": "set-planner",
+      "entrypoint": "mcp_server.py",
+      "description": "Plan DJ sets, calculate timing, and suggest harmonically compatible tracks.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "generator",
+      "name": "ShadowRoom Music Generator",
+      "repository": "https://github.com/shadowroommusic/shadow-music-generator",
+      "repo": "shadow-music-generator",
+      "entrypoint": "mcp_server.py",
+      "description": "Queue deterministic synthesis, arrangement, MIDI, and render jobs.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "splitter",
+      "name": "ShadowRoom Stem Splitter",
+      "repository": "https://github.com/shadowroommusic/stem-splitter",
+      "repo": "stem-splitter",
+      "entrypoint": "mcp_server.py",
+      "description": "Separate a mixed song into vocals, drums, bass, and other stems.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "soundfont",
+      "name": "ShadowRoom SoundFont Renderer",
+      "repository": "https://github.com/shadowroommusic/soundfont-renderer",
+      "repo": "soundfont-renderer",
+      "entrypoint": "mcp_server.py",
+      "description": "Render MIDI and note data through real SoundFont instruments.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "steward",
+      "name": "ShadowRoom Steward",
+      "repository": "https://github.com/shadowroommusic/steward",
+      "repo": "steward",
+      "entrypoint": "mcp_server.py",
+      "description": "Maintain a durable task ledger, context summaries, and handoffs between agents.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "library",
+      "name": "ShadowRoom Library",
+      "repository": "https://github.com/shadowroommusic/library",
+      "repo": "library",
+      "entrypoint": "mcp_server.py",
+      "description": "Index music files with BPM, key, metadata, covers, crates, and cue management.",
+      "license": "AGPL-3.0-only"
+    },
+    {
+      "id": "grabber",
+      "name": "ShadowMusicGrabber",
+      "repository": "https://github.com/shadowroommusic/ShadowMusicGrabber",
+      "repo": "ShadowMusicGrabber",
+      "entrypoint": "mcp_server.py",
+      "description": "Probe, decrypt, transcode, and download audio through an MCP interface.",
+      "license": "MIT"
+    }
+  ]
+}

@@ -8,6 +8,8 @@
     "preview": "pnpm --filter @shadowroom/web preview",
     "serve": "node tools/mcp-bridge.mjs",
     "serve:agent": "node tools/agent-bridge.mjs",
+    "mcp:config": "node tools/print-mcp-config.mjs",
+    "mcp:bootstrap": "node tools/bootstrap-ecosystem.mjs",
     "typecheck": "pnpm --filter @shadowroom/web typecheck",
     "test": "pnpm --filter @shadowroom/web test"
   }

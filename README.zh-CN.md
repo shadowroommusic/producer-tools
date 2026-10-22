@@ -1,11 +1,35 @@
 # Producer Tools
 
-把 ShadowRoom 的四个 MCP 服务器打包成一个面向 DJ / 制作人的桌面应用。
+把九个开源的 ShadowRoom MCP 服务器连接成一套面向 DJ / 制作人的桌面体验，同时保持每个服务器都可被
+任意 MCP 客户端独立调用。
 
 The desktop application that bundles the ShadowRoom MCP servers into one product for DJs and
 producers.
 
 [English](README.md) · 许可证：[AGPL-3.0](LICENSE)
+
+## MCP 生态
+
+每项能力都是独立、公开的 stdio MCP 服务器。机器可读清单在
+[`mcp/manifest.json`](mcp/manifest.json)，通用客户端接入方法见
+[`docs/mcp-integration.md`](docs/mcp-integration.md)。
+
+| MCP 服务器 | 能力 | 许可证 |
+| --- | --- | --- |
+| [converter](https://github.com/shadowroommusic/rekordbox-serato-bridge) | Rekordbox ⇄ Serato 播放列表、Cue、Loop、颜色 | AGPL-3.0 |
+| [audio analysis](https://github.com/shadowroommusic/audio-analysis-dedupe) | 音频分析、BPM/调性、哼唱、查重 | AGPL-3.0 |
+| [set planner](https://github.com/shadowroommusic/set-planner) | Set 排序、衔接计时与和声推荐 | AGPL-3.0 |
+| [music generator](https://github.com/shadowroommusic/shadow-music-generator) | 合成、编曲、MIDI 与渲染 | AGPL-3.0 |
+| [stem splitter](https://github.com/shadowroommusic/stem-splitter) | 人声、鼓、贝斯和其它分轨 | AGPL-3.0 |
+| [SoundFont renderer](https://github.com/shadowroommusic/soundfont-renderer) | MIDI 转真实乐器音色 | AGPL-3.0 |
+| [steward](https://github.com/shadowroommusic/steward) | 持久账本、摘要与 Agent 交接 | AGPL-3.0 |
+| [library](https://github.com/shadowroommusic/library) | 曲目索引、元数据、封面、分类库与 Cue | AGPL-3.0 |
+| [ShadowMusicGrabber](https://github.com/shadowroommusic/ShadowMusicGrabber) | 探测、解密、转码与下载 | MIT |
+
+```sh
+node tools/bootstrap-ecosystem.mjs
+node tools/print-mcp-config.mjs > shadowroom-mcp.json
+```
 
 ## 当前状态
 
@@ -23,14 +47,14 @@ Harness）。
 
 ```sh
 pnpm install
-pnpm serve        # MCP bridge：拉起四个 ShadowRoom MCP 服务器，/api 在 127.0.0.1:8787
+pnpm serve        # MCP bridge：拉起九个 ShadowRoom MCP 服务器，/api 在 127.0.0.1:8787
 pnpm serve:agent  # agent bridge：驱动 `codex app-server`，/api/agent 在 127.0.0.1:8788
 pnpm dev          # Web UI，http://localhost:5173（/api 与 /api/agent 都代理到 bridge）
 ```
 
 两个 bridge 都起着的时候，输入框跑的是真实的 agent 轮次：消息交给 Codex 内核，回答流式写进会话，
 智能体调用的每个工具都在发生的位置出现一行（与 **轨迹** 里是同一批），旁边还有折起来的"思考"行和
-每一轮的 token／耗时。四个插件会注入到每个线程，所以智能体用的就是面板手动调用的那批工具。
+每一轮的 token／耗时。九个 MCP 服务器会注入到每个线程，所以智能体用的就是面板手动调用的那批工具。
 
 输入框是通用 agent 的形态：左边 **+** 里附加上下文（文件／文件夹路径，或某个插件，会变成草稿上方的
 chip），右边选模型，回车发送。**插件不在输入框里选** —— 它们在侧栏的 **插件** 页面上，选中哪个就把
@@ -77,35 +101,35 @@ Studio 工程里 —— 没有额外的按钮，也没有第二步。
 pnpm test    # 通话的两个检测器（何时算说完、何时算打断）用合成响度曲线跑一遍
 ```
 
-| 面板 | 做什么 |
+| MCP 服务器 | 做什么 |
 | --- | --- |
 | `rekordbox-serato-bridge` | 读两个曲库、只读预览、把播放列表转换到输出目录，或写回 Rekordbox（默认 dry-run） |
 | `set-planner` | 给有序 set 计时：cue 段长、衔接、警告、总时长 |
 | `audio-analysis-dedupe` | 单文件分析，或整个文件夹查重（只读，不删文件） |
 | `shadow-music-generator` | 登记生成任务（dry-run，不跑模型），并能读回任务 |
+| `stem-splitter` | 把成品歌拆成人声 / 鼓 / 贝斯 / 其它分轨 |
+| `soundfont-renderer` | 用真实 SoundFont 乐器渲染音符与 MIDI |
+| `steward` | 持久事件账本、摘要与 Agent 交接 |
+| `library` | 指纹增量索引、BPM/调性元数据、分类库与 Cue |
+| `ShadowMusicGrabber` | 音频探测、解密、转码与下载 |
 
 bridge 默认到 `~/Documents/ShadowRoom` 找插件；路径不同就设 `SHADOWROOM_HOME`（另外还有
 `SHADOWROOM_PYTHON`、`SHADOWROOM_BRIDGE_PORT`、`SHADOWROOM_CALL_TIMEOUT_MS`）。细节见
 [docs/internals.md](docs/internals.md)。
 
-## 会包含什么
+## 独立 MCP 使用
 
-| 工具 | 界面 |
-| --- | --- |
-| `rekordbox-serato-bridge` | 转换与预览：播放列表、cue/loop/颜色、dry-run 报告 |
-| `audio-analysis-dedupe` | 资料库分析与查重分组 |
-| `set-planner` | set 时间轴与下一首推荐 |
-| `shadow-music-generator` | 生成任务：队列、阶段、产物、许可证 |
-
-四个工具仍然各自可以单独作为 MCP 服务器使用；这个应用是把它们装进来、统一设置、给 DJ 一个入口的外壳。
+每个服务器都可以脱离 ShadowRoom 桌面应用独立运行。把九个公开仓库克隆到相邻目录，生成标准的
+`mcpServers` 配置后，Codex、Claude Desktop、Cursor、Cline、Roo Code 或任何其它 MCP 客户端都可以接入。
+见 [docs/mcp-integration.md](docs/mcp-integration.md) 和
+[机器可读清单](mcp/manifest.json)。
 
 ## 计划
 
-1. UI 层（按 `docs/ui-reference.md` 的参考）。← *进行中*
-2. 接上 bridge（`pnpm serve`），让各个面板能真的跑任务。✅ *四个面板都接好了（`stage_serato_cues`
-   还没有界面）*
-3. 接入 Codex harness（内置 `codex` 二进制 + `app-server` 协议），并把四个 MCP 服务器注册进去。
-4. 桌面外壳（`apps/desktop`）。
+1. 九个 MCP 服务器接入同一桌面应用。✅
+2. Studio、DJ、曲目库、转换、生成与 Agent 链路。✅
+3. 通用 MCP 发现与客户端配置。✅
+4. 已签名的 macOS 与 Windows 公开发布。← *进行中*
 
 ## 许可证
 

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/shadowroommusic/producer-tools/main/mcp/manifest.schema.json",
+  "title": "ShadowRoom MCP ecosystem manifest",
+  "type": "object",
+  "required": ["schemaVersion", "name", "transport", "servers"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "name": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "transport": { "const": "stdio" },
+    "servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "repository", "repo", "entrypoint", "description", "license"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "name": { "type": "string" },
+          "repository": { "type": "string", "format": "uri" },
+          "repo": { "type": "string" },
+          "entrypoint": { "type": "string" },
+          "description": { "type": "string" },
+          "license": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
