@@ -401,6 +401,7 @@ export function StudioPage({
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const headersScrollRef = useRef<HTMLDivElement | null>(null);
   const trackListRef = useRef<HTMLDivElement | null>(null);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
   /** A fader drag is one undo step; only its latest value is committed. */
   const volumeGesture = useRef<string | null>(null);
   /** Typing a track name is one edit: the first change snapshots, the rest stay transient. */
@@ -408,7 +409,6 @@ export function StudioPage({
   /** The key is a short text field too: one focus/typing gesture must be one undo step. */
   const keyEdit = useRef<{ active: boolean; started: boolean }>({ active: false, started: false });
 
-  const barPx = BAR_PX * zoom;
   const secondsPerBar = 1 / barsPerSecond(project.bpm);
   const anySolo = project.tracks.some((track) => track.soloed);
   const audible = (track: StudioTrack) => !track.muted && (anySolo ? track.soloed : true);
@@ -570,6 +570,15 @@ export function StudioPage({
   }, [project.bars, project.bpm, project.sections, contentEndBars]);
 
   /**
+   * Keep short projects visually complete. A four-bar project at the fixed 56px bar width used to
+   * occupy only the left quarter of the work surface and leave a large dead black rectangle. At
+   * 100% zoom the bar width grows just enough to fill the viewport; zoom remains a multiplier on
+   * that base, so deliberate zoom-in can still create horizontal scrolling.
+   */
+  const fittedBarPx = timelineViewportWidth > 0 ? timelineViewportWidth / timelineBars : BAR_PX;
+  const barPx = Math.max(BAR_PX, fittedBarPx) * zoom;
+
+  /**
    * Track headers follow the timeline rather than owning a second scrollbar. The transform is
    * written directly in the scroll handler so dragging 20 tracks never forces a React render per
    * wheel event.
@@ -579,6 +588,16 @@ export function StudioPage({
     const list = trackListRef.current;
     if (timeline === null || list === null) return;
     list.style.transform = `translate3d(0, ${-timeline.scrollTop}px, 0)`;
+  }, []);
+
+  useLayoutEffect(() => {
+    const viewport = timelineScrollRef.current;
+    if (viewport === null) return;
+    const measure = () => setTimelineViewportWidth(Math.max(0, viewport.clientWidth));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    return () => observer.disconnect();
   }, []);
 
   useLayoutEffect(() => {

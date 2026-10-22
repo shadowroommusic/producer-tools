@@ -254,6 +254,42 @@ await seed();
   await page.screenshot({ path: `${SHOTS}/dock-open-piano-roll.png` });
 }
 
+// A short project still fills the visible work surface. Otherwise the region after bar 4 becomes
+// one large black rectangle that reads as a broken canvas.
+{
+  await seed({
+    ...project,
+    bars: 4,
+    tracks: project.tracks.slice(0, 3),
+    sections: [],
+  });
+  const coverage = await page.evaluate(() => {
+    const scroll = document.querySelector(".sr-studio-timeline-scroll");
+    const grid = document.querySelector(".sr-studio-grid");
+    if (!(scroll instanceof HTMLElement) || !(grid instanceof HTMLElement)) return null;
+    const gridRect = grid.getBoundingClientRect();
+    return {
+      gridWidth: +gridRect.width.toFixed(1),
+      viewportWidth: +scroll.clientWidth.toFixed(1),
+      covered: gridRect.width + 1 >= scroll.clientWidth,
+      inlineWidth: grid.style.width,
+      minWidth: getComputedStyle(grid).minWidth,
+      backgroundImage: getComputedStyle(grid).backgroundImage,
+    };
+  });
+  check(
+    "⑦b 四小节工程仍铺满时间线可视区",
+    coverage !== null &&
+      coverage.covered &&
+      coverage.viewportWidth > 300 &&
+      coverage.gridWidth >= coverage.viewportWidth - 1 &&
+      coverage.minWidth === "100%" &&
+      coverage.backgroundImage.includes("84px"),
+    JSON.stringify(coverage),
+  );
+  await page.screenshot({ path: `${SHOTS}/short-project-full-grid.png` });
+}
+
 check("⑧ 零 Console error / pageerror", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 await browser.close();
 const failed = results.filter((ok) => !ok).length;

@@ -1805,9 +1805,15 @@
 
 .sr-studio-grid {
   position: relative;
+  /* A short project still owns the whole work surface. The inline width tracks real project bars;
+     min-width prevents the unused viewport from turning into a dead black rectangle. */
+  min-width: 100%;
   min-height: 100%;
-  /* Bar and beat grid: 56px per bar (BAR_PX), a stronger line every four bars. */
+  /* Bar and beat grid: 56px per bar (BAR_PX), a stronger line every four bars. A faint 84px
+     horizontal guide continues below the last track, so a short project does not end in an
+     unstructured black void. */
   background-image:
+    repeating-linear-gradient(to bottom, var(--sr-border-l3) 0 1px, transparent 1px 84px),
     repeating-linear-gradient(to right, var(--sr-border-l3) 0 1px, transparent 1px var(--sr-bar-px, 56px)),
     repeating-linear-gradient(to right, var(--sr-border-l2) 0 1px, transparent 1px var(--sr-major-px, 224px));
 }
