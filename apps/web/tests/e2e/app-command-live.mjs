@@ -31,6 +31,27 @@ async function handoffCount() {
   return Array.isArray(result.handoffs) ? result.handoffs.length : 0;
 }
 
+async function handoffIds() {
+  const result = await callTool("steward", "handoff_list", { limit: 50 });
+  return new Set((result.handoffs ?? []).map((handoff) => handoff.id));
+}
+
+async function settleNewTestHandoffs(before) {
+  const latest = await callTool("steward", "handoff_list", { limit: 50 });
+  for (const summary of latest.handoffs ?? []) {
+    if (before.has(summary.id) || !["pending", "claimed", "running"].includes(summary.status)) continue;
+    const detail = await callTool("steward", "handoff_get", { handoff_id: summary.id });
+    const handoff = detail.handoff;
+    if (handoff?.worker_session_id === undefined) continue;
+    await callTool("steward", "handoff_finish", {
+      handoff_id: summary.id,
+      worker_session_id: handoff.worker_session_id,
+      status: "cancelled",
+      outcome: "live command acceptance finished after route handoff verification",
+    });
+  }
+}
+
 const butler = {
   id: `butler-live-app-command-${Date.now()}`,
   kind: "butler",
@@ -98,6 +119,7 @@ function storeSnapshot() {
 }
 
 const handoffsBeforeNavigation = await handoffCount();
+const knownHandoffIds = await handoffIds();
 await sendButler("切到 Studio");
 await page.locator(".sr-page-title").filter({ hasText: "Studio" }).waitFor({ state: "visible", timeout: 90_000 });
 await page.waitForTimeout(1200);
@@ -162,6 +184,7 @@ check(
 check("L6 live 页面零 Console error", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
 await page.screenshot({ path: "/tmp/shadowroom-app-command-live.png" });
+await settleNewTestHandoffs(knownHandoffIds);
 await context.close();
 await browser.close();
 
